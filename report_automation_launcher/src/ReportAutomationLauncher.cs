@@ -114,6 +114,10 @@ namespace ReportAutomationLauncher
         private readonly TabControl workflowTabs = new TabControl();
         private readonly ListView tablePreviewList = new ListView();
         private readonly Label dataStatusLabel = new Label();
+        private readonly Label fileStepStatusLabel = new Label();
+        private readonly Label dataStepStatusLabel = new Label();
+        private readonly Label bannerStepStatusLabel = new Label();
+        private readonly Label runStepStatusLabel = new Label();
         private readonly Button reloadBannerButton = new Button();
         private readonly Button recommendedBannerButton = new Button();
         private readonly Button selectAllBannerButton = new Button();
@@ -139,6 +143,7 @@ namespace ReportAutomationLauncher
         private readonly Button copyDraftButton = new Button();
         private readonly TextBox logText = new TextBox();
         private readonly TextBox resultSummaryText = new TextBox();
+        private readonly ListView readinessList = new ListView();
         private readonly TextBox draftPreviewText = new TextBox();
         private readonly TabControl draftReviewTabs = new TabControl();
         private readonly ListView sentenceReviewList = new ListView();
@@ -166,7 +171,8 @@ namespace ReportAutomationLauncher
             root.Dock = DockStyle.Fill;
             root.Padding = new Padding(12);
             root.ColumnCount = 1;
-            root.RowCount = 4;
+            root.RowCount = 5;
+            root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
             root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
             root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
             root.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
@@ -187,12 +193,15 @@ namespace ReportAutomationLauncher
             subtitle.Margin = new Padding(0, 0, 0, 10);
             root.Controls.Add(subtitle, 0, 1);
 
+            root.Controls.Add(BuildWorkflowSummaryStrip(), 0, 2);
+
             workflowTabs.Dock = DockStyle.Fill;
             workflowTabs.TabPages.Add(CreateStepPage("1 파일 등록", BuildFileGroup()));
             workflowTabs.TabPages.Add(CreateStepPage("2 데이터 확인", BuildDataReviewGroup()));
             workflowTabs.TabPages.Add(CreateStepPage("3 작성 규칙", BuildRulesPage()));
             workflowTabs.TabPages.Add(CreateStepPage("4 실행/결과", BuildRunGroup()));
-            root.Controls.Add(workflowTabs, 0, 2);
+            workflowTabs.SelectedIndexChanged += delegate { UpdateWorkflowStatus(); };
+            root.Controls.Add(workflowTabs, 0, 3);
 
             var buttons = new FlowLayoutPanel();
             buttons.FlowDirection = FlowDirection.RightToLeft;
@@ -206,7 +215,11 @@ namespace ReportAutomationLauncher
             closeButton.Click += delegate { Close(); };
             buttons.Controls.Add(closeButton);
             buttons.Controls.Add(runButton);
-            root.Controls.Add(buttons, 0, 3);
+            root.Controls.Add(buttons, 0, 4);
+
+            workbookPathText.TextChanged += delegate { UpdateWorkflowStatus(); };
+            addinPathText.TextChanged += delegate { UpdateWorkflowStatus(); };
+            outputTypeCombo.SelectedIndexChanged += delegate { UpdateWorkflowStatus(); };
 
             addinPathText.Text = PathResolver.ResolveDefaultAddinPath();
             bannerText.Text = "전체";
@@ -221,6 +234,8 @@ namespace ReportAutomationLauncher
             draftTextCheck.Checked = true;
             copyWorkbookCheck.Checked = true;
             keepExcelOpenCheck.Checked = true;
+            UpdateWorkflowStatus();
+            UpdateReadinessChecklist();
         }
 
         private static TabPage CreateStepPage(string title, Control content)
@@ -230,6 +245,127 @@ namespace ReportAutomationLauncher
             content.Dock = DockStyle.Fill;
             page.Controls.Add(content);
             return page;
+        }
+
+        private Control BuildWorkflowSummaryStrip()
+        {
+            var panel = new TableLayoutPanel();
+            panel.Dock = DockStyle.Top;
+            panel.AutoSize = true;
+            panel.ColumnCount = 4;
+            panel.RowCount = 1;
+            panel.Margin = new Padding(0, 0, 0, 10);
+            for (int i = 0; i < 4; i++)
+            {
+                panel.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 25));
+            }
+
+            panel.Controls.Add(CreateStepStatusLabel(fileStepStatusLabel, "파일"), 0, 0);
+            panel.Controls.Add(CreateStepStatusLabel(dataStepStatusLabel, "데이터"), 1, 0);
+            panel.Controls.Add(CreateStepStatusLabel(bannerStepStatusLabel, "배너"), 2, 0);
+            panel.Controls.Add(CreateStepStatusLabel(runStepStatusLabel, "실행"), 3, 0);
+            return panel;
+        }
+
+        private Label CreateStepStatusLabel(Label label, string title)
+        {
+            label.Text = title + ": 대기";
+            label.Dock = DockStyle.Fill;
+            label.AutoSize = false;
+            label.Height = 28;
+            label.TextAlign = ContentAlignment.MiddleLeft;
+            label.Padding = new Padding(8, 0, 8, 0);
+            label.Margin = new Padding(0, 0, 8, 0);
+            label.BorderStyle = BorderStyle.FixedSingle;
+            label.BackColor = Color.White;
+            label.ForeColor = Color.DimGray;
+            return label;
+        }
+
+        private void UpdateWorkflowStatus()
+        {
+            bool hasWorkbook = File.Exists(workbookPathText.Text.Trim());
+            bool hasAddin = File.Exists(addinPathText.Text.Trim());
+            int tableCount = tablePreviewList.Items.Count;
+            int checkedBanners = CountCheckedBanners();
+
+            SetStepStatus(fileStepStatusLabel, "파일", hasWorkbook && hasAddin ? "준비됨" : "확인 필요", hasWorkbook && hasAddin);
+            SetStepStatus(dataStepStatusLabel, "데이터", tableCount > 0 ? tableCount + "개 표" : "미확인", tableCount > 0);
+            SetStepStatus(bannerStepStatusLabel, "배너", checkedBanners > 0 ? checkedBanners + "개 선택" : "전체 기준", checkedBanners > 0 || bannerList.Items.Count == 0);
+            SetStepStatus(runStepStatusLabel, "실행", workflowTabs.SelectedIndex == 3 ? "검토 중" : "대기", workflowTabs.SelectedIndex == 3);
+            UpdateReadinessChecklist();
+        }
+
+        private void SetStepStatus(Label label, string title, string value, bool isReady)
+        {
+            label.Text = title + ": " + value;
+            label.ForeColor = isReady ? Color.FromArgb(20, 95, 55) : Color.DimGray;
+            label.BackColor = isReady ? Color.FromArgb(236, 248, 241) : Color.White;
+        }
+
+        private void UpdateReadinessChecklist()
+        {
+            if (readinessList.Columns.Count == 0)
+            {
+                return;
+            }
+
+            bool workbookReady = File.Exists(workbookPathText.Text.Trim());
+            bool addinReady = File.Exists(addinPathText.Text.Trim());
+            int tableCount = tablePreviewList.Items.Count;
+            int checkedBanners = CountCheckedBanners();
+            bool bannerPreviewReady = bannerList.Items.Count > 0;
+            bool outputReady = outputTypeCombo.SelectedIndex >= 0 && outputTypeCombo.Text.StartsWith("Excel", StringComparison.OrdinalIgnoreCase);
+
+            readinessList.BeginUpdate();
+            try
+            {
+                readinessList.Items.Clear();
+                AddReadinessItem("집계표", workbookReady, workbookReady ? Path.GetFileName(workbookPathText.Text.Trim()) : "집계표 엑셀 파일을 선택하세요.");
+                AddReadinessItem("추가기능", addinReady, addinReady ? Path.GetFileName(addinPathText.Text.Trim()) : "보고서 자동화 add-in 경로를 확인하세요.");
+                AddReadinessItem("표 탐지", tableCount > 0, tableCount > 0 ? tableCount + "개 표를 발견했습니다." : "파일 등록 후 표 목록을 확인하세요.");
+                AddReadinessItem("분석 배너", bannerPreviewReady, BuildBannerReadinessText(checkedBanners, bannerPreviewReady));
+                AddReadinessItem("산출 방식", outputReady, outputReady ? "Excel 산출 시트 기준으로 실행합니다." : "현재 알파는 Excel 산출 시트만 지원합니다.");
+            }
+            finally
+            {
+                readinessList.EndUpdate();
+            }
+        }
+
+        private void AddReadinessItem(string name, bool ready, string detail)
+        {
+            var item = new ListViewItem(name);
+            item.SubItems.Add(ready ? "완료" : "확인 필요");
+            item.SubItems.Add(detail);
+            item.ForeColor = ready ? Color.FromArgb(20, 95, 55) : Color.FromArgb(150, 80, 20);
+            readinessList.Items.Add(item);
+        }
+
+        private string BuildBannerReadinessText(int checkedBanners, bool bannerPreviewReady)
+        {
+            if (!bannerPreviewReady)
+            {
+                return "집계표를 읽은 뒤 분석에 사용할 가로배너를 선택하세요.";
+            }
+            if (checkedBanners == 0)
+            {
+                return "선택 배너가 없어 전체 기준으로 실행합니다.";
+            }
+            return checkedBanners + "개 배너를 분석 대상으로 사용합니다.";
+        }
+
+        private int CountCheckedBanners()
+        {
+            int count = 0;
+            for (int i = 0; i < bannerList.Items.Count; i++)
+            {
+                if (bannerList.GetItemChecked(i))
+                {
+                    count++;
+                }
+            }
+            return count;
         }
 
         private Control BuildFileGroup()
@@ -372,12 +508,13 @@ namespace ReportAutomationLauncher
             var panel = new TableLayoutPanel();
             panel.Dock = DockStyle.Fill;
             panel.ColumnCount = 1;
-            panel.RowCount = 5;
+            panel.RowCount = 6;
             panel.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-            panel.RowStyles.Add(new RowStyle(SizeType.Percent, 38));
+            panel.RowStyles.Add(new RowStyle(SizeType.Absolute, 120));
+            panel.RowStyles.Add(new RowStyle(SizeType.Percent, 34));
             panel.RowStyles.Add(new RowStyle(SizeType.Percent, 22));
             panel.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-            panel.RowStyles.Add(new RowStyle(SizeType.Percent, 40));
+            panel.RowStyles.Add(new RowStyle(SizeType.Percent, 44));
 
             var guide = new Label();
             guide.Text = "실행 후 로그, 완료 요약, 문장 초안 미리보기를 확인합니다. 오류가 나면 이 로그를 기준으로 원본 표 구조나 Excel 신뢰 설정을 점검합니다.";
@@ -386,19 +523,29 @@ namespace ReportAutomationLauncher
             guide.Margin = new Padding(0, 0, 0, 8);
             panel.Controls.Add(guide, 0, 0);
 
+            readinessList.Dock = DockStyle.Fill;
+            readinessList.View = View.Details;
+            readinessList.FullRowSelect = true;
+            readinessList.GridLines = true;
+            readinessList.HeaderStyle = ColumnHeaderStyle.Nonclickable;
+            readinessList.Columns.Add("항목", 130);
+            readinessList.Columns.Add("상태", 100);
+            readinessList.Columns.Add("확인 내용", 650);
+            panel.Controls.Add(readinessList, 0, 1);
+
             logText.Multiline = true;
             logText.ReadOnly = true;
             logText.ScrollBars = ScrollBars.Vertical;
             logText.Dock = DockStyle.Fill;
             logText.Margin = new Padding(0, 0, 0, 8);
-            panel.Controls.Add(logText, 0, 1);
+            panel.Controls.Add(logText, 0, 2);
 
             resultSummaryText.Multiline = true;
             resultSummaryText.ReadOnly = true;
             resultSummaryText.ScrollBars = ScrollBars.Vertical;
             resultSummaryText.Dock = DockStyle.Fill;
             resultSummaryText.Text = "아직 실행 결과가 없습니다.";
-            panel.Controls.Add(resultSummaryText, 0, 2);
+            panel.Controls.Add(resultSummaryText, 0, 3);
 
             var resultButtons = new FlowLayoutPanel();
             resultButtons.Dock = DockStyle.Fill;
@@ -424,7 +571,7 @@ namespace ReportAutomationLauncher
             resultButtons.Controls.Add(openDraftButton);
             resultButtons.Controls.Add(copyDraftButton);
             resultButtons.Controls.Add(draftPreviewStatusLabel);
-            panel.Controls.Add(resultButtons, 0, 3);
+            panel.Controls.Add(resultButtons, 0, 4);
 
             draftPreviewText.Multiline = true;
             draftPreviewText.ReadOnly = true;
@@ -436,7 +583,7 @@ namespace ReportAutomationLauncher
             draftReviewTabs.TabPages.Add(CreateStepPage("전체 초안", draftPreviewText));
             draftReviewTabs.TabPages.Add(CreateStepPage("문장 리뷰", BuildSentenceReviewPanel()));
             draftReviewTabs.TabPages.Add(CreateStepPage("QA 경고", BuildQaReviewPanel()));
-            panel.Controls.Add(draftReviewTabs, 0, 4);
+            panel.Controls.Add(draftReviewTabs, 0, 5);
             return panel;
         }
 
@@ -747,6 +894,7 @@ namespace ReportAutomationLauncher
                         UpdateBannerTextFromCheckedList();
                         PopulateTablePreview(preview.Tables);
                         UpdateBannerStatusText();
+                        UpdateWorkflowStatus();
                         dataStatusLabel.Text = preview.Tables.Count + "개 표, " + preview.Banners.Count + "개 배너를 발견했습니다.";
                         Log("표 " + preview.Tables.Count + "개, 배너 " + preview.Banners.Count + "개, 추천 배너 " + preview.PrimaryBanners.Count + "개를 발견했습니다.");
                     }));
@@ -757,6 +905,7 @@ namespace ReportAutomationLauncher
                     {
                         bannerStatusLabel.Text = "확인 실패";
                         dataStatusLabel.Text = "집계표 구조 확인에 실패했습니다.";
+                        UpdateWorkflowStatus();
                         Log("배너 확인 실패: " + ex.Message);
                         MessageBox.Show(this, ex.Message, "배너 확인 실패", MessageBoxButtons.OK, MessageBoxIcon.Warning);
                     }));
@@ -820,6 +969,7 @@ namespace ReportAutomationLauncher
             }
             bannerText.Text = selected.Count == 0 ? "전체" : string.Join(",", selected.ToArray());
             UpdateBannerStatusText();
+            UpdateWorkflowStatus();
         }
 
         private void SetAllBannersChecked(bool isChecked)
