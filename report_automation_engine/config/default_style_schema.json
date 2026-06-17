@@ -1,0 +1,121 @@
+{
+  "schema_version": "1.0",
+  "report_style": {
+    "main_bullet": "○",
+    "sub_bullet": "-",
+    "top_pattern": "{title}는 '{top_label}'이 {top_value}%로 가장 높게 나타남",
+    "follow_pattern": "다음으로 {items} 순으로 나타남",
+    "mean_pattern": "{title}은 {mean_value}점으로 집계됨",
+    "score_pattern": "{title}의 5점 평균은 {score_5_value}점, 100점 환산 평균은 {score_100_value}점으로 나타남",
+    "characteristic_pattern": "응답자 특성별로 보면, '{focus_label}' 응답은 {items}에서 높게 나타남",
+    "district_pattern": "지역별로 보면, {items} 등의 응답이 높게 나타남"
+  },
+  "title_rules": {
+    "strip_regexes": [
+      "^\\[\\s*표\\s*[^\\]]+\\]\\s*",
+      "^<표\\s*[^>]+>\\s*",
+      "─+\\s*\\[\\s*문\\s*[^\\]]+\\]\\s*$",
+      "\\[\\s*문\\s*[^\\]]+\\]\\s*$"
+    ],
+    "strip_prefixes": [
+      "사업체 특성별 ",
+      "응답자 특성별 ",
+      "[항목별 인지도] "
+    ],
+    "strip_markers": [
+      "사례수",
+      "Base :",
+      "단위 :"
+    ],
+    "skip_title_keywords": [
+      "보고서",
+      "목차",
+      "응답자 특성",
+      "조사개요"
+    ],
+    "skip_title_exact": [
+      "",
+      ".",
+      "구분"
+    ]
+  },
+  "ranking_rules": {
+    "exclude_labels": [
+      "계",
+      "합계",
+      "전체",
+      "사례수",
+      "빈도",
+      "Base",
+      "BASE"
+    ],
+    "exclude_column_keywords": [
+      "사례수",
+      "빈도",
+      "계",
+      "합계",
+      "평균",
+      "100점",
+      "5점",
+      "점수",
+      "표준편차"
+    ],
+    "max_follow_items": 3,
+    "ignore_zero": true,
+    "deduplicate_labels": true,
+    "multi_response_threshold": 105
+  },
+  "table_rules": {
+    "case_column_name": "사례수",
+    "total_label": "전체",
+    "mean_keywords": [
+      "평균"
+    ],
+    "summary_keywords": [
+      "긍정",
+      "부정",
+      "인지",
+      "비인지",
+      "만족",
+      "불만족",
+      "필요함",
+      "불필요",
+      "동의",
+      "비동의"
+    ],
+    "score_keywords": [
+      "100점",
+      "5점",
+      "점수"
+    ],
+    "unit_keywords": [
+      "단위"
+    ],
+    "percent_keywords": [
+      "%",
+      "비율"
+    ],
+    "base_keywords": [
+      "Base",
+      "BASE",
+      "기준"
+    ]
+  },
+  "characteristic_rules": {
+    "preferred_groups": [
+      "지역",
+      "지역(구)",
+      "성별",
+      "연령",
+      "연령대",
+      "거주기간",
+      "출생지역",
+      "직업",
+      "학력",
+      "월평균소득",
+      "문화예술참여경험",
+      "문화도시사업참여"
+    ],
+    "max_groups": 7
+  }
+}

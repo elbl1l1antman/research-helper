@@ -1,0 +1,2425 @@
+using System;
+using System.Collections.Generic;
+using System.Diagnostics;
+using System.Drawing;
+using System.IO;
+using System.Runtime.InteropServices;
+using System.Threading;
+using System.Windows.Forms;
+
+namespace ReportAutomationLauncher
+{
+    internal static class Program
+    {
+        [STAThread]
+        private static int Main(string[] args)
+        {
+            if (args.Length > 0)
+            {
+                return RunCommandLine(args);
+            }
+
+            Application.EnableVisualStyles();
+            Application.SetCompatibleTextRenderingDefault(false);
+            Application.Run(new MainForm());
+            return 0;
+        }
+
+        private static int RunCommandLine(string[] args)
+        {
+            try
+            {
+                if (HasFlag(args, "list-banners"))
+                {
+                    string workbookPath = GetArgValue(args, "workbook");
+                    string outputPath = GetArgValue(args, "out");
+                    if (string.IsNullOrWhiteSpace(workbookPath))
+                    {
+                        throw new InvalidOperationException("--workbook <path> 값을 지정하세요.");
+                    }
+                    if (string.IsNullOrWhiteSpace(outputPath))
+                    {
+                        throw new InvalidOperationException("--out <path> 값을 지정하세요.");
+                    }
+
+                    List<string> banners = BannerInspector.ReadBanners(workbookPath);
+                    File.WriteAllLines(outputPath, banners.ToArray(), System.Text.Encoding.UTF8);
+                    return 0;
+                }
+
+                LauncherOptions options = LauncherOptions.FromArgs(args);
+                string generatedWorkbookPath = AutomationRunner.Run(options, Console.WriteLine);
+                options.LastGeneratedWorkbookPath = generatedWorkbookPath;
+                if (options.GenerateDraftText)
+                {
+                    options.LastDraftTextPath = EngineRunner.TryGenerateDraft(generatedWorkbookPath, Console.WriteLine);
+                    AutomationRunner.WriteLauncherConfig(generatedWorkbookPath, options);
+                }
+                return 0;
+            }
+            catch (Exception ex)
+            {
+                string outputPath = GetArgValue(args, "out");
+                if (!string.IsNullOrWhiteSpace(outputPath))
+                {
+                    try
+                    {
+                        File.WriteAllText(outputPath + ".error.txt", ex.ToString(), System.Text.Encoding.UTF8);
+                    }
+                    catch
+                    {
+                    }
+                }
+                Console.Error.WriteLine(ex.Message);
+                return 1;
+            }
+        }
+
+        private static bool HasFlag(string[] args, string name)
+        {
+            string flag = "--" + name;
+            foreach (string arg in args)
+            {
+                if (string.Equals(arg, flag, StringComparison.OrdinalIgnoreCase))
+                {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        private static string GetArgValue(string[] args, string name)
+        {
+            string flag = "--" + name;
+            for (int i = 0; i < args.Length - 1; i++)
+            {
+                if (string.Equals(args[i], flag, StringComparison.OrdinalIgnoreCase))
+                {
+                    return args[i + 1];
+                }
+            }
+            return "";
+        }
+    }
+
+    internal sealed class MainForm : Form
+    {
+        private readonly TextBox workbookPathText = new TextBox();
+        private readonly TextBox addinPathText = new TextBox();
+        private readonly ComboBox outputTypeCombo = new ComboBox();
+        private readonly TextBox hwpTemplateText = new TextBox();
+        private readonly TextBox pptTemplateText = new TextBox();
+        private readonly TextBox bannerText = new TextBox();
+        private readonly CheckedListBox bannerList = new CheckedListBox();
+        private readonly TabControl workflowTabs = new TabControl();
+        private readonly ListView tablePreviewList = new ListView();
+        private readonly Label dataStatusLabel = new Label();
+        private readonly Button reloadBannerButton = new Button();
+        private readonly Button recommendedBannerButton = new Button();
+        private readonly Button selectAllBannerButton = new Button();
+        private readonly Button clearBannerButton = new Button();
+        private readonly Button moveBannerUpButton = new Button();
+        private readonly Button moveBannerDownButton = new Button();
+        private readonly Button deleteBannerButton = new Button();
+        private readonly Label bannerStatusLabel = new Label();
+        private readonly TextBox titlePrefixesText = new TextBox();
+        private readonly ComboBox reportProfileCombo = new ComboBox();
+        private readonly ComboBox styleProfileCombo = new ComboBox();
+        private readonly CheckBox analysisCheck = new CheckBox();
+        private readonly CheckBox chartCheck = new CheckBox();
+        private readonly CheckBox tableCheck = new CheckBox();
+        private readonly CheckBox qaCheck = new CheckBox();
+        private readonly CheckBox draftTextCheck = new CheckBox();
+        private readonly CheckBox copyWorkbookCheck = new CheckBox();
+        private readonly CheckBox keepExcelOpenCheck = new CheckBox();
+        private readonly Button runButton = new Button();
+        private readonly Button closeButton = new Button();
+        private readonly Button openWorkbookButton = new Button();
+        private readonly Button openDraftButton = new Button();
+        private readonly Button copyDraftButton = new Button();
+        private readonly TextBox logText = new TextBox();
+        private readonly TextBox resultSummaryText = new TextBox();
+        private readonly TextBox draftPreviewText = new TextBox();
+        private readonly TabControl draftReviewTabs = new TabControl();
+        private readonly ListView sentenceReviewList = new ListView();
+        private readonly TextBox sentenceEditText = new TextBox();
+        private readonly Button applySentenceEditButton = new Button();
+        private readonly Button copySelectedSentenceButton = new Button();
+        private readonly Button exportReviewedDraftButton = new Button();
+        private readonly ComboBox qaFilterCombo = new ComboBox();
+        private readonly ListView qaIssueList = new ListView();
+        private readonly Label draftPreviewStatusLabel = new Label();
+        private readonly List<DraftSentenceItem> draftSentenceItems = new List<DraftSentenceItem>();
+        private readonly List<DraftQaIssue> draftQaIssues = new List<DraftQaIssue>();
+        private readonly HashSet<string> recommendedBanners = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        private string currentDraftPath = "";
+
+        public MainForm()
+        {
+            Text = "보고서 자동화 Alpha";
+            MinimumSize = new Size(860, 680);
+            Size = new Size(980, 760);
+            StartPosition = FormStartPosition.CenterScreen;
+            Font = new Font("맑은 고딕", 9F);
+
+            var root = new TableLayoutPanel();
+            root.Dock = DockStyle.Fill;
+            root.Padding = new Padding(12);
+            root.ColumnCount = 1;
+            root.RowCount = 4;
+            root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+            root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+            root.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+            root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+            Controls.Add(root);
+
+            var title = new Label();
+            title.Text = "보고서 자동화 Alpha";
+            title.Font = new Font(Font.FontFamily, 13F, FontStyle.Bold);
+            title.AutoSize = true;
+            title.Margin = new Padding(0, 0, 0, 2);
+            root.Controls.Add(title, 0, 0);
+
+            var subtitle = new Label();
+            subtitle.Text = "집계표를 등록하고, 탐지된 표/배너를 확인한 뒤, Excel 산출 시트를 생성합니다. HWPX/PPTX 출력은 다음 알파 단계에서 활성화됩니다.";
+            subtitle.AutoSize = true;
+            subtitle.ForeColor = Color.DimGray;
+            subtitle.Margin = new Padding(0, 0, 0, 10);
+            root.Controls.Add(subtitle, 0, 1);
+
+            workflowTabs.Dock = DockStyle.Fill;
+            workflowTabs.TabPages.Add(CreateStepPage("1 파일 등록", BuildFileGroup()));
+            workflowTabs.TabPages.Add(CreateStepPage("2 데이터 확인", BuildDataReviewGroup()));
+            workflowTabs.TabPages.Add(CreateStepPage("3 작성 규칙", BuildRulesPage()));
+            workflowTabs.TabPages.Add(CreateStepPage("4 실행/결과", BuildRunGroup()));
+            root.Controls.Add(workflowTabs, 0, 2);
+
+            var buttons = new FlowLayoutPanel();
+            buttons.FlowDirection = FlowDirection.RightToLeft;
+            buttons.Dock = DockStyle.Fill;
+            buttons.AutoSize = true;
+            runButton.Text = "실행";
+            runButton.Width = 90;
+            runButton.Click += RunButton_Click;
+            closeButton.Text = "닫기";
+            closeButton.Width = 90;
+            closeButton.Click += delegate { Close(); };
+            buttons.Controls.Add(closeButton);
+            buttons.Controls.Add(runButton);
+            root.Controls.Add(buttons, 0, 3);
+
+            addinPathText.Text = PathResolver.ResolveDefaultAddinPath();
+            bannerText.Text = "전체";
+            titlePrefixesText.Text = "";
+            outputTypeCombo.SelectedIndex = 0;
+            reportProfileCombo.SelectedIndex = 0;
+            styleProfileCombo.SelectedIndex = 0;
+            analysisCheck.Checked = true;
+            chartCheck.Checked = true;
+            tableCheck.Checked = true;
+            qaCheck.Checked = true;
+            draftTextCheck.Checked = true;
+            copyWorkbookCheck.Checked = true;
+            keepExcelOpenCheck.Checked = true;
+        }
+
+        private static TabPage CreateStepPage(string title, Control content)
+        {
+            var page = new TabPage(title);
+            page.Padding = new Padding(10);
+            content.Dock = DockStyle.Fill;
+            page.Controls.Add(content);
+            return page;
+        }
+
+        private Control BuildFileGroup()
+        {
+            var group = new GroupBox();
+            group.Text = "파일";
+            group.Dock = DockStyle.Top;
+            group.AutoSize = true;
+            group.Padding = new Padding(10);
+
+            var grid = CreateGrid(3);
+            group.Controls.Add(grid);
+
+            AddPathRow(grid, 0, "집계표 엑셀", workbookPathText, "찾기", BrowseWorkbook);
+            AddPathRow(grid, 1, "자동화 추가기능", addinPathText, "찾기", BrowseAddin);
+            addinPathText.ReadOnly = false;
+
+            var note = new Label();
+            note.Text = "선택한 파일은 직접 수정하지 않고, 기본값으로 복사본에 산출 시트를 생성합니다.";
+            note.AutoSize = true;
+            note.ForeColor = Color.DimGray;
+            note.Margin = new Padding(130, 4, 0, 0);
+            grid.Controls.Add(note, 1, 2);
+            grid.SetColumnSpan(note, 2);
+
+            return group;
+        }
+
+        private Control BuildOutputGroup()
+        {
+            var group = new GroupBox();
+            group.Text = "산출 방식";
+            group.Dock = DockStyle.Top;
+            group.AutoSize = true;
+            group.Padding = new Padding(10);
+
+            var grid = CreateGrid(5);
+            group.Controls.Add(grid);
+
+            AddLabel(grid, 0, "출력 형식");
+            outputTypeCombo.DropDownStyle = ComboBoxStyle.DropDownList;
+            outputTypeCombo.Items.Add("Excel 산출 시트");
+            outputTypeCombo.Dock = DockStyle.Fill;
+            grid.Controls.Add(outputTypeCombo, 1, 0);
+            grid.SetColumnSpan(outputTypeCombo, 2);
+
+            AddPathRow(grid, 1, "HWP/HWPX 템플릿", hwpTemplateText, "찾기", BrowseHwpTemplate);
+            AddPathRow(grid, 2, "PPTX 템플릿", pptTemplateText, "찾기", BrowsePptTemplate);
+            hwpTemplateText.Enabled = false;
+            pptTemplateText.Enabled = false;
+
+            var components = new FlowLayoutPanel();
+            components.Dock = DockStyle.Fill;
+            components.AutoSize = true;
+            analysisCheck.Text = "분석문";
+            chartCheck.Text = "차트 데이터";
+            tableCheck.Text = "삽입용 집계표";
+            qaCheck.Text = "QA/출처/수정이력";
+            draftTextCheck.Text = "문장 초안 TXT(Python)";
+            components.Controls.Add(analysisCheck);
+            components.Controls.Add(chartCheck);
+            components.Controls.Add(tableCheck);
+            components.Controls.Add(qaCheck);
+            components.Controls.Add(draftTextCheck);
+            AddLabel(grid, 3, "구성요소");
+            grid.Controls.Add(components, 1, 3);
+            grid.SetColumnSpan(components, 2);
+
+            var note = new Label();
+            note.Text = "알파 1단계에서는 Excel 산출 시트를 안정화합니다. HWPX/PPTX 템플릿 출력은 이 산출 구조가 고정된 뒤 활성화합니다.";
+            note.AutoSize = true;
+            note.ForeColor = Color.DimGray;
+            note.Margin = new Padding(0, 4, 0, 0);
+            grid.Controls.Add(note, 1, 4);
+            grid.SetColumnSpan(note, 2);
+
+            return group;
+        }
+
+        private Control BuildDataReviewGroup()
+        {
+            var panel = new TableLayoutPanel();
+            panel.Dock = DockStyle.Fill;
+            panel.ColumnCount = 1;
+            panel.RowCount = 3;
+            panel.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+            panel.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+            panel.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+
+            dataStatusLabel.Text = "집계표 파일을 선택하면 표 목록과 배너 목록을 자동으로 확인합니다.";
+            dataStatusLabel.AutoSize = true;
+            dataStatusLabel.ForeColor = Color.DimGray;
+            dataStatusLabel.Margin = new Padding(0, 0, 0, 8);
+            panel.Controls.Add(dataStatusLabel, 0, 0);
+
+            tablePreviewList.Dock = DockStyle.Fill;
+            tablePreviewList.View = View.Details;
+            tablePreviewList.FullRowSelect = true;
+            tablePreviewList.GridLines = true;
+            tablePreviewList.Columns.Add("No", 48);
+            tablePreviewList.Columns.Add("표번호", 90);
+            tablePreviewList.Columns.Add("제목", 520);
+            tablePreviewList.Columns.Add("시트", 130);
+            tablePreviewList.Columns.Add("행", 70);
+            panel.Controls.Add(tablePreviewList, 0, 1);
+
+            var note = new Label();
+            note.Text = "표 제목이 누락되거나 전체행(■전체■)이 없는 표는 산출 후 QA 시트에서 추가 확인합니다.";
+            note.AutoSize = true;
+            note.ForeColor = Color.DimGray;
+            note.Margin = new Padding(0, 8, 0, 0);
+            panel.Controls.Add(note, 0, 2);
+            return panel;
+        }
+
+        private Control BuildRulesPage()
+        {
+            var panel = new TableLayoutPanel();
+            panel.Dock = DockStyle.Fill;
+            panel.ColumnCount = 1;
+            panel.RowCount = 3;
+            panel.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+            panel.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+            panel.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+
+            panel.Controls.Add(BuildOutputGroup(), 0, 0);
+            panel.Controls.Add(BuildOptionsGroup(), 0, 1);
+
+            var note = new Label();
+            note.Text = "현재 선택값은 실행 설정 파일과 Excel의 보고서_설정 시트에 남습니다. 문장 미리보기/수동 편집 UI는 다음 알파에서 연결합니다.";
+            note.AutoSize = true;
+            note.ForeColor = Color.DimGray;
+            note.Margin = new Padding(0, 10, 0, 0);
+            panel.Controls.Add(note, 0, 2);
+            return panel;
+        }
+
+        private Control BuildRunGroup()
+        {
+            var panel = new TableLayoutPanel();
+            panel.Dock = DockStyle.Fill;
+            panel.ColumnCount = 1;
+            panel.RowCount = 5;
+            panel.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+            panel.RowStyles.Add(new RowStyle(SizeType.Percent, 38));
+            panel.RowStyles.Add(new RowStyle(SizeType.Percent, 22));
+            panel.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+            panel.RowStyles.Add(new RowStyle(SizeType.Percent, 40));
+
+            var guide = new Label();
+            guide.Text = "실행 후 로그, 완료 요약, 문장 초안 미리보기를 확인합니다. 오류가 나면 이 로그를 기준으로 원본 표 구조나 Excel 신뢰 설정을 점검합니다.";
+            guide.AutoSize = true;
+            guide.ForeColor = Color.DimGray;
+            guide.Margin = new Padding(0, 0, 0, 8);
+            panel.Controls.Add(guide, 0, 0);
+
+            logText.Multiline = true;
+            logText.ReadOnly = true;
+            logText.ScrollBars = ScrollBars.Vertical;
+            logText.Dock = DockStyle.Fill;
+            logText.Margin = new Padding(0, 0, 0, 8);
+            panel.Controls.Add(logText, 0, 1);
+
+            resultSummaryText.Multiline = true;
+            resultSummaryText.ReadOnly = true;
+            resultSummaryText.ScrollBars = ScrollBars.Vertical;
+            resultSummaryText.Dock = DockStyle.Fill;
+            resultSummaryText.Text = "아직 실행 결과가 없습니다.";
+            panel.Controls.Add(resultSummaryText, 0, 2);
+
+            var resultButtons = new FlowLayoutPanel();
+            resultButtons.Dock = DockStyle.Fill;
+            resultButtons.AutoSize = true;
+            resultButtons.Margin = new Padding(0, 4, 0, 4);
+            openWorkbookButton.Text = "산출 엑셀 열기";
+            openWorkbookButton.Width = 110;
+            openWorkbookButton.Enabled = false;
+            openWorkbookButton.Click += OpenWorkbookButton_Click;
+            openDraftButton.Text = "초안 TXT 열기";
+            openDraftButton.Width = 105;
+            openDraftButton.Enabled = false;
+            openDraftButton.Click += OpenDraftButton_Click;
+            copyDraftButton.Text = "초안 복사";
+            copyDraftButton.Width = 85;
+            copyDraftButton.Enabled = false;
+            copyDraftButton.Click += CopyDraftButton_Click;
+            draftPreviewStatusLabel.AutoSize = true;
+            draftPreviewStatusLabel.ForeColor = Color.DimGray;
+            draftPreviewStatusLabel.Margin = new Padding(10, 7, 0, 0);
+            draftPreviewStatusLabel.Text = "문장 초안이 생성되면 아래에 표시됩니다.";
+            resultButtons.Controls.Add(openWorkbookButton);
+            resultButtons.Controls.Add(openDraftButton);
+            resultButtons.Controls.Add(copyDraftButton);
+            resultButtons.Controls.Add(draftPreviewStatusLabel);
+            panel.Controls.Add(resultButtons, 0, 3);
+
+            draftPreviewText.Multiline = true;
+            draftPreviewText.ReadOnly = true;
+            draftPreviewText.ScrollBars = ScrollBars.Vertical;
+            draftPreviewText.Dock = DockStyle.Fill;
+            draftPreviewText.Text = "아직 문장 초안이 없습니다.";
+
+            draftReviewTabs.Dock = DockStyle.Fill;
+            draftReviewTabs.TabPages.Add(CreateStepPage("전체 초안", draftPreviewText));
+            draftReviewTabs.TabPages.Add(CreateStepPage("문장 리뷰", BuildSentenceReviewPanel()));
+            draftReviewTabs.TabPages.Add(CreateStepPage("QA 경고", BuildQaReviewPanel()));
+            panel.Controls.Add(draftReviewTabs, 0, 4);
+            return panel;
+        }
+
+        private Control BuildSentenceReviewPanel()
+        {
+            var panel = new TableLayoutPanel();
+            panel.Dock = DockStyle.Fill;
+            panel.ColumnCount = 1;
+            panel.RowCount = 3;
+            panel.RowStyles.Add(new RowStyle(SizeType.Percent, 55));
+            panel.RowStyles.Add(new RowStyle(SizeType.Percent, 45));
+            panel.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+
+            sentenceReviewList.Dock = DockStyle.Fill;
+            sentenceReviewList.View = View.Details;
+            sentenceReviewList.FullRowSelect = true;
+            sentenceReviewList.GridLines = true;
+            sentenceReviewList.MultiSelect = false;
+            sentenceReviewList.Columns.Add("No", 46);
+            sentenceReviewList.Columns.Add("상태", 70);
+            sentenceReviewList.Columns.Add("제목", 260);
+            sentenceReviewList.Columns.Add("문장", 520);
+            sentenceReviewList.Columns.Add("출처", 110);
+            sentenceReviewList.SelectedIndexChanged += SentenceReviewList_SelectedIndexChanged;
+            panel.Controls.Add(sentenceReviewList, 0, 0);
+
+            sentenceEditText.Multiline = true;
+            sentenceEditText.ScrollBars = ScrollBars.Vertical;
+            sentenceEditText.Dock = DockStyle.Fill;
+            sentenceEditText.Text = "문장 목록에서 항목을 선택하면 여기에서 수정할 수 있습니다.";
+            panel.Controls.Add(sentenceEditText, 0, 1);
+
+            var buttons = new FlowLayoutPanel();
+            buttons.Dock = DockStyle.Fill;
+            buttons.AutoSize = true;
+            applySentenceEditButton.Text = "수정 적용";
+            applySentenceEditButton.Width = 90;
+            applySentenceEditButton.Enabled = false;
+            applySentenceEditButton.Click += ApplySentenceEditButton_Click;
+            copySelectedSentenceButton.Text = "선택 문장 복사";
+            copySelectedSentenceButton.Width = 110;
+            copySelectedSentenceButton.Enabled = false;
+            copySelectedSentenceButton.Click += CopySelectedSentenceButton_Click;
+            exportReviewedDraftButton.Text = "검토본 저장";
+            exportReviewedDraftButton.Width = 95;
+            exportReviewedDraftButton.Enabled = false;
+            exportReviewedDraftButton.Click += ExportReviewedDraftButton_Click;
+            buttons.Controls.Add(applySentenceEditButton);
+            buttons.Controls.Add(copySelectedSentenceButton);
+            buttons.Controls.Add(exportReviewedDraftButton);
+            panel.Controls.Add(buttons, 0, 2);
+            return panel;
+        }
+
+        private Control BuildQaReviewPanel()
+        {
+            var panel = new TableLayoutPanel();
+            panel.Dock = DockStyle.Fill;
+            panel.ColumnCount = 1;
+            panel.RowCount = 2;
+            panel.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+            panel.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+
+            var top = new FlowLayoutPanel();
+            top.Dock = DockStyle.Fill;
+            top.AutoSize = true;
+            var label = new Label();
+            label.Text = "필터";
+            label.AutoSize = true;
+            label.Margin = new Padding(0, 7, 8, 0);
+            qaFilterCombo.DropDownStyle = ComboBoxStyle.DropDownList;
+            qaFilterCombo.Width = 180;
+            qaFilterCombo.Items.Add("전체");
+            qaFilterCombo.Items.Add("확인 필요");
+            qaFilterCombo.Items.Add("출처 없음");
+            qaFilterCombo.Items.Add("문장 짧음");
+            qaFilterCombo.Items.Add("수치 없음");
+            qaFilterCombo.Items.Add("종결 표현 확인");
+            qaFilterCombo.SelectedIndex = 0;
+            qaFilterCombo.SelectedIndexChanged += delegate { PopulateQaIssues(); };
+            top.Controls.Add(label);
+            top.Controls.Add(qaFilterCombo);
+            panel.Controls.Add(top, 0, 0);
+
+            qaIssueList.Dock = DockStyle.Fill;
+            qaIssueList.View = View.Details;
+            qaIssueList.FullRowSelect = true;
+            qaIssueList.GridLines = true;
+            qaIssueList.MultiSelect = false;
+            qaIssueList.Columns.Add("No", 46);
+            qaIssueList.Columns.Add("유형", 110);
+            qaIssueList.Columns.Add("제목", 260);
+            qaIssueList.Columns.Add("내용", 560);
+            qaIssueList.SelectedIndexChanged += QaIssueList_SelectedIndexChanged;
+            panel.Controls.Add(qaIssueList, 0, 1);
+            return panel;
+        }
+
+        private Control BuildOptionsGroup()
+        {
+            var group = new GroupBox();
+            group.Text = "분석 옵션";
+            group.Dock = DockStyle.Top;
+            group.AutoSize = true;
+            group.Padding = new Padding(10);
+
+            var grid = CreateGrid(8);
+            group.Controls.Add(grid);
+
+            AddLabel(grid, 0, "보고서 유형");
+            reportProfileCombo.DropDownStyle = ComboBoxStyle.DropDownList;
+            reportProfileCombo.Items.Add("인식도/만족도 조사형");
+            reportProfileCombo.Items.Add("산업 실태조사형(준비 중)");
+            reportProfileCombo.Items.Add("정책 수요조사형(준비 중)");
+            reportProfileCombo.Dock = DockStyle.Fill;
+            grid.Controls.Add(reportProfileCombo, 1, 0);
+            grid.SetColumnSpan(reportProfileCombo, 2);
+
+            AddLabel(grid, 1, "문체");
+            styleProfileCombo.DropDownStyle = ComboBoxStyle.DropDownList;
+            styleProfileCombo.Items.Add("공식 보고서체");
+            styleProfileCombo.Items.Add("간결 요약체(준비 중)");
+            styleProfileCombo.Items.Add("상세 해석체(준비 중)");
+            styleProfileCombo.Dock = DockStyle.Fill;
+            grid.Controls.Add(styleProfileCombo, 1, 1);
+            grid.SetColumnSpan(styleProfileCombo, 2);
+
+            AddLabel(grid, 2, "추출 배너 목록");
+            bannerText.Dock = DockStyle.Fill;
+            grid.Controls.Add(bannerText, 1, 2);
+            grid.SetColumnSpan(bannerText, 2);
+
+            AddLabel(grid, 3, "발견된 배너");
+            bannerList.Dock = DockStyle.Fill;
+            bannerList.CheckOnClick = true;
+            bannerList.Height = 82;
+            bannerList.ItemCheck += BannerList_ItemCheck;
+            grid.Controls.Add(bannerList, 1, 3);
+            grid.SetColumnSpan(bannerList, 2);
+
+            var bannerButtons = new FlowLayoutPanel();
+            bannerButtons.Dock = DockStyle.Fill;
+            bannerButtons.AutoSize = true;
+            reloadBannerButton.Text = "새로고침";
+            reloadBannerButton.Width = 80;
+            reloadBannerButton.Click += delegate { LoadBannerPreviewAsync(); };
+            recommendedBannerButton.Text = "추천 선택";
+            recommendedBannerButton.Width = 80;
+            recommendedBannerButton.Click += delegate { SelectRecommendedBanners(); };
+            selectAllBannerButton.Text = "전체 선택";
+            selectAllBannerButton.Width = 80;
+            selectAllBannerButton.Click += delegate { SetAllBannersChecked(true); };
+            clearBannerButton.Text = "선택 해제";
+            clearBannerButton.Width = 80;
+            clearBannerButton.Click += delegate { SetAllBannersChecked(false); };
+            moveBannerUpButton.Text = "위로";
+            moveBannerUpButton.Width = 60;
+            moveBannerUpButton.Click += delegate { MoveSelectedBanner(-1); };
+            moveBannerDownButton.Text = "아래로";
+            moveBannerDownButton.Width = 60;
+            moveBannerDownButton.Click += delegate { MoveSelectedBanner(1); };
+            deleteBannerButton.Text = "목록 삭제";
+            deleteBannerButton.Width = 80;
+            deleteBannerButton.Click += delegate { DeleteSelectedBanners(); };
+            bannerStatusLabel.AutoSize = true;
+            bannerStatusLabel.ForeColor = Color.DimGray;
+            bannerStatusLabel.Margin = new Padding(10, 8, 0, 0);
+            bannerButtons.Controls.Add(reloadBannerButton);
+            bannerButtons.Controls.Add(recommendedBannerButton);
+            bannerButtons.Controls.Add(selectAllBannerButton);
+            bannerButtons.Controls.Add(clearBannerButton);
+            bannerButtons.Controls.Add(moveBannerUpButton);
+            bannerButtons.Controls.Add(moveBannerDownButton);
+            bannerButtons.Controls.Add(deleteBannerButton);
+            bannerButtons.Controls.Add(bannerStatusLabel);
+            grid.Controls.Add(bannerButtons, 1, 4);
+            grid.SetColumnSpan(bannerButtons, 2);
+
+            AddLabel(grid, 5, "제목 제거 접두어");
+            titlePrefixesText.Dock = DockStyle.Fill;
+            grid.Controls.Add(titlePrefixesText, 1, 5);
+            grid.SetColumnSpan(titlePrefixesText, 2);
+
+            copyWorkbookCheck.Text = "원본 옆에 작업 복사본 생성";
+            copyWorkbookCheck.AutoSize = true;
+            keepExcelOpenCheck.Text = "완료 후 Excel 열어두기";
+            keepExcelOpenCheck.AutoSize = true;
+            var checks = new FlowLayoutPanel();
+            checks.Dock = DockStyle.Fill;
+            checks.AutoSize = true;
+            checks.Controls.Add(copyWorkbookCheck);
+            checks.Controls.Add(keepExcelOpenCheck);
+            AddLabel(grid, 6, "실행 방식");
+            grid.Controls.Add(checks, 1, 6);
+            grid.SetColumnSpan(checks, 2);
+
+            var note = new Label();
+            note.Text = "알파 기본값은 인식도/만족도 조사형, 공식 보고서체, 소수점 한 자리입니다.";
+            note.AutoSize = true;
+            note.ForeColor = Color.DimGray;
+            note.Margin = new Padding(0, 4, 0, 0);
+            grid.Controls.Add(note, 1, 7);
+            grid.SetColumnSpan(note, 2);
+
+            return group;
+        }
+
+        private static TableLayoutPanel CreateGrid(int rows)
+        {
+            var grid = new TableLayoutPanel();
+            grid.Dock = DockStyle.Fill;
+            grid.AutoSize = true;
+            grid.ColumnCount = 3;
+            grid.RowCount = rows;
+            grid.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 130));
+            grid.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+            grid.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 80));
+            for (int i = 0; i < rows; i++)
+            {
+                grid.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+            }
+            return grid;
+        }
+
+        private static void AddLabel(TableLayoutPanel grid, int row, string text)
+        {
+            var label = new Label();
+            label.Text = text;
+            label.TextAlign = ContentAlignment.MiddleLeft;
+            label.Dock = DockStyle.Fill;
+            label.Margin = new Padding(0, 5, 8, 5);
+            grid.Controls.Add(label, 0, row);
+        }
+
+        private static void AddPathRow(TableLayoutPanel grid, int row, string label, TextBox textBox, string buttonText, EventHandler handler)
+        {
+            AddLabel(grid, row, label);
+            textBox.Dock = DockStyle.Fill;
+            textBox.Margin = new Padding(0, 4, 8, 4);
+            grid.Controls.Add(textBox, 1, row);
+
+            var button = new Button();
+            button.Text = buttonText;
+            button.Dock = DockStyle.Fill;
+            button.Margin = new Padding(0, 3, 0, 3);
+            button.Click += handler;
+            grid.Controls.Add(button, 2, row);
+        }
+
+        private void BrowseWorkbook(object sender, EventArgs e)
+        {
+            using (var dialog = new OpenFileDialog())
+            {
+                dialog.Title = "집계표 엑셀 파일 선택";
+                dialog.Filter = "Excel files (*.xlsx;*.xlsm;*.xls)|*.xlsx;*.xlsm;*.xls|All files (*.*)|*.*";
+                if (dialog.ShowDialog(this) == DialogResult.OK)
+                {
+                    workbookPathText.Text = dialog.FileName;
+                    LoadWorkbookPreviewAsync();
+                    workflowTabs.SelectedIndex = 1;
+                }
+            }
+        }
+
+        private void LoadBannerPreviewAsync()
+        {
+            LoadWorkbookPreviewAsync();
+        }
+
+        private void LoadWorkbookPreviewAsync()
+        {
+            string path = workbookPathText.Text.Trim();
+            if (string.IsNullOrWhiteSpace(path))
+            {
+                MessageBox.Show(this, "집계표 엑셀 파일을 먼저 선택하세요.", "배너 확인", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                return;
+            }
+            if (!File.Exists(path))
+            {
+                MessageBox.Show(this, "선택한 집계표 파일을 찾을 수 없습니다.", "배너 확인", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return;
+            }
+
+            SetBannerPreviewEnabled(false);
+            bannerStatusLabel.Text = "읽는 중...";
+            dataStatusLabel.Text = "집계표 구조를 읽는 중...";
+            tablePreviewList.Items.Clear();
+            Log("표 목록과 배너 목록을 읽습니다.");
+
+            var thread = new Thread(delegate()
+            {
+                try
+                {
+                    WorkbookPreview preview = BannerInspector.ReadPreview(path);
+                    BeginInvoke(new Action(delegate()
+                    {
+                        bannerList.Items.Clear();
+                        recommendedBanners.Clear();
+                        foreach (string banner in preview.PrimaryBanners)
+                        {
+                            recommendedBanners.Add(banner);
+                        }
+                        foreach (string banner in preview.Banners)
+                        {
+                            bool isRecommended = recommendedBanners.Contains(banner) || preview.PrimaryBanners.Count == 0;
+                            bannerList.Items.Add(banner, isRecommended);
+                        }
+                        UpdateBannerTextFromCheckedList();
+                        PopulateTablePreview(preview.Tables);
+                        UpdateBannerStatusText();
+                        dataStatusLabel.Text = preview.Tables.Count + "개 표, " + preview.Banners.Count + "개 배너를 발견했습니다.";
+                        Log("표 " + preview.Tables.Count + "개, 배너 " + preview.Banners.Count + "개, 추천 배너 " + preview.PrimaryBanners.Count + "개를 발견했습니다.");
+                    }));
+                }
+                catch (Exception ex)
+                {
+                    BeginInvoke(new Action(delegate()
+                    {
+                        bannerStatusLabel.Text = "확인 실패";
+                        dataStatusLabel.Text = "집계표 구조 확인에 실패했습니다.";
+                        Log("배너 확인 실패: " + ex.Message);
+                        MessageBox.Show(this, ex.Message, "배너 확인 실패", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                    }));
+                }
+                finally
+                {
+                    BeginInvoke(new Action(delegate()
+                    {
+                        SetBannerPreviewEnabled(true);
+                    }));
+                }
+            });
+            thread.SetApartmentState(ApartmentState.STA);
+            thread.Start();
+        }
+
+        private void PopulateTablePreview(List<TablePreview> tables)
+        {
+            tablePreviewList.BeginUpdate();
+            try
+            {
+                tablePreviewList.Items.Clear();
+                int index = 1;
+                foreach (TablePreview table in tables)
+                {
+                    var item = new ListViewItem(index.ToString());
+                    item.SubItems.Add(table.TableNo);
+                    item.SubItems.Add(table.Title);
+                    item.SubItems.Add(table.SheetName);
+                    item.SubItems.Add(table.Row.ToString());
+                    tablePreviewList.Items.Add(item);
+                    index++;
+                }
+            }
+            finally
+            {
+                tablePreviewList.EndUpdate();
+            }
+        }
+
+        private void BannerList_ItemCheck(object sender, ItemCheckEventArgs e)
+        {
+            BeginInvoke(new Action(UpdateBannerTextFromCheckedList));
+        }
+
+        private void UpdateBannerTextFromCheckedList()
+        {
+            if (bannerList.Items.Count == 0)
+            {
+                bannerStatusLabel.Text = "";
+                return;
+            }
+
+            var selected = new List<string>();
+            for (int i = 0; i < bannerList.Items.Count; i++)
+            {
+                if (bannerList.GetItemChecked(i))
+                {
+                    selected.Add(bannerList.Items[i].ToString());
+                }
+            }
+            bannerText.Text = selected.Count == 0 ? "전체" : string.Join(",", selected.ToArray());
+            UpdateBannerStatusText();
+        }
+
+        private void SetAllBannersChecked(bool isChecked)
+        {
+            for (int i = 0; i < bannerList.Items.Count; i++)
+            {
+                bannerList.SetItemChecked(i, isChecked);
+            }
+            UpdateBannerTextFromCheckedList();
+        }
+
+        private void SelectRecommendedBanners()
+        {
+            bool hasRecommended = recommendedBanners.Count > 0;
+            for (int i = 0; i < bannerList.Items.Count; i++)
+            {
+                string banner = bannerList.Items[i].ToString();
+                bannerList.SetItemChecked(i, !hasRecommended || recommendedBanners.Contains(banner));
+            }
+            UpdateBannerTextFromCheckedList();
+        }
+
+        private void MoveSelectedBanner(int direction)
+        {
+            int oldIndex = bannerList.SelectedIndex;
+            if (oldIndex < 0)
+            {
+                return;
+            }
+
+            int newIndex = oldIndex + direction;
+            if (newIndex < 0 || newIndex >= bannerList.Items.Count)
+            {
+                return;
+            }
+
+            object item = bannerList.Items[oldIndex];
+            bool isChecked = bannerList.GetItemChecked(oldIndex);
+            bannerList.Items.RemoveAt(oldIndex);
+            bannerList.Items.Insert(newIndex, item);
+            bannerList.SetItemChecked(newIndex, isChecked);
+            bannerList.SelectedIndex = newIndex;
+            UpdateBannerTextFromCheckedList();
+        }
+
+        private void DeleteSelectedBanners()
+        {
+            int index = bannerList.SelectedIndex;
+            if (index < 0)
+            {
+                return;
+            }
+
+            bannerList.Items.RemoveAt(index);
+            if (bannerList.Items.Count > 0)
+            {
+                bannerList.SelectedIndex = Math.Min(index, bannerList.Items.Count - 1);
+            }
+            UpdateBannerTextFromCheckedList();
+        }
+
+        private void UpdateBannerStatusText()
+        {
+            if (bannerList.Items.Count == 0)
+            {
+                bannerStatusLabel.Text = "";
+                return;
+            }
+
+            int checkedCount = 0;
+            for (int i = 0; i < bannerList.Items.Count; i++)
+            {
+                if (bannerList.GetItemChecked(i))
+                {
+                    checkedCount++;
+                }
+            }
+
+            int recommendedCount = 0;
+            foreach (object item in bannerList.Items)
+            {
+                if (recommendedBanners.Contains(item.ToString()))
+                {
+                    recommendedCount++;
+                }
+            }
+
+            bannerStatusLabel.Text = bannerList.Items.Count + "개 발견 / " + recommendedCount + "개 추천 / " + checkedCount + "개 선택";
+        }
+
+        private void SetBannerPreviewEnabled(bool enabled)
+        {
+            reloadBannerButton.Enabled = enabled;
+            recommendedBannerButton.Enabled = enabled;
+            selectAllBannerButton.Enabled = enabled;
+            clearBannerButton.Enabled = enabled;
+            moveBannerUpButton.Enabled = enabled;
+            moveBannerDownButton.Enabled = enabled;
+            deleteBannerButton.Enabled = enabled;
+            bannerList.Enabled = enabled;
+        }
+
+        private void BrowseAddin(object sender, EventArgs e)
+        {
+            using (var dialog = new OpenFileDialog())
+            {
+                dialog.Title = "보고서 자동화 추가기능 선택";
+                dialog.Filter = "Excel add-ins (*.xlam;*.xlsm)|*.xlam;*.xlsm|All files (*.*)|*.*";
+                if (dialog.ShowDialog(this) == DialogResult.OK)
+                {
+                    addinPathText.Text = dialog.FileName;
+                }
+            }
+        }
+
+        private void BrowseHwpTemplate(object sender, EventArgs e)
+        {
+            MessageBox.Show(this, "HWP/HWPX 템플릿 출력은 다음 알파 단계에서 활성화합니다. 현재는 Excel 산출 시트 안정화가 우선입니다.", "준비 중", MessageBoxButtons.OK, MessageBoxIcon.Information);
+        }
+
+        private void BrowsePptTemplate(object sender, EventArgs e)
+        {
+            MessageBox.Show(this, "PowerPoint 템플릿 출력은 다음 알파 단계에서 활성화합니다. 현재는 Excel 산출 시트 안정화가 우선입니다.", "준비 중", MessageBoxButtons.OK, MessageBoxIcon.Information);
+        }
+
+        private void RunButton_Click(object sender, EventArgs e)
+        {
+            LauncherOptions options;
+            try
+            {
+                options = ReadOptions();
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show(this, ex.Message, "입력 확인", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return;
+            }
+
+            runButton.Enabled = false;
+            closeButton.Enabled = false;
+            workflowTabs.SelectedIndex = 3;
+            resultSummaryText.Text = "실행 중입니다. Excel이 백그라운드에서 열리고 산출 시트를 생성합니다.";
+            draftPreviewText.Text = "문장 초안을 기다리는 중입니다.";
+            draftPreviewStatusLabel.Text = "실행 중...";
+            openWorkbookButton.Enabled = false;
+            openDraftButton.Enabled = false;
+            copyDraftButton.Enabled = false;
+            Log("실행을 시작합니다.");
+
+            var thread = new Thread(delegate()
+            {
+                try
+                {
+                    string generatedWorkbookPath = AutomationRunner.Run(options, Log);
+                    options.LastGeneratedWorkbookPath = generatedWorkbookPath;
+                    if (options.GenerateDraftText)
+                    {
+                        options.LastDraftTextPath = EngineRunner.TryGenerateDraft(generatedWorkbookPath, Log);
+                        AutomationRunner.WriteLauncherConfig(generatedWorkbookPath, options);
+                    }
+                    BeginInvoke(new Action(delegate()
+                    {
+                        resultSummaryText.Text = BuildResultSummary(options);
+                        PopulateResultFiles(options);
+                        MessageBox.Show(this, "보고서 자동화 산출이 완료되었습니다.", "완료", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                    }));
+                }
+                catch (Exception ex)
+                {
+                    Log("오류: " + ex.Message);
+                    BeginInvoke(new Action(delegate()
+                    {
+                        resultSummaryText.Text = "실행 중 오류가 발생했습니다." + Environment.NewLine + ex.Message;
+                        MessageBox.Show(this, ex.Message, "오류", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                    }));
+                }
+                finally
+                {
+                    BeginInvoke(new Action(delegate()
+                    {
+                        runButton.Enabled = true;
+                        closeButton.Enabled = true;
+                    }));
+                }
+            });
+            thread.SetApartmentState(ApartmentState.STA);
+            thread.Start();
+        }
+
+        private static string BuildResultSummary(LauncherOptions options)
+        {
+            var lines = new List<string>();
+            lines.Add("완료되었습니다.");
+            lines.Add("");
+            lines.Add("출력 형식: " + options.OutputType);
+            lines.Add("보고서 유형: " + options.ReportProfile);
+            lines.Add("문체: " + options.StyleProfile);
+            lines.Add("작업 방식: " + (options.CopyWorkbook ? "원본 옆 복사본 생성" : "원본 파일 직접 산출"));
+            lines.Add("선택 배너: " + options.BannerSetting);
+            lines.Add("구성요소: 분석문, 차트 데이터, 삽입용 집계표, QA/출처/수정이력");
+            if (!string.IsNullOrWhiteSpace(options.LastGeneratedWorkbookPath))
+            {
+                lines.Add("산출 엑셀: " + options.LastGeneratedWorkbookPath);
+            }
+            if (!string.IsNullOrWhiteSpace(options.LastDraftTextPath))
+            {
+                lines.Add("문장 초안: " + options.LastDraftTextPath);
+            }
+            else if (options.GenerateDraftText)
+            {
+                lines.Add("문장 초안: 생성하지 못했습니다. 로그를 확인하세요.");
+            }
+            lines.Add("");
+            lines.Add("Excel에서 보고서_분석문, 보고서_차트데이터, 보고서_삽입표, 보고서_QA 시트를 확인하세요.");
+            return string.Join(Environment.NewLine, lines.ToArray());
+        }
+
+        private void PopulateResultFiles(LauncherOptions options)
+        {
+            openWorkbookButton.Tag = options.LastGeneratedWorkbookPath;
+            openWorkbookButton.Enabled = !string.IsNullOrWhiteSpace(options.LastGeneratedWorkbookPath) && File.Exists(options.LastGeneratedWorkbookPath);
+
+            openDraftButton.Tag = options.LastDraftTextPath;
+            openDraftButton.Enabled = !string.IsNullOrWhiteSpace(options.LastDraftTextPath) && File.Exists(options.LastDraftTextPath);
+
+            LoadDraftPreview(options.LastDraftTextPath);
+        }
+
+        private void LoadDraftPreview(string path)
+        {
+            copyDraftButton.Enabled = false;
+            if (string.IsNullOrWhiteSpace(path))
+            {
+                ClearDraftReviewState();
+                draftPreviewText.Text = "문장 초안이 생성되지 않았습니다.";
+                draftPreviewStatusLabel.Text = "초안 없음";
+                return;
+            }
+            if (!File.Exists(path))
+            {
+                ClearDraftReviewState();
+                draftPreviewText.Text = "문장 초안 파일을 찾지 못했습니다." + Environment.NewLine + path;
+                draftPreviewStatusLabel.Text = "초안 파일 없음";
+                return;
+            }
+
+            string text = File.ReadAllText(path, System.Text.Encoding.UTF8);
+            int originalLength = text.Length;
+            currentDraftPath = path;
+            LoadSentenceReview(text);
+            const int previewLimit = 60000;
+            if (text.Length > previewLimit)
+            {
+                text = text.Substring(0, previewLimit) + Environment.NewLine + Environment.NewLine + "... 미리보기는 여기까지 표시합니다. 전체 내용은 TXT 파일을 열어 확인하세요.";
+            }
+
+            draftPreviewText.Text = text;
+            copyDraftButton.Enabled = draftPreviewText.TextLength > 0;
+            draftPreviewStatusLabel.Text = originalLength.ToString("N0") + "자 초안, " + draftSentenceItems.Count + "개 문장, " + draftQaIssues.Count + "개 QA 경고";
+        }
+
+        private void ClearDraftReviewState()
+        {
+            currentDraftPath = "";
+            draftSentenceItems.Clear();
+            draftQaIssues.Clear();
+            sentenceReviewList.Items.Clear();
+            qaIssueList.Items.Clear();
+            sentenceEditText.Text = "문장 목록에서 항목을 선택하면 여기에서 수정할 수 있습니다.";
+            applySentenceEditButton.Enabled = false;
+            copySelectedSentenceButton.Enabled = false;
+            exportReviewedDraftButton.Enabled = false;
+        }
+
+        private void LoadSentenceReview(string text)
+        {
+            draftSentenceItems.Clear();
+            draftQaIssues.Clear();
+
+            string currentTitle = "";
+            int index = 1;
+            string[] lines = text.Replace("\r\n", "\n").Replace('\r', '\n').Split('\n');
+            for (int i = 0; i < lines.Length; i++)
+            {
+                string line = lines[i].Trim();
+                if (line.Length == 0)
+                {
+                    continue;
+                }
+                if (line.StartsWith("▶", StringComparison.Ordinal))
+                {
+                    currentTitle = line.TrimStart('▶').Trim();
+                    continue;
+                }
+                if (line.StartsWith("[source:", StringComparison.OrdinalIgnoreCase))
+                {
+                    if (draftSentenceItems.Count > 0)
+                    {
+                        draftSentenceItems[draftSentenceItems.Count - 1].Source = line.Trim('[', ']');
+                    }
+                    continue;
+                }
+                if (currentTitle.Length == 0 && line.EndsWith("자동 생성 보고서 본문", StringComparison.Ordinal))
+                {
+                    continue;
+                }
+
+                var item = new DraftSentenceItem();
+                item.Index = index++;
+                item.Title = currentTitle.Length == 0 ? "(제목 없음)" : currentTitle;
+                item.Text = line;
+                item.IsEdited = false;
+                draftSentenceItems.Add(item);
+            }
+
+            BuildDraftQaIssues();
+            PopulateSentenceReviewList();
+            PopulateQaIssues();
+            exportReviewedDraftButton.Enabled = draftSentenceItems.Count > 0;
+        }
+
+        private void PopulateSentenceReviewList()
+        {
+            sentenceReviewList.BeginUpdate();
+            try
+            {
+                sentenceReviewList.Items.Clear();
+                foreach (DraftSentenceItem sentence in draftSentenceItems)
+                {
+                    var item = new ListViewItem(sentence.Index.ToString());
+                    item.SubItems.Add(sentence.IsEdited ? "수정됨" : "초안");
+                    item.SubItems.Add(sentence.Title);
+                    item.SubItems.Add(sentence.Text);
+                    item.SubItems.Add(sentence.Source);
+                    item.Tag = sentence;
+                    sentenceReviewList.Items.Add(item);
+                }
+            }
+            finally
+            {
+                sentenceReviewList.EndUpdate();
+            }
+
+            applySentenceEditButton.Enabled = false;
+            copySelectedSentenceButton.Enabled = false;
+            if (sentenceReviewList.Items.Count > 0)
+            {
+                sentenceReviewList.Items[0].Selected = true;
+            }
+        }
+
+        private void BuildDraftQaIssues()
+        {
+            draftQaIssues.Clear();
+            foreach (DraftSentenceItem sentence in draftSentenceItems)
+            {
+                string text = sentence.Text == null ? "" : sentence.Text.Trim();
+                if (sentence.Title == "(제목 없음)")
+                {
+                    AddQaIssue(sentence, "확인 필요", "문장에 연결된 표 제목을 확인하지 못했습니다.");
+                }
+                if (string.IsNullOrWhiteSpace(sentence.Source))
+                {
+                    AddQaIssue(sentence, "출처 없음", "문장 출처(source)가 없습니다.");
+                }
+                if (text.Length < 25)
+                {
+                    AddQaIssue(sentence, "문장 짧음", "보고서 본문으로 쓰기에는 문장이 짧습니다.");
+                }
+                if (!text.Contains("%") && !ContainsDigit(text))
+                {
+                    AddQaIssue(sentence, "수치 없음", "수치나 비율이 포함되지 않아 집계표 기반 문장인지 확인이 필요합니다.");
+                }
+                if (!EndsWithReportStyle(text))
+                {
+                    AddQaIssue(sentence, "종결 표현 확인", "보고서체 종결 표현이 자연스러운지 확인하세요.");
+                }
+            }
+        }
+
+        private void AddQaIssue(DraftSentenceItem sentence, string type, string message)
+        {
+            var issue = new DraftQaIssue();
+            issue.Sentence = sentence;
+            issue.Type = type;
+            issue.Message = message;
+            draftQaIssues.Add(issue);
+        }
+
+        private static bool ContainsDigit(string text)
+        {
+            foreach (char ch in text)
+            {
+                if (char.IsDigit(ch))
+                {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        private static bool EndsWithReportStyle(string text)
+        {
+            if (string.IsNullOrWhiteSpace(text))
+            {
+                return false;
+            }
+
+            string value = text.Trim();
+            return value.EndsWith("나타남", StringComparison.Ordinal) ||
+                value.EndsWith("나타났다", StringComparison.Ordinal) ||
+                value.EndsWith("높게 나타남", StringComparison.Ordinal) ||
+                value.EndsWith("낮게 나타남", StringComparison.Ordinal) ||
+                value.EndsWith("수준임", StringComparison.Ordinal) ||
+                value.EndsWith("확인됨", StringComparison.Ordinal) ||
+                value.EndsWith(".", StringComparison.Ordinal);
+        }
+
+        private void PopulateQaIssues()
+        {
+            string filter = qaFilterCombo.SelectedItem == null ? "전체" : qaFilterCombo.SelectedItem.ToString();
+            qaIssueList.BeginUpdate();
+            try
+            {
+                qaIssueList.Items.Clear();
+                int index = 1;
+                foreach (DraftQaIssue issue in draftQaIssues)
+                {
+                    if (filter != "전체" && issue.Type != filter)
+                    {
+                        continue;
+                    }
+
+                    var item = new ListViewItem(index.ToString());
+                    item.SubItems.Add(issue.Type);
+                    item.SubItems.Add(issue.Sentence.Title);
+                    item.SubItems.Add(issue.Message + " / " + issue.Sentence.Text);
+                    item.Tag = issue;
+                    qaIssueList.Items.Add(item);
+                    index++;
+                }
+            }
+            finally
+            {
+                qaIssueList.EndUpdate();
+            }
+        }
+
+        private void OpenWorkbookButton_Click(object sender, EventArgs e)
+        {
+            OpenPathFromButton(openWorkbookButton);
+        }
+
+        private void OpenDraftButton_Click(object sender, EventArgs e)
+        {
+            OpenPathFromButton(openDraftButton);
+        }
+
+        private void CopyDraftButton_Click(object sender, EventArgs e)
+        {
+            if (draftPreviewText.TextLength > 0)
+            {
+                Clipboard.SetText(draftPreviewText.Text);
+                draftPreviewStatusLabel.Text = "미리보기 내용을 클립보드에 복사했습니다.";
+            }
+        }
+
+        private void OpenPathFromButton(Button button)
+        {
+            string path = button.Tag == null ? "" : button.Tag.ToString();
+            if (string.IsNullOrWhiteSpace(path) || !File.Exists(path))
+            {
+                MessageBox.Show(this, "열 파일을 찾을 수 없습니다.", "파일 열기", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return;
+            }
+
+            try
+            {
+                var info = new ProcessStartInfo(path);
+                info.UseShellExecute = true;
+                Process.Start(info);
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show(this, ex.Message, "파일 열기 실패", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            }
+        }
+
+        private void SentenceReviewList_SelectedIndexChanged(object sender, EventArgs e)
+        {
+            if (sentenceReviewList.SelectedItems.Count == 0)
+            {
+                applySentenceEditButton.Enabled = false;
+                copySelectedSentenceButton.Enabled = false;
+                return;
+            }
+
+            DraftSentenceItem sentence = sentenceReviewList.SelectedItems[0].Tag as DraftSentenceItem;
+            if (sentence == null)
+            {
+                return;
+            }
+
+            sentenceEditText.Text = sentence.Text;
+            applySentenceEditButton.Enabled = true;
+            copySelectedSentenceButton.Enabled = true;
+        }
+
+        private void ApplySentenceEditButton_Click(object sender, EventArgs e)
+        {
+            if (sentenceReviewList.SelectedItems.Count == 0)
+            {
+                return;
+            }
+
+            DraftSentenceItem sentence = sentenceReviewList.SelectedItems[0].Tag as DraftSentenceItem;
+            if (sentence == null)
+            {
+                return;
+            }
+
+            sentence.Text = sentenceEditText.Text.Trim();
+            sentence.IsEdited = true;
+            sentenceReviewList.SelectedItems[0].SubItems[1].Text = "수정됨";
+            sentenceReviewList.SelectedItems[0].SubItems[3].Text = sentence.Text;
+            BuildDraftQaIssues();
+            PopulateQaIssues();
+            draftPreviewText.Text = BuildReviewedDraftText();
+            draftPreviewStatusLabel.Text = draftSentenceItems.Count + "개 문장, " + draftQaIssues.Count + "개 QA 경고";
+        }
+
+        private void CopySelectedSentenceButton_Click(object sender, EventArgs e)
+        {
+            if (sentenceReviewList.SelectedItems.Count == 0)
+            {
+                return;
+            }
+
+            DraftSentenceItem sentence = sentenceReviewList.SelectedItems[0].Tag as DraftSentenceItem;
+            if (sentence != null && !string.IsNullOrWhiteSpace(sentence.Text))
+            {
+                Clipboard.SetText(sentence.Text);
+                draftPreviewStatusLabel.Text = "선택 문장을 클립보드에 복사했습니다.";
+            }
+        }
+
+        private void ExportReviewedDraftButton_Click(object sender, EventArgs e)
+        {
+            if (draftSentenceItems.Count == 0)
+            {
+                MessageBox.Show(this, "저장할 문장 초안이 없습니다.", "검토본 저장", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                return;
+            }
+
+            string basePath = currentDraftPath;
+            if (string.IsNullOrWhiteSpace(basePath))
+            {
+                basePath = Path.Combine(Path.GetTempPath(), "report_automation_draft.txt");
+            }
+
+            string directory = Path.GetDirectoryName(basePath);
+            string name = Path.GetFileNameWithoutExtension(basePath);
+            string outputPath = Path.Combine(directory, name + "_reviewed.txt");
+            File.WriteAllText(outputPath, BuildReviewedDraftText(), System.Text.Encoding.UTF8);
+            draftPreviewStatusLabel.Text = "검토본 저장: " + outputPath;
+
+            var info = new ProcessStartInfo(outputPath);
+            info.UseShellExecute = true;
+            Process.Start(info);
+        }
+
+        private void QaIssueList_SelectedIndexChanged(object sender, EventArgs e)
+        {
+            if (qaIssueList.SelectedItems.Count == 0)
+            {
+                return;
+            }
+
+            DraftQaIssue issue = qaIssueList.SelectedItems[0].Tag as DraftQaIssue;
+            if (issue == null || issue.Sentence == null)
+            {
+                return;
+            }
+
+            SelectSentence(issue.Sentence);
+            draftReviewTabs.SelectedIndex = 1;
+        }
+
+        private void SelectSentence(DraftSentenceItem sentence)
+        {
+            foreach (ListViewItem item in sentenceReviewList.Items)
+            {
+                if (object.ReferenceEquals(item.Tag, sentence))
+                {
+                    item.Selected = true;
+                    item.Focused = true;
+                    item.EnsureVisible();
+                    break;
+                }
+            }
+        }
+
+        private string BuildReviewedDraftText()
+        {
+            var lines = new List<string>();
+            string lastTitle = "";
+            foreach (DraftSentenceItem sentence in draftSentenceItems)
+            {
+                if (sentence.Title != lastTitle)
+                {
+                    if (lines.Count > 0)
+                    {
+                        lines.Add("");
+                    }
+                    lines.Add("▶ " + sentence.Title);
+                    lastTitle = sentence.Title;
+                }
+
+                lines.Add(sentence.Text);
+                if (!string.IsNullOrWhiteSpace(sentence.Source))
+                {
+                    lines.Add("[" + sentence.Source.Trim('[', ']') + "]");
+                }
+            }
+
+            return string.Join(Environment.NewLine, lines.ToArray()) + Environment.NewLine;
+        }
+
+        private LauncherOptions ReadOptions()
+        {
+            var options = new LauncherOptions();
+            options.WorkbookPath = workbookPathText.Text.Trim();
+            options.AddinPath = addinPathText.Text.Trim();
+            options.OutputType = outputTypeCombo.SelectedItem == null ? "" : outputTypeCombo.SelectedItem.ToString();
+            options.ReportProfile = reportProfileCombo.SelectedItem == null ? "" : reportProfileCombo.SelectedItem.ToString();
+            options.StyleProfile = styleProfileCombo.SelectedItem == null ? "" : styleProfileCombo.SelectedItem.ToString();
+            options.HwpTemplatePath = hwpTemplateText.Text.Trim();
+            options.PptTemplatePath = pptTemplateText.Text.Trim();
+            options.BannerSetting = bannerText.Text.Trim();
+            options.TitlePrefixes = titlePrefixesText.Text.Trim();
+            options.IncludeAnalysis = analysisCheck.Checked;
+            options.IncludeCharts = chartCheck.Checked;
+            options.IncludeTables = tableCheck.Checked;
+            options.IncludeQa = qaCheck.Checked;
+            options.GenerateDraftText = draftTextCheck.Checked;
+            options.CopyWorkbook = copyWorkbookCheck.Checked;
+            options.KeepExcelOpen = keepExcelOpenCheck.Checked;
+            options.Validate();
+            return options;
+        }
+
+        private void Log(string message)
+        {
+            if (InvokeRequired)
+            {
+                BeginInvoke(new Action<string>(Log), message);
+                return;
+            }
+            logText.AppendText(DateTime.Now.ToString("HH:mm:ss") + "  " + message + Environment.NewLine);
+        }
+    }
+
+    internal sealed class LauncherOptions
+    {
+        public string WorkbookPath;
+        public string AddinPath;
+        public string OutputType = "Excel 산출 시트";
+        public string ReportProfile = "인식도/만족도 조사형";
+        public string StyleProfile = "공식 보고서체";
+        public string HwpTemplatePath;
+        public string PptTemplatePath;
+        public string BannerSetting = "전체";
+        public string TitlePrefixes = "";
+        public bool IncludeAnalysis = true;
+        public bool IncludeCharts = true;
+        public bool IncludeTables = true;
+        public bool IncludeQa = true;
+        public bool GenerateDraftText = true;
+        public bool CopyWorkbook = true;
+        public bool KeepExcelOpen;
+        public string LastGeneratedWorkbookPath;
+        public string LastDraftTextPath;
+
+        public void Validate()
+        {
+            if (string.IsNullOrWhiteSpace(WorkbookPath))
+            {
+                throw new InvalidOperationException("집계표 엑셀 파일을 선택하세요.");
+            }
+            WorkbookPath = Path.GetFullPath(WorkbookPath);
+            if (!File.Exists(WorkbookPath))
+            {
+                throw new FileNotFoundException("집계표 엑셀 파일을 찾을 수 없습니다.", WorkbookPath);
+            }
+            if (string.IsNullOrWhiteSpace(AddinPath))
+            {
+                throw new InvalidOperationException("보고서 자동화 추가기능 파일을 선택하세요.");
+            }
+            AddinPath = Path.GetFullPath(AddinPath);
+            if (!File.Exists(AddinPath))
+            {
+                throw new FileNotFoundException("보고서 자동화 추가기능 파일을 찾을 수 없습니다.", AddinPath);
+            }
+            if (!string.IsNullOrWhiteSpace(HwpTemplatePath))
+            {
+                HwpTemplatePath = Path.GetFullPath(HwpTemplatePath);
+            }
+            if (!string.IsNullOrWhiteSpace(PptTemplatePath))
+            {
+                PptTemplatePath = Path.GetFullPath(PptTemplatePath);
+            }
+            if (!OutputType.StartsWith("Excel", StringComparison.OrdinalIgnoreCase))
+            {
+                throw new InvalidOperationException("현재 알파 실행은 Excel 산출 시트만 지원합니다.");
+            }
+            if (string.IsNullOrWhiteSpace(BannerSetting))
+            {
+                BannerSetting = "전체";
+            }
+            if (string.IsNullOrWhiteSpace(ReportProfile))
+            {
+                ReportProfile = "인식도/만족도 조사형";
+            }
+            if (string.IsNullOrWhiteSpace(StyleProfile))
+            {
+                StyleProfile = "공식 보고서체";
+            }
+            if (string.IsNullOrWhiteSpace(TitlePrefixes))
+            {
+                TitlePrefixes = "";
+            }
+        }
+
+        public static LauncherOptions FromArgs(string[] args)
+        {
+            var values = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            var flags = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            for (int i = 0; i < args.Length; i++)
+            {
+                string arg = args[i];
+                if (!arg.StartsWith("--", StringComparison.Ordinal))
+                {
+                    continue;
+                }
+                string key = arg.Substring(2);
+                if (i + 1 < args.Length && !args[i + 1].StartsWith("--", StringComparison.Ordinal))
+                {
+                    values[key] = args[++i];
+                }
+                else
+                {
+                    flags.Add(key);
+                }
+            }
+
+            var options = new LauncherOptions();
+            options.WorkbookPath = Get(values, "workbook", "");
+            options.AddinPath = Get(values, "addin", PathResolver.ResolveDefaultAddinPath());
+            options.OutputType = Get(values, "output", "Excel 산출 시트");
+            options.ReportProfile = Get(values, "report-profile", "인식도/만족도 조사형");
+            options.StyleProfile = Get(values, "style-profile", "공식 보고서체");
+            options.HwpTemplatePath = Get(values, "hwp-template", "");
+            options.PptTemplatePath = Get(values, "ppt-template", "");
+            options.BannerSetting = Get(values, "banner", "전체");
+            options.TitlePrefixes = Get(values, "prefixes", "");
+            options.GenerateDraftText = !flags.Contains("no-draft");
+            options.CopyWorkbook = !flags.Contains("no-copy");
+            options.KeepExcelOpen = flags.Contains("keep-open");
+            options.Validate();
+            return options;
+        }
+
+        private static string Get(Dictionary<string, string> values, string key, string fallback)
+        {
+            string value;
+            return values.TryGetValue(key, out value) ? value : fallback;
+        }
+    }
+
+    internal sealed class DraftSentenceItem
+    {
+        public int Index;
+        public string Title = "";
+        public string Text = "";
+        public string Source = "";
+        public bool IsEdited;
+    }
+
+    internal sealed class DraftQaIssue
+    {
+        public DraftSentenceItem Sentence;
+        public string Type = "";
+        public string Message = "";
+    }
+
+    internal static class AutomationRunner
+    {
+        public static string Run(LauncherOptions options, Action<string> log)
+        {
+            options.Validate();
+            string workbookToOpen = options.CopyWorkbook ? CreateWorkingCopy(options.WorkbookPath) : options.WorkbookPath;
+            log("대상 파일: " + workbookToOpen);
+            log("추가기능: " + options.AddinPath);
+
+            object excel = null;
+            object workbook = null;
+            object addin = null;
+
+            try
+            {
+                Type excelType = Type.GetTypeFromProgID("Excel.Application");
+                if (excelType == null)
+                {
+                    throw new InvalidOperationException("Excel.Application COM 개체를 찾을 수 없습니다. Microsoft Excel 설치 상태를 확인하세요.");
+                }
+
+                excel = Activator.CreateInstance(excelType);
+                dynamic xl = excel;
+                xl.DisplayAlerts = false;
+                xl.Visible = false;
+
+                log("Excel을 시작했습니다.");
+                workbook = xl.Workbooks.Open(workbookToOpen);
+                addin = xl.Workbooks.Open(options.AddinPath);
+                dynamic wb = workbook;
+                wb.Activate();
+
+                string macroName = "'" + Path.GetFileName(options.AddinPath).Replace("'", "''") + "'!ReportAutomation_RunWithOptionsSilent";
+                log("보고서 자동화 매크로를 실행합니다.");
+                xl.Run(macroName, options.BannerSetting, options.TitlePrefixes);
+
+                wb.Save();
+                WriteLauncherConfig(workbookToOpen, options);
+                log("저장 완료");
+
+                if (options.KeepExcelOpen)
+                {
+                    try
+                    {
+                        dynamic addinBook = addin;
+                        addinBook.Close(false);
+                        addin = null;
+                    }
+                    catch
+                    {
+                    }
+                    xl.DisplayAlerts = true;
+                    xl.Visible = true;
+                    wb.Activate();
+                    log("Excel 창을 열어둡니다.");
+                    workbook = null;
+                    excel = null;
+                }
+                else
+                {
+                    dynamic addinBook = addin;
+                    addinBook.Close(false);
+                    addin = null;
+                    wb.Close(true);
+                    workbook = null;
+                    xl.Quit();
+                    excel = null;
+                    log("Excel을 종료했습니다.");
+                }
+            }
+            finally
+            {
+                CloseComWorkbookForLauncher(addin, false);
+                CloseComWorkbookForLauncher(workbook, true);
+                QuitComExcelForLauncher(excel);
+                ReleaseComForLauncher(addin);
+                ReleaseComForLauncher(workbook);
+                ReleaseComForLauncher(excel);
+            }
+
+            return workbookToOpen;
+        }
+
+        private static string CreateWorkingCopy(string sourcePath)
+        {
+            string directory = Path.GetDirectoryName(sourcePath);
+            string name = Path.GetFileNameWithoutExtension(sourcePath);
+            string extension = Path.GetExtension(sourcePath);
+            string copyPath = Path.Combine(directory, name + "_report_alpha_" + DateTime.Now.ToString("yyyyMMdd_HHmmss") + extension);
+            File.Copy(sourcePath, copyPath, true);
+            return copyPath;
+        }
+
+        internal static void WriteLauncherConfig(string workbookPath, LauncherOptions options)
+        {
+            string path = Path.Combine(Path.GetDirectoryName(workbookPath), Path.GetFileNameWithoutExtension(workbookPath) + "_launcher_config.txt");
+            using (var writer = new StreamWriter(path, false, System.Text.Encoding.UTF8))
+            {
+                writer.WriteLine("Workbook=" + workbookPath);
+                writer.WriteLine("GeneratedWorkbook=" + workbookPath);
+                writer.WriteLine("Addin=" + options.AddinPath);
+                writer.WriteLine("OutputType=" + options.OutputType);
+                writer.WriteLine("ReportProfile=" + options.ReportProfile);
+                writer.WriteLine("StyleProfile=" + options.StyleProfile);
+                writer.WriteLine("HwpTemplate=" + options.HwpTemplatePath);
+                writer.WriteLine("PptTemplate=" + options.PptTemplatePath);
+                writer.WriteLine("BannerSetting=" + options.BannerSetting);
+                writer.WriteLine("TitlePrefixes=" + options.TitlePrefixes);
+                writer.WriteLine("IncludeAnalysis=" + options.IncludeAnalysis);
+                writer.WriteLine("IncludeCharts=" + options.IncludeCharts);
+                writer.WriteLine("IncludeTables=" + options.IncludeTables);
+                writer.WriteLine("IncludeQa=" + options.IncludeQa);
+                writer.WriteLine("GenerateDraftText=" + options.GenerateDraftText);
+                writer.WriteLine("DraftText=" + options.LastDraftTextPath);
+                writer.WriteLine("CreatedAt=" + DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss"));
+            }
+        }
+
+        internal static void CloseComWorkbookForLauncher(object workbook, bool save)
+        {
+            if (workbook == null)
+            {
+                return;
+            }
+            try
+            {
+                dynamic wb = workbook;
+                wb.Close(save);
+            }
+            catch
+            {
+            }
+        }
+
+        internal static void QuitComExcelForLauncher(object excel)
+        {
+            if (excel == null)
+            {
+                return;
+            }
+            try
+            {
+                dynamic xl = excel;
+                xl.Quit();
+            }
+            catch
+            {
+            }
+        }
+
+        internal static void ReleaseComForLauncher(object value)
+        {
+            if (value == null)
+            {
+                return;
+            }
+            try
+            {
+                if (Marshal.IsComObject(value))
+                {
+                    Marshal.FinalReleaseComObject(value);
+                }
+            }
+            catch
+            {
+            }
+        }
+    }
+
+    internal static class EngineRunner
+    {
+        public static string TryGenerateDraft(string workbookPath, Action<string> log)
+        {
+            try
+            {
+                string pythonPath = PathResolver.ResolvePythonPath();
+                string enginePath = PathResolver.ResolveExcelEnginePath();
+                string configPath = PathResolver.ResolveDefaultStyleConfigPath();
+
+                if (string.IsNullOrWhiteSpace(pythonPath) || !File.Exists(pythonPath))
+                {
+                    log("Python 실행 파일을 찾지 못해 문장 초안 생성을 건너뜁니다.");
+                    return "";
+                }
+                if (string.IsNullOrWhiteSpace(enginePath) || !File.Exists(enginePath))
+                {
+                    log("Python 문장 엔진을 찾지 못해 문장 초안 생성을 건너뜁니다.");
+                    return "";
+                }
+                if (string.IsNullOrWhiteSpace(configPath) || !File.Exists(configPath))
+                {
+                    log("문장 스타일 설정 파일을 찾지 못해 문장 초안 생성을 건너뜁니다.");
+                    return "";
+                }
+
+                string outputPath = Path.Combine(
+                    Path.GetDirectoryName(workbookPath),
+                    Path.GetFileNameWithoutExtension(workbookPath) + "_draft.txt");
+
+                var startInfo = new ProcessStartInfo();
+                startInfo.FileName = pythonPath;
+                startInfo.Arguments = Quote(enginePath) +
+                                      " --excel " + Quote(workbookPath) +
+                                      " --config " + Quote(configPath) +
+                                      " --output " + Quote(outputPath) +
+                                      " --max-tables 30";
+                startInfo.UseShellExecute = false;
+                startInfo.CreateNoWindow = true;
+                startInfo.RedirectStandardOutput = true;
+                startInfo.RedirectStandardError = true;
+                startInfo.StandardOutputEncoding = System.Text.Encoding.UTF8;
+                startInfo.StandardErrorEncoding = System.Text.Encoding.UTF8;
+
+                log("Python 문장 초안을 생성합니다.");
+                using (Process process = Process.Start(startInfo))
+                {
+                    if (!process.WaitForExit(120000))
+                    {
+                        try { process.Kill(); } catch { }
+                        log("문장 초안 생성 시간이 길어져 이번 실행에서는 건너뜁니다.");
+                        return "";
+                    }
+
+                    string stdout = process.StandardOutput.ReadToEnd();
+                    string stderr = process.StandardError.ReadToEnd();
+
+                    if (process.ExitCode != 0)
+                    {
+                        log("문장 초안 생성 실패: " + (string.IsNullOrWhiteSpace(stderr) ? stdout : stderr).Trim());
+                        return "";
+                    }
+                }
+
+                if (File.Exists(outputPath))
+                {
+                    log("문장 초안 저장: " + outputPath);
+                    return outputPath;
+                }
+                log("문장 초안 생성이 완료되었지만 출력 파일을 찾지 못했습니다.");
+            }
+            catch (Exception ex)
+            {
+                log("문장 초안 생성 실패: " + ex.Message);
+            }
+            return "";
+        }
+
+        private static string Quote(string value)
+        {
+            return "\"" + (value ?? "").Replace("\"", "\\\"") + "\"";
+        }
+    }
+
+    internal sealed class WorkbookPreview
+    {
+        public readonly List<string> Banners = new List<string>();
+        public readonly List<string> PrimaryBanners = new List<string>();
+        public readonly List<TablePreview> Tables = new List<TablePreview>();
+    }
+
+    internal sealed class TablePreview
+    {
+        public string SheetName;
+        public string TableNo;
+        public string Title;
+        public int Row;
+    }
+
+    internal static class BannerInspector
+    {
+        private const int MaxPreviewRows = 5000;
+        private const int MaxPreviewColumns = 300;
+
+        public static List<string> ReadBanners(string workbookPath)
+        {
+            WorkbookPreview preview = ReadPreview(workbookPath);
+            if (preview.Banners.Count == 1)
+            {
+                throw new InvalidOperationException("집계표에서 배너 목록을 찾지 못했습니다. 표 헤더 구조를 확인하세요.");
+            }
+            return preview.Banners;
+        }
+
+        public static WorkbookPreview ReadPreview(string workbookPath)
+        {
+            workbookPath = Path.GetFullPath(workbookPath);
+            object excel = null;
+            object workbook = null;
+
+            try
+            {
+                Type excelType = Type.GetTypeFromProgID("Excel.Application");
+                if (excelType == null)
+                {
+                    throw new InvalidOperationException("Excel.Application COM 개체를 찾을 수 없습니다.");
+                }
+
+                excel = Activator.CreateInstance(excelType);
+                dynamic xl = excel;
+                xl.DisplayAlerts = false;
+                xl.Visible = false;
+
+                workbook = xl.Workbooks.Open(workbookPath, 0, true);
+                dynamic wb = workbook;
+                var preview = new WorkbookPreview();
+                var found = preview.Banners;
+                var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                var primary = preview.PrimaryBanners;
+                var primarySeen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                found.Add("전체");
+                seen.Add("전체");
+                primary.Add("전체");
+                primarySeen.Add("전체");
+
+                foreach (dynamic ws in wb.Worksheets)
+                {
+                    if (IsGeneratedSheet(Convert.ToString(ws.Name)))
+                    {
+                        continue;
+                    }
+
+                    ScanWorksheet(ws, found, seen, primary, primarySeen, preview.Tables);
+                }
+
+                return preview;
+            }
+            finally
+            {
+                AutomationRunner.CloseComWorkbookForLauncher(workbook, false);
+                AutomationRunner.QuitComExcelForLauncher(excel);
+                AutomationRunner.ReleaseComForLauncher(workbook);
+                AutomationRunner.ReleaseComForLauncher(excel);
+            }
+        }
+
+        private static void ScanWorksheet(dynamic ws, List<string> found, HashSet<string> seen, List<string> primary, HashSet<string> primarySeen, List<TablePreview> tables)
+        {
+            SheetSnapshot sheet;
+            if (!TryReadSheetSnapshot(ws, out sheet))
+            {
+                return;
+            }
+
+            var tableStarts = new List<int>();
+            for (int row = sheet.FirstRow; row <= sheet.LastRow; row++)
+            {
+                string text = sheet.Text(row, 1);
+                if (IsTableTitle(text))
+                {
+                    tableStarts.Add(row);
+                }
+            }
+
+            for (int i = 0; i < tableStarts.Count; i++)
+            {
+                int startRow = tableStarts[i];
+                int endRow = (i + 1 < tableStarts.Count) ? tableStarts[i + 1] - 1 : sheet.LastRow;
+                AddTablePreview(tables, Convert.ToString(ws.Name), sheet.Text(startRow, 1), startRow);
+                int totalRow = FindTotalRow(sheet, startRow, endRow);
+                if (totalRow == 0)
+                {
+                    continue;
+                }
+
+                foreach (string banner in FindBannerGroups(sheet, startRow, totalRow, sheet.LastCol))
+                {
+                    if (seen.Add(banner))
+                    {
+                        found.Add(banner);
+                    }
+                    if (IsPrimaryBannerCandidate(banner) && primarySeen.Add(banner))
+                    {
+                        primary.Add(banner);
+                    }
+                }
+            }
+        }
+
+        private static bool IsTableTitle(string text)
+        {
+            text = (text ?? "").Trim();
+            return text.StartsWith("[표", StringComparison.Ordinal) ||
+                   text.StartsWith("[ 표", StringComparison.Ordinal) ||
+                   text.StartsWith("<표", StringComparison.Ordinal);
+        }
+
+        private static void AddTablePreview(List<TablePreview> tables, string sheetName, string rawTitle, int row)
+        {
+            if (tables.Count >= 500)
+            {
+                return;
+            }
+
+            var preview = new TablePreview();
+            preview.SheetName = sheetName;
+            preview.Row = row;
+            preview.TableNo = ParseTableNo(rawTitle);
+            preview.Title = ParseTableTitle(rawTitle);
+            tables.Add(preview);
+        }
+
+        private static string ParseTableNo(string rawTitle)
+        {
+            string text = (rawTitle ?? "").Trim();
+            int open = text.IndexOf("[", StringComparison.Ordinal);
+            int close = text.IndexOf("]", StringComparison.Ordinal);
+            if (open >= 0 && close > open)
+            {
+                string token = text.Substring(open + 1, close - open - 1);
+                token = token.Replace("표", "").Trim();
+                return token;
+            }
+            return "";
+        }
+
+        private static string ParseTableTitle(string rawTitle)
+        {
+            string text = (rawTitle ?? "").Trim();
+            int close = text.IndexOf("]", StringComparison.Ordinal);
+            if (close >= 0 && close + 1 < text.Length)
+            {
+                text = text.Substring(close + 1).Trim();
+            }
+            if (text.StartsWith("[", StringComparison.Ordinal))
+            {
+                int sectionClose = text.IndexOf("]", StringComparison.Ordinal);
+                if (sectionClose >= 0 && sectionClose + 1 < text.Length)
+                {
+                    text = text.Substring(sectionClose + 1).Trim();
+                }
+            }
+            int divider = text.IndexOf("─", StringComparison.Ordinal);
+            if (divider > 0)
+            {
+                text = text.Substring(0, divider).Trim();
+            }
+            int question = text.IndexOf("[ 문", StringComparison.Ordinal);
+            if (question > 0)
+            {
+                text = text.Substring(0, question).Trim();
+            }
+            return text.Length == 0 ? rawTitle : text;
+        }
+
+        private static bool TryReadSheetSnapshot(dynamic ws, out SheetSnapshot sheet)
+        {
+            sheet = null;
+            try
+            {
+                dynamic used = ws.UsedRange;
+                int firstRow = Convert.ToInt32(used.Row);
+                int firstCol = Convert.ToInt32(used.Column);
+                int lastRow = firstRow + Convert.ToInt32(used.Rows.Count) - 1;
+                int lastCol = firstCol + Convert.ToInt32(used.Columns.Count) - 1;
+                if (lastRow > MaxPreviewRows)
+                {
+                    lastRow = MaxPreviewRows;
+                }
+                if (lastCol > MaxPreviewColumns)
+                {
+                    lastCol = MaxPreviewColumns;
+                }
+                if (lastRow < firstRow || lastCol < 1)
+                {
+                    return false;
+                }
+
+                int rowCount = lastRow - firstRow + 1;
+                int colCount = lastCol - firstCol + 1;
+                dynamic limitedRange = ws.Range[ws.Cells[firstRow, firstCol], ws.Cells[lastRow, lastCol]];
+                object values = limitedRange.Value2;
+                sheet = new SheetSnapshot(firstRow, firstCol, rowCount, colCount, values);
+                return true;
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        private static int FindTotalRow(SheetSnapshot sheet, int startRow, int endRow)
+        {
+            for (int row = startRow; row <= endRow; row++)
+            {
+                string text = sheet.Text(row, 1);
+                if (text.StartsWith("■", StringComparison.Ordinal))
+                {
+                    return row;
+                }
+            }
+            return 0;
+        }
+
+        private static List<string> FindBannerGroups(SheetSnapshot sheet, int startRow, int totalRow, int lastCol)
+        {
+            var groups = new List<string>();
+            if (totalRow == 0)
+            {
+                return groups;
+            }
+
+            int headerStart = startRow + 1;
+            int headerEnd = totalRow - 1;
+            if (headerStart > headerEnd)
+            {
+                return groups;
+            }
+
+            var colGroupName = new string[lastCol + 1];
+            string lastSeenGroupName = "";
+            for (int col = 1; col <= lastCol; col++)
+            {
+                for (int row = headerStart; row <= headerEnd; row++)
+                {
+                    string text = sheet.Text(row, col);
+                    if (IsGroupNameCandidate(text))
+                    {
+                        colGroupName[col] = text;
+                        lastSeenGroupName = text;
+                        break;
+                    }
+                }
+                if (string.IsNullOrEmpty(colGroupName[col]) && IsPercentMeasureColumn(sheet, startRow, totalRow, col))
+                {
+                    colGroupName[col] = lastSeenGroupName;
+                }
+            }
+
+            string currentName = "";
+            int percentCount = 0;
+            for (int col = 1; col <= lastCol; col++)
+            {
+                string name = colGroupName[col] ?? "";
+                if (!string.Equals(name, currentName, StringComparison.Ordinal))
+                {
+                    if (!string.IsNullOrWhiteSpace(currentName) && percentCount > 0)
+                    {
+                        AddBanner(groups, currentName);
+                    }
+                    currentName = name;
+                    percentCount = 0;
+                }
+                if (IsPercentMeasureColumn(sheet, startRow, totalRow, col))
+                {
+                    percentCount++;
+                }
+            }
+
+            if (!string.IsNullOrWhiteSpace(currentName) && percentCount > 0)
+            {
+                AddBanner(groups, currentName);
+            }
+
+            return groups;
+        }
+
+        private static bool IsPercentMeasureColumn(SheetSnapshot sheet, int startRow, int totalRow, int col)
+        {
+            for (int row = startRow + 1; row <= totalRow - 1; row++)
+            {
+                if (sheet.Text(row, col) == "%")
+                {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        private static bool IsGroupNameCandidate(string text)
+        {
+            if (string.IsNullOrWhiteSpace(text))
+            {
+                return false;
+            }
+            string normalized = text.Trim();
+            return normalized != "%" &&
+                   !string.Equals(normalized, "N", StringComparison.OrdinalIgnoreCase) &&
+                   normalized != "사례수";
+        }
+
+        private static void AddBanner(List<string> groups, string name)
+        {
+            name = (name ?? "").Trim();
+            if (name.Length == 0)
+            {
+                return;
+            }
+            if (!name.StartsWith("◐", StringComparison.Ordinal))
+            {
+                return;
+            }
+            foreach (string existing in groups)
+            {
+                if (string.Equals(existing, name, StringComparison.OrdinalIgnoreCase))
+                {
+                    return;
+                }
+            }
+            groups.Add(name);
+        }
+
+        private static bool IsPrimaryBannerCandidate(string banner)
+        {
+            string name = NormalizeBannerName(banner);
+            if (name.Length == 0)
+            {
+                return false;
+            }
+            if (string.Equals(name, "전체", StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+
+            string compact = name.Replace(" ", "");
+            string[] excludedTokens = new string[]
+            {
+                "BOT", "BOTTOM", "MID", "TOP", "LOW",
+                "평균", "점수", "환산", "100점", "5점",
+                "사례수", "BASE", "N=", "종합",
+                "긍정", "부정", "보통", "인지", "비인지",
+                "만족", "불만족", "동의", "비동의",
+                "필요함", "불필요"
+            };
+            if (ContainsAny(compact, excludedTokens))
+            {
+                return false;
+            }
+
+            string[] preferredTokens = new string[]
+            {
+                "성별", "연령", "연령대", "지역", "권역", "수도권",
+                "사업체", "기업", "기관", "업종", "산업", "직종",
+                "종사자", "규모", "대분류", "중분류", "소분류",
+                "구분", "유형", "참여", "경험", "이용"
+            };
+            return ContainsAny(compact, preferredTokens);
+        }
+
+        private static string NormalizeBannerName(string banner)
+        {
+            string name = (banner ?? "").Trim();
+            while (name.StartsWith("◐", StringComparison.Ordinal) || name.StartsWith("▣", StringComparison.Ordinal))
+            {
+                name = name.Substring(1).Trim();
+            }
+            return name;
+        }
+
+        private static bool ContainsAny(string text, string[] tokens)
+        {
+            foreach (string token in tokens)
+            {
+                if (text.IndexOf(token, StringComparison.OrdinalIgnoreCase) >= 0)
+                {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        private static bool IsGeneratedSheet(string name)
+        {
+            return name.StartsWith("보고서_", StringComparison.OrdinalIgnoreCase) ||
+                   name.StartsWith("_Report", StringComparison.OrdinalIgnoreCase);
+        }
+
+        private sealed class SheetSnapshot
+        {
+            private readonly int firstRow;
+            private readonly int firstCol;
+            private readonly int rowCount;
+            private readonly int colCount;
+            private readonly object values;
+
+            public SheetSnapshot(int firstRow, int firstCol, int rowCount, int colCount, object values)
+            {
+                this.firstRow = firstRow;
+                this.firstCol = firstCol;
+                this.rowCount = rowCount;
+                this.colCount = colCount;
+                this.values = values;
+            }
+
+            public int FirstRow { get { return firstRow; } }
+            public int LastRow { get { return firstRow + rowCount - 1; } }
+            public int LastCol { get { return firstCol + colCount - 1; } }
+
+            public string Text(int row, int col)
+            {
+                int r = row - firstRow + 1;
+                int c = col - firstCol + 1;
+                if (r < 1 || r > rowCount || c < 1 || c > colCount)
+                {
+                    return "";
+                }
+
+                object value = null;
+                Array array = values as Array;
+                if (array != null && array.Rank == 2)
+                {
+                    value = array.GetValue(r, c);
+                }
+                else if (rowCount == 1 && colCount == 1)
+                {
+                    value = values;
+                }
+                return Convert.ToString(value ?? "").Trim();
+            }
+        }
+    }
+
+    internal static class PathResolver
+    {
+        public static string ResolveDefaultAddinPath()
+        {
+            string env = Environment.GetEnvironmentVariable("REPORT_AUTOMATION_ADDIN");
+            if (!string.IsNullOrWhiteSpace(env) && File.Exists(env))
+            {
+                return env;
+            }
+
+            var candidates = new List<string>();
+            string baseDir = AppDomain.CurrentDomain.BaseDirectory;
+            candidates.Add(Path.Combine(baseDir, "ReportAutomationAddin_dev.xlam"));
+            candidates.Add(Path.Combine(baseDir, "..", "..", "report_automation_addin", "dev", "ReportAutomationAddin_dev.xlam"));
+            candidates.Add(Path.Combine(Environment.CurrentDirectory, "report_automation_addin", "dev", "ReportAutomationAddin_dev.xlam"));
+
+            foreach (string candidate in candidates)
+            {
+                string fullPath = Path.GetFullPath(candidate);
+                if (File.Exists(fullPath))
+                {
+                    return fullPath;
+                }
+            }
+
+            return Path.GetFullPath(candidates[1]);
+        }
+
+        public static string ResolvePythonPath()
+        {
+            string env = Environment.GetEnvironmentVariable("REPORT_AUTOMATION_PYTHON");
+            if (!string.IsNullOrWhiteSpace(env) && File.Exists(env))
+            {
+                return env;
+            }
+
+            var candidates = new List<string>();
+            string userProfile = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+            string baseDir = AppDomain.CurrentDomain.BaseDirectory;
+            candidates.Add(Path.Combine(baseDir, "python.exe"));
+            candidates.Add(Path.Combine(userProfile, ".cache", "codex-runtimes", "codex-primary-runtime", "dependencies", "python", "python.exe"));
+            candidates.Add(@"C:\Python312\python.exe");
+            candidates.Add(@"C:\Python311\python.exe");
+
+            foreach (string candidate in candidates)
+            {
+                string fullPath = Path.GetFullPath(candidate);
+                if (File.Exists(fullPath))
+                {
+                    return fullPath;
+                }
+            }
+
+            return "";
+        }
+
+        public static string ResolveExcelEnginePath()
+        {
+            string env = Environment.GetEnvironmentVariable("REPORT_AUTOMATION_ENGINE");
+            if (!string.IsNullOrWhiteSpace(env) && File.Exists(env))
+            {
+                return env;
+            }
+
+            string baseDir = AppDomain.CurrentDomain.BaseDirectory;
+            var candidates = new List<string>();
+            candidates.Add(Path.Combine(baseDir, "report_automation_engine", "excel_report_generator.py"));
+            candidates.Add(Path.Combine(baseDir, "..", "..", "report_automation_engine", "excel_report_generator.py"));
+            candidates.Add(Path.Combine(Environment.CurrentDirectory, "report_automation_engine", "excel_report_generator.py"));
+
+            foreach (string candidate in candidates)
+            {
+                string fullPath = Path.GetFullPath(candidate);
+                if (File.Exists(fullPath))
+                {
+                    return fullPath;
+                }
+            }
+
+            return Path.GetFullPath(candidates[1]);
+        }
+
+        public static string ResolveDefaultStyleConfigPath()
+        {
+            string enginePath = ResolveExcelEnginePath();
+            if (!string.IsNullOrWhiteSpace(enginePath))
+            {
+                string configPath = Path.Combine(Path.GetDirectoryName(enginePath), "config", "default_style_schema.json");
+                if (File.Exists(configPath))
+                {
+                    return configPath;
+                }
+            }
+            return "";
+        }
+    }
+}
