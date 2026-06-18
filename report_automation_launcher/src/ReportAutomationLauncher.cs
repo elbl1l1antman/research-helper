@@ -1262,28 +1262,24 @@ namespace ReportAutomationLauncher
 
         private void BrowseHwpTemplate(object sender, EventArgs e)
         {
-            using (var dialog = new OpenFileDialog())
-            {
-                dialog.Title = "HWP/HWPX 템플릿 선택";
-                dialog.Filter = "HWP/HWPX files (*.hwp;*.hwpx)|*.hwp;*.hwpx|All files (*.*)|*.*";
-                if (dialog.ShowDialog(this) == DialogResult.OK)
-                {
-                    hwpTemplateText.Text = dialog.FileName;
-                    ResetTemplateStatus("HWPX/HWP 템플릿을 선택했습니다. 검사를 실행하세요.");
-                }
-            }
+            BrowseTemplate(hwpTemplateText, "HWP/HWPX 템플릿 선택", "HWP/HWPX files (*.hwp;*.hwpx)|*.hwp;*.hwpx|All files (*.*)|*.*", "HWPX/HWP 템플릿을 선택했습니다. 검사를 실행하세요.");
         }
 
         private void BrowsePptTemplate(object sender, EventArgs e)
         {
+            BrowseTemplate(pptTemplateText, "PowerPoint 템플릿 선택", "PowerPoint files (*.pptx;*.ppt)|*.pptx;*.ppt|All files (*.*)|*.*", "PPTX 템플릿을 선택했습니다. 검사를 실행하세요.");
+        }
+
+        private void BrowseTemplate(TextBox targetTextBox, string title, string filter, string statusMessage)
+        {
             using (var dialog = new OpenFileDialog())
             {
-                dialog.Title = "PowerPoint 템플릿 선택";
-                dialog.Filter = "PowerPoint files (*.pptx;*.ppt)|*.pptx;*.ppt|All files (*.*)|*.*";
+                dialog.Title = title;
+                dialog.Filter = filter;
                 if (dialog.ShowDialog(this) == DialogResult.OK)
                 {
-                    pptTemplateText.Text = dialog.FileName;
-                    ResetTemplateStatus("PPTX 템플릿을 선택했습니다. 검사를 실행하세요.");
+                    targetTextBox.Text = dialog.FileName;
+                    ResetTemplateStatus(statusMessage);
                 }
             }
         }
@@ -1508,7 +1504,7 @@ namespace ReportAutomationLauncher
             }
         }
 
-        private string RunTemplateTool(string scriptName, string arguments, int timeoutMs)
+        private void RunTemplateTool(string scriptName, string arguments, int timeoutMs)
         {
             string pythonPath = PathResolver.ResolvePythonPath();
             string scriptPath = PathResolver.ResolveEngineToolPath(scriptName);
@@ -1544,7 +1540,6 @@ namespace ReportAutomationLauncher
                 {
                     throw new InvalidOperationException(string.IsNullOrWhiteSpace(stderr) ? stdout.Trim() : stderr.Trim());
                 }
-                return stdout;
             }
         }
 
@@ -1560,18 +1555,7 @@ namespace ReportAutomationLauncher
 
         private static string ReadJsonStringValue(string json, string key)
         {
-            string marker = "\"" + key + "\"";
-            int keyIndex = json.IndexOf(marker, StringComparison.Ordinal);
-            if (keyIndex < 0)
-            {
-                return "";
-            }
-            int colonIndex = json.IndexOf(':', keyIndex + marker.Length);
-            if (colonIndex < 0)
-            {
-                return "";
-            }
-            int start = json.IndexOf('"', colonIndex + 1);
+            int start = JsonValueStart(json, key, '"');
             if (start < 0)
             {
                 return "";
@@ -1586,16 +1570,9 @@ namespace ReportAutomationLauncher
 
         private static string ReadJsonArrayValue(string json, string key)
         {
-            string marker = "\"" + key + "\"";
-            int keyIndex = json.IndexOf(marker, StringComparison.Ordinal);
-            if (keyIndex < 0)
-            {
-                return "";
-            }
-            int colonIndex = json.IndexOf(':', keyIndex + marker.Length);
-            int start = json.IndexOf('[', colonIndex + 1);
+            int start = JsonValueStart(json, key, '[');
             int end = json.IndexOf(']', start + 1);
-            if (colonIndex < 0 || start < 0 || end < 0)
+            if (start < 0 || end < 0)
             {
                 return "";
             }
@@ -1605,6 +1582,18 @@ namespace ReportAutomationLauncher
                 return "";
             }
             return raw.Replace("\"", "").Replace(",", ", ");
+        }
+
+        private static int JsonValueStart(string json, string key, char valueStart)
+        {
+            string marker = "\"" + key + "\"";
+            int keyIndex = json.IndexOf(marker, StringComparison.Ordinal);
+            if (keyIndex < 0)
+            {
+                return -1;
+            }
+            int colonIndex = json.IndexOf(':', keyIndex + marker.Length);
+            return colonIndex < 0 ? -1 : json.IndexOf(valueStart, colonIndex + 1);
         }
 
         private static string BuildTemplateGuideText()

@@ -10,7 +10,6 @@ from __future__ import annotations
 import argparse
 import json
 import re
-import sys
 import zipfile
 from pathlib import Path
 from typing import Dict, Iterable, List, Sequence
@@ -61,7 +60,7 @@ def inspect_template(template_path: str | Path, template_type: str | None = None
 
     suffix = path.suffix.lower()
     if suffix == ".pptx":
-        content = read_pptx_text_content(path)
+        content = read_zip_text_content(path)
         shape_names = read_pptx_shape_names(path)
         report["found_shape_names"] = sorted(shape_names)
     elif suffix == ".hwpx":
@@ -82,8 +81,8 @@ def inspect_template(template_path: str | Path, template_type: str | None = None
     report["detected_layouts"] = detect_layouts(placeholders, shape_names)
 
     required, recommended = required_fields(str(report["template_type"]))
-    missing_required = [field for field in required if field not in placeholders and field.strip("{}") not in shape_names]
-    missing_recommended = [field for field in recommended if field not in placeholders and field.strip("{}") not in shape_names]
+    missing_required = [field for field in required if not has_field(field, placeholders, shape_names)]
+    missing_recommended = [field for field in recommended if not has_field(field, placeholders, shape_names)]
     report["missing_required"] = missing_required
     report["missing_recommended"] = missing_recommended
     report["auto_fix_available"] = bool(missing_required)
@@ -120,6 +119,11 @@ def required_fields(template_type: str) -> tuple[Sequence[str], Sequence[str]]:
     return [], []
 
 
+def has_field(field: str, placeholders: Sequence[str], shape_names: set[str]) -> bool:
+    token = field.strip("{}").replace(":", "_")
+    return field in placeholders or token in shape_names or "RA_" + token in shape_names
+
+
 def read_zip_text_content(path: Path) -> str:
     texts: List[str] = []
     try:
@@ -132,26 +136,6 @@ def read_zip_text_content(path: Path) -> str:
                         continue
     except zipfile.BadZipFile:
         return path.read_text(encoding="utf-8", errors="ignore")
-    return "\n".join(texts)
-
-
-def read_pptx_text_content(path: Path) -> str:
-    raw = read_zip_text_content(path)
-    texts = [raw]
-    try:
-        with zipfile.ZipFile(path) as zf:
-            for name in zf.namelist():
-                if not name.startswith("ppt/") or not name.endswith(".xml"):
-                    continue
-                try:
-                    root = ET.fromstring(zf.read(name))
-                except Exception:
-                    continue
-                for node in root.iter():
-                    if node.tag.endswith("}t") and node.text:
-                        texts.append(node.text)
-    except Exception:
-        pass
     return "\n".join(texts)
 
 

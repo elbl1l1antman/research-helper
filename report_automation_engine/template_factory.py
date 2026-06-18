@@ -43,7 +43,6 @@ def create_template(template_type: str, output: str | Path) -> Path:
 
 
 def write_pptx_template(path: Path, slides: List[List[str]]) -> None:
-    slide_ids = []
     with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as zf:
         zf.writestr("[Content_Types].xml", content_types_xml(len(slides)))
         zf.writestr("_rels/.rels", package_rels_xml())
@@ -52,7 +51,6 @@ def write_pptx_template(path: Path, slides: List[List[str]]) -> None:
         zf.writestr("ppt/presentation.xml", presentation_xml(len(slides)))
         zf.writestr("ppt/_rels/presentation.xml.rels", presentation_rels_xml(len(slides)))
         for index, texts in enumerate(slides, start=1):
-            slide_ids.append(index)
             zf.writestr(f"ppt/slides/slide{index}.xml", slide_xml(texts))
 
 
