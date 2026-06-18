@@ -20,6 +20,7 @@ GUI에서 집계표 Excel 파일과 자동화 추가기능(`.xlam`)을 선택하
 - 보고서 유형과 문체 선택값을 실행 설정 파일에 기록합니다.
 - `추출 배너 목록`은 선택한 배너 순서대로 자동 반영되며, `제목 제거 접두어`는 필요할 때만 사용자가 입력합니다.
 - 출력 형식, 템플릿, 구성요소, 소수점 자리, 차트 출력, 삽입표 방식, LLM 제공자/모델/API 키 입력 여부를 GUI에서 선택할 수 있습니다.
+- 템플릿 도구에서 HWPX/PPTX 템플릿을 검사하고, 기본 템플릿을 생성하고, 원본을 보존한 자동 보정 사본을 만들 수 있습니다.
 - API 키 값은 실행 중 옵션으로만 들고 있으며, `*_launcher_config.txt`에는 키 자체가 아니라 입력 여부만 기록합니다.
 - 기본값으로 `문장 초안 TXT(Python)`를 생성합니다. VBA가 만든 `보고서_분석문*` 시트가 있으면 그 내용을 우선 사용하고, 없으면 원본 표 블록을 직접 분석합니다.
 - 실행 완료 후 결과 탭에서 산출 엑셀 열기, 초안 TXT 열기, 초안 미리보기 복사, 문장별 수정, 검토본 저장을 할 수 있습니다.
@@ -28,6 +29,25 @@ GUI에서 집계표 Excel 파일과 자동화 추가기능(`.xlam`)을 선택하
 - `REPORT_AUTOMATION_ADDIN` 환경변수를 지정하면 기본 추가기능 경로로 사용합니다.
 - `REPORT_AUTOMATION_PYTHON` 환경변수를 지정하면 문장 초안 생성에 사용할 Python 경로로 사용합니다.
 - `REPORT_AUTOMATION_ENGINE` 환경변수를 지정하면 `excel_report_generator.py` 경로로 사용합니다.
+
+## 템플릿 도구
+
+산출 방식 영역의 버튼은 다음 역할을 합니다.
+
+- `검사`: 선택한 HWPX/HWP 또는 PPTX 파일의 placeholder와 `RA_` shape 이름을 확인합니다.
+- `기본 HWPX`: `report_template_basic.hwpx` 시작 템플릿을 생성합니다.
+- `기본 PPTX`: `report_template_basic.pptx` 보고서 템플릿을 생성합니다.
+- `차트 PPTX`: `chart_review_template_basic.pptx` 차트 검토용 템플릿을 생성합니다.
+- `자동 보정`: 원본 템플릿을 덮어쓰지 않고 `_template_ready` 사본에 최소 placeholder를 삽입합니다.
+- `가이드`: 사용자가 직접 템플릿을 만들 때 지켜야 할 최소 placeholder 기준을 엽니다.
+
+사용자가 직접 만드는 최소 기준은 다음과 같습니다.
+
+- HWPX: 본문 시작 위치에 `{{BODY}}` 한 줄 유지
+- PPTX 보고서: 반복 슬라이드에 `{{SECTION_TITLE}}`, `{{NARRATIVE}}`, `{{TABLE}}`, `{{CHART}}` 유지
+- 차트 검토 PPTX: 반복 슬라이드에 `{{CHART_TITLE}}`, `{{CHART}}`, `{{CHART_NOTE}}` 유지
+
+디자인, 글꼴, 색상, 로고, 배경, 마스터 슬라이드, placeholder 위치와 크기는 수정해도 됩니다. 중괄호 placeholder 텍스트와 `RA_`로 시작하는 shape/bookmark 이름은 유지해야 합니다.
 
 ## 빌드
 

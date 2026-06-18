@@ -19,6 +19,18 @@
   - HWPX 내부 XML을 읽어 표와 문단 흐름을 분석합니다.
   - 현재는 HWPX에 직접 삽입하기보다, 기존 HWPX 표 구조를 분석하고 문장 생성 로직을 검증하는 보조 도구로 봅니다.
 
+- `template_inspector.py`
+  - HWPX/PPTX/HWP 템플릿의 placeholder와 `RA_` shape/bookmark 후보를 검사합니다.
+  - 검사 결과를 `ready`, `usable_with_warnings`, `needs_autofix`, `unsupported` 상태 JSON으로 저장합니다.
+
+- `template_factory.py`
+  - 사용자가 디자인만 바꿔 쓸 수 있는 기본 HWPX/PPTX 템플릿 파일을 생성합니다.
+  - 기본 PPTX는 OpenXML 기반의 편집 가능한 시작 파일입니다.
+
+- `template_autofix.py`
+  - 기존 템플릿 원본을 보존하고 `_template_ready` 사본에 최소 placeholder를 삽입합니다.
+  - PPTX는 슬라이드 XML에 텍스트 박스를 추가하고, HWPX는 자동 보정용 XML 파트를 추가합니다.
+
 - `config/default_style_schema.json`
   - 기본 문체/표 해석 설정입니다.
   - GUI에서 별도 JSON을 선택하지 않으면 이 파일을 사용합니다.
@@ -58,9 +70,37 @@ HWPX 분석기는 명령행 인자를 받을 수 있습니다.
 python report_automation_engine\hwpx_report_writer.py "input.hwpx" -o "draft.txt"
 ```
 
+템플릿 도구는 런처에서 호출하거나 CLI로 직접 검증할 수 있습니다.
+
+```powershell
+python report_automation_engine\template_inspector.py `
+  --template "C:\path\user_template.pptx" `
+  --type pptx_report `
+  --output "C:\path\template_report.json"
+```
+
+```powershell
+python report_automation_engine\template_factory.py `
+  --type pptx_report `
+  --output "C:\path\report_template_basic.pptx"
+```
+
+```powershell
+python report_automation_engine\template_autofix.py `
+  --template "C:\path\user_template.pptx" `
+  --type chart_review `
+  --output "C:\path\user_template_ready.pptx"
+```
+
+템플릿 최소 기준:
+
+- HWPX 보고서: `{{BODY}}`
+- PPTX 보고서: `{{SECTION_TITLE}}`, `{{NARRATIVE}}`, `{{TABLE}}`, `{{CHART}}`
+- 차트 검토 PPTX: `{{CHART_TITLE}}`, `{{CHART}}`, `{{CHART_NOTE}}`
+
 ## 코드리뷰 포인트
 
 - 이 엔진은 아직 완성된 보고서 편집기가 아닙니다.
 - 엑셀 표 구조가 프로젝트별로 달라질 수 있으므로, `config/default_style_schema.json`의 제외어와 키워드를 먼저 조정하는 방식이 안전합니다.
-- HWPX 직접 삽입은 한글 COM API 또는 HWPX XML 생성 레이어를 붙일 때 별도로 구현해야 합니다.
+- HWPX 기본 템플릿 생성은 placeholder 검증용 시작 파일입니다. 한글에서 완전히 안정적으로 열리는 고품질 HWPX 생성은 한글 COM API 또는 정식 HWPX writer 레이어를 붙일 때 별도로 강화해야 합니다.
 - 외부 EXE 런처와 연결할 때는 Python 스크립트를 별도 프로세스로 실행하고, 입력 파일/스타일 JSON/출력 경로를 인자로 넘기는 방식이 기존 VBA 매크로와 충돌이 가장 적습니다.

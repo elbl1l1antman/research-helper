@@ -109,6 +109,13 @@ namespace ReportAutomationLauncher
         private readonly ComboBox outputTypeCombo = new ComboBox();
         private readonly TextBox hwpTemplateText = new TextBox();
         private readonly TextBox pptTemplateText = new TextBox();
+        private readonly Button inspectTemplateButton = new Button();
+        private readonly Button createHwpTemplateButton = new Button();
+        private readonly Button createPptTemplateButton = new Button();
+        private readonly Button createChartTemplateButton = new Button();
+        private readonly Button autoFixTemplateButton = new Button();
+        private readonly Button openTemplateGuideButton = new Button();
+        private readonly Label templateStatusLabel = new Label();
         private readonly TextBox bannerText = new TextBox();
         private readonly CheckedListBox bannerList = new CheckedListBox();
         private readonly TabControl workflowTabs = new TabControl();
@@ -164,6 +171,7 @@ namespace ReportAutomationLauncher
         private readonly List<DraftSentenceItem> draftSentenceItems = new List<DraftSentenceItem>();
         private readonly List<DraftQaIssue> draftQaIssues = new List<DraftQaIssue>();
         private readonly HashSet<string> recommendedBanners = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        private string lastTemplateStatus = "미검사";
         private string currentDraftPath = "";
 
         public MainForm()
@@ -227,6 +235,8 @@ namespace ReportAutomationLauncher
             workbookPathText.TextChanged += delegate { UpdateWorkflowStatus(); };
             addinPathText.TextChanged += delegate { UpdateWorkflowStatus(); };
             outputTypeCombo.SelectedIndexChanged += delegate { UpdateWorkflowStatus(); };
+            hwpTemplateText.TextChanged += delegate { UpdateWorkflowStatus(); };
+            pptTemplateText.TextChanged += delegate { UpdateWorkflowStatus(); };
 
             addinPathText.Text = PathResolver.ResolveDefaultAddinPath();
             bannerText.Text = "전체";
@@ -338,6 +348,7 @@ namespace ReportAutomationLauncher
                 AddReadinessItem("표 탐지", tableCount > 0, tableCount > 0 ? tableCount + "개 표를 발견했습니다." : "파일 등록 후 표 목록을 확인하세요.");
                 AddReadinessItem("분석 배너", bannerPreviewReady, BuildBannerReadinessText(checkedBanners, bannerPreviewReady));
                 AddReadinessItem("산출 방식", outputReady, outputReady ? "Excel 산출 시트 기준으로 실행합니다." : "현재 알파는 Excel 산출 시트만 지원합니다.");
+                AddReadinessItem("템플릿", IsTemplateReadyForSelectedOutput(), BuildTemplateReadinessText());
             }
             finally
             {
@@ -380,6 +391,48 @@ namespace ReportAutomationLauncher
             return count;
         }
 
+        private bool IsTemplateReadyForSelectedOutput()
+        {
+            string output = outputTypeCombo.Text;
+            if (output.StartsWith("Excel", StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+            if (output.IndexOf("HWP", StringComparison.OrdinalIgnoreCase) >= 0)
+            {
+                return File.Exists(hwpTemplateText.Text.Trim()) && IsTemplateStatusUsable();
+            }
+            if (output.IndexOf("PowerPoint", StringComparison.OrdinalIgnoreCase) >= 0)
+            {
+                return File.Exists(pptTemplateText.Text.Trim()) && IsTemplateStatusUsable();
+            }
+            return false;
+        }
+
+        private bool IsTemplateStatusUsable()
+        {
+            return lastTemplateStatus.IndexOf("ready", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                   lastTemplateStatus.IndexOf("usable_with_warnings", StringComparison.OrdinalIgnoreCase) >= 0;
+        }
+
+        private string BuildTemplateReadinessText()
+        {
+            string output = outputTypeCombo.Text;
+            if (output.StartsWith("Excel", StringComparison.OrdinalIgnoreCase))
+            {
+                return "Excel 산출은 외부 문서 템플릿이 필요하지 않습니다.";
+            }
+            if (output.IndexOf("HWP", StringComparison.OrdinalIgnoreCase) >= 0)
+            {
+                return File.Exists(hwpTemplateText.Text.Trim()) ? "HWPX/HWP 템플릿 상태: " + lastTemplateStatus : "HWPX/HWP 템플릿을 선택하거나 기본 템플릿을 생성하세요.";
+            }
+            if (output.IndexOf("PowerPoint", StringComparison.OrdinalIgnoreCase) >= 0)
+            {
+                return File.Exists(pptTemplateText.Text.Trim()) ? "PPTX 템플릿 상태: " + lastTemplateStatus : "PPTX 템플릿을 선택하거나 기본 템플릿을 생성하세요.";
+            }
+            return "템플릿 검사가 필요합니다.";
+        }
+
         private Control BuildFileGroup()
         {
             var group = new GroupBox();
@@ -414,7 +467,7 @@ namespace ReportAutomationLauncher
             group.AutoSize = true;
             group.Padding = new Padding(10);
 
-            var grid = CreateGrid(5);
+            var grid = CreateGrid(7);
             group.Controls.Add(grid);
 
             AddLabel(grid, 0, "출력 형식");
@@ -429,6 +482,44 @@ namespace ReportAutomationLauncher
             AddPathRow(grid, 1, "HWP/HWPX 템플릿", hwpTemplateText, "찾기", BrowseHwpTemplate);
             AddPathRow(grid, 2, "PPTX 템플릿", pptTemplateText, "찾기", BrowsePptTemplate);
 
+            var templateButtons = new FlowLayoutPanel();
+            templateButtons.Dock = DockStyle.Fill;
+            templateButtons.AutoSize = true;
+            inspectTemplateButton.Text = "검사";
+            inspectTemplateButton.Width = 60;
+            inspectTemplateButton.Click += InspectTemplateButton_Click;
+            createHwpTemplateButton.Text = "기본 HWPX";
+            createHwpTemplateButton.Width = 90;
+            createHwpTemplateButton.Click += CreateHwpTemplateButton_Click;
+            createPptTemplateButton.Text = "기본 PPTX";
+            createPptTemplateButton.Width = 90;
+            createPptTemplateButton.Click += CreatePptTemplateButton_Click;
+            createChartTemplateButton.Text = "차트 PPTX";
+            createChartTemplateButton.Width = 90;
+            createChartTemplateButton.Click += CreateChartTemplateButton_Click;
+            autoFixTemplateButton.Text = "자동 보정";
+            autoFixTemplateButton.Width = 85;
+            autoFixTemplateButton.Click += AutoFixTemplateButton_Click;
+            openTemplateGuideButton.Text = "가이드";
+            openTemplateGuideButton.Width = 70;
+            openTemplateGuideButton.Click += OpenTemplateGuideButton_Click;
+            templateButtons.Controls.Add(inspectTemplateButton);
+            templateButtons.Controls.Add(createHwpTemplateButton);
+            templateButtons.Controls.Add(createPptTemplateButton);
+            templateButtons.Controls.Add(createChartTemplateButton);
+            templateButtons.Controls.Add(autoFixTemplateButton);
+            templateButtons.Controls.Add(openTemplateGuideButton);
+            AddLabel(grid, 3, "템플릿 도구");
+            grid.Controls.Add(templateButtons, 1, 3);
+            grid.SetColumnSpan(templateButtons, 2);
+
+            templateStatusLabel.Text = "템플릿을 선택하거나 기본 템플릿을 생성하세요.";
+            templateStatusLabel.AutoSize = true;
+            templateStatusLabel.ForeColor = Color.DimGray;
+            templateStatusLabel.Margin = new Padding(0, 4, 0, 0);
+            grid.Controls.Add(templateStatusLabel, 1, 4);
+            grid.SetColumnSpan(templateStatusLabel, 2);
+
             var components = new FlowLayoutPanel();
             components.Dock = DockStyle.Fill;
             components.AutoSize = true;
@@ -442,8 +533,8 @@ namespace ReportAutomationLauncher
             components.Controls.Add(tableCheck);
             components.Controls.Add(qaCheck);
             components.Controls.Add(draftTextCheck);
-            AddLabel(grid, 3, "구성요소");
-            grid.Controls.Add(components, 1, 3);
+            AddLabel(grid, 5, "구성요소");
+            grid.Controls.Add(components, 1, 5);
             grid.SetColumnSpan(components, 2);
 
             var note = new Label();
@@ -451,7 +542,7 @@ namespace ReportAutomationLauncher
             note.AutoSize = true;
             note.ForeColor = Color.DimGray;
             note.Margin = new Padding(0, 4, 0, 0);
-            grid.Controls.Add(note, 1, 4);
+            grid.Controls.Add(note, 1, 6);
             grid.SetColumnSpan(note, 2);
 
             return group;
@@ -1178,6 +1269,7 @@ namespace ReportAutomationLauncher
                 if (dialog.ShowDialog(this) == DialogResult.OK)
                 {
                     hwpTemplateText.Text = dialog.FileName;
+                    ResetTemplateStatus("HWPX/HWP 템플릿을 선택했습니다. 검사를 실행하세요.");
                 }
             }
         }
@@ -1191,8 +1283,350 @@ namespace ReportAutomationLauncher
                 if (dialog.ShowDialog(this) == DialogResult.OK)
                 {
                     pptTemplateText.Text = dialog.FileName;
+                    ResetTemplateStatus("PPTX 템플릿을 선택했습니다. 검사를 실행하세요.");
                 }
             }
+        }
+
+        private void ResetTemplateStatus(string message)
+        {
+            lastTemplateStatus = "미검사";
+            templateStatusLabel.Text = message;
+            templateStatusLabel.ForeColor = Color.DimGray;
+            UpdateWorkflowStatus();
+        }
+
+        private void InspectTemplateButton_Click(object sender, EventArgs e)
+        {
+            string templatePath = SelectedTemplatePath();
+            if (string.IsNullOrWhiteSpace(templatePath))
+            {
+                MessageBox.Show(this, "검사할 HWPX/HWP 또는 PPTX 템플릿을 먼저 선택하세요.", "템플릿 검사", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                return;
+            }
+            if (!File.Exists(templatePath))
+            {
+                MessageBox.Show(this, "선택한 템플릿 파일을 찾을 수 없습니다.", "템플릿 검사", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return;
+            }
+
+            try
+            {
+                InspectTemplate(templatePath, SelectedTemplateType(templatePath), true);
+            }
+            catch (Exception ex)
+            {
+                lastTemplateStatus = "검사 실패";
+                templateStatusLabel.Text = "템플릿 검사 실패: " + ex.Message;
+                templateStatusLabel.ForeColor = Color.FromArgb(160, 40, 40);
+                UpdateWorkflowStatus();
+                MessageBox.Show(this, ex.Message, "템플릿 검사 실패", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            }
+        }
+
+        private void CreateHwpTemplateButton_Click(object sender, EventArgs e)
+        {
+            CreateTemplate("hwpx_report", "report_template_basic.hwpx", "HWPX files (*.hwpx)|*.hwpx", hwpTemplateText);
+        }
+
+        private void CreatePptTemplateButton_Click(object sender, EventArgs e)
+        {
+            CreateTemplate("pptx_report", "report_template_basic.pptx", "PowerPoint files (*.pptx)|*.pptx", pptTemplateText);
+        }
+
+        private void CreateChartTemplateButton_Click(object sender, EventArgs e)
+        {
+            CreateTemplate("chart_review", "chart_review_template_basic.pptx", "PowerPoint files (*.pptx)|*.pptx", pptTemplateText);
+        }
+
+        private void CreateTemplate(string templateType, string defaultName, string filter, TextBox targetTextBox)
+        {
+            using (var dialog = new SaveFileDialog())
+            {
+                dialog.Title = "기본 템플릿 저장";
+                dialog.FileName = defaultName;
+                dialog.Filter = filter + "|All files (*.*)|*.*";
+                dialog.OverwritePrompt = true;
+                if (dialog.ShowDialog(this) != DialogResult.OK)
+                {
+                    return;
+                }
+
+                try
+                {
+                    string outputPath = dialog.FileName;
+                    string arguments = "--type " + QuoteArg(templateType) + " --output " + QuoteArg(outputPath);
+                    RunTemplateTool("template_factory.py", arguments, 60000);
+                    targetTextBox.Text = outputPath;
+                    Log("기본 템플릿 생성: " + outputPath);
+                    InspectTemplate(outputPath, templateType, false);
+                    MessageBox.Show(this, "기본 템플릿을 생성했습니다." + Environment.NewLine + outputPath, "템플릿 생성", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                }
+                catch (Exception ex)
+                {
+                    MessageBox.Show(this, ex.Message, "템플릿 생성 실패", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                }
+            }
+        }
+
+        private void AutoFixTemplateButton_Click(object sender, EventArgs e)
+        {
+            string templatePath = SelectedTemplatePath();
+            if (string.IsNullOrWhiteSpace(templatePath) || !File.Exists(templatePath))
+            {
+                MessageBox.Show(this, "자동 보정할 템플릿 파일을 먼저 선택하세요.", "템플릿 자동 보정", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                return;
+            }
+
+            string templateType = SelectedTemplateType(templatePath);
+            string extension = Path.GetExtension(templatePath);
+            string defaultPath = Path.Combine(
+                Path.GetDirectoryName(templatePath),
+                Path.GetFileNameWithoutExtension(templatePath) + "_template_ready" + extension);
+
+            using (var dialog = new SaveFileDialog())
+            {
+                dialog.Title = "자동 보정 사본 저장";
+                dialog.FileName = Path.GetFileName(defaultPath);
+                dialog.InitialDirectory = Path.GetDirectoryName(defaultPath);
+                dialog.Filter = extension.Equals(".pptx", StringComparison.OrdinalIgnoreCase) ? "PowerPoint files (*.pptx)|*.pptx|All files (*.*)|*.*" : "HWPX files (*.hwpx)|*.hwpx|All files (*.*)|*.*";
+                dialog.OverwritePrompt = true;
+                if (dialog.ShowDialog(this) != DialogResult.OK)
+                {
+                    return;
+                }
+
+                try
+                {
+                    string outputPath = dialog.FileName;
+                    string arguments = "--template " + QuoteArg(templatePath) +
+                                      " --type " + QuoteArg(templateType) +
+                                      " --output " + QuoteArg(outputPath);
+                    RunTemplateTool("template_autofix.py", arguments, 60000);
+                    if (extension.Equals(".pptx", StringComparison.OrdinalIgnoreCase))
+                    {
+                        pptTemplateText.Text = outputPath;
+                    }
+                    else
+                    {
+                        hwpTemplateText.Text = outputPath;
+                    }
+                    Log("템플릿 자동 보정 사본 생성: " + outputPath);
+                    InspectTemplate(outputPath, templateType, false);
+                    MessageBox.Show(this, "원본을 보존하고 자동 보정 사본을 생성했습니다." + Environment.NewLine + outputPath, "템플릿 자동 보정", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                }
+                catch (Exception ex)
+                {
+                    MessageBox.Show(this, ex.Message, "템플릿 자동 보정 실패", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                }
+            }
+        }
+
+        private void OpenTemplateGuideButton_Click(object sender, EventArgs e)
+        {
+            string guidePath = Path.Combine(Path.GetTempPath(), "report_automation_template_guide.txt");
+            File.WriteAllText(guidePath, BuildTemplateGuideText(), System.Text.Encoding.UTF8);
+
+            var info = new ProcessStartInfo(guidePath);
+            info.UseShellExecute = true;
+            Process.Start(info);
+        }
+
+        private string SelectedTemplatePath()
+        {
+            string output = outputTypeCombo.Text;
+            if (output.IndexOf("HWP", StringComparison.OrdinalIgnoreCase) >= 0)
+            {
+                return hwpTemplateText.Text.Trim();
+            }
+            if (output.IndexOf("PowerPoint", StringComparison.OrdinalIgnoreCase) >= 0)
+            {
+                return pptTemplateText.Text.Trim();
+            }
+            if (File.Exists(hwpTemplateText.Text.Trim()))
+            {
+                return hwpTemplateText.Text.Trim();
+            }
+            return pptTemplateText.Text.Trim();
+        }
+
+        private string SelectedTemplateType(string templatePath)
+        {
+            string extension = Path.GetExtension(templatePath);
+            if (extension.Equals(".hwp", StringComparison.OrdinalIgnoreCase) || extension.Equals(".hwpx", StringComparison.OrdinalIgnoreCase))
+            {
+                return "hwpx_report";
+            }
+            if (Path.GetFileNameWithoutExtension(templatePath).IndexOf("chart", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                Path.GetFileNameWithoutExtension(templatePath).IndexOf("차트", StringComparison.OrdinalIgnoreCase) >= 0)
+            {
+                return "chart_review";
+            }
+            return "pptx_report";
+        }
+
+        private void InspectTemplate(string templatePath, string templateType, bool showMessage)
+        {
+            string reportPath = Path.Combine(Path.GetTempPath(), "report_automation_template_report.json");
+            string arguments = "--template " + QuoteArg(templatePath) +
+                              " --type " + QuoteArg(templateType) +
+                              " --output " + QuoteArg(reportPath);
+            RunTemplateTool("template_inspector.py", arguments, 60000);
+
+            string json = File.Exists(reportPath) ? File.ReadAllText(reportPath, System.Text.Encoding.UTF8) : "";
+            string status = ReadJsonStringValue(json, "status");
+            string detectedType = ReadJsonStringValue(json, "template_type");
+            string found = ReadJsonArrayValue(json, "found_placeholders");
+            string missingRequired = ReadJsonArrayValue(json, "missing_required");
+            string missingRecommended = ReadJsonArrayValue(json, "missing_recommended");
+
+            if (string.IsNullOrWhiteSpace(status))
+            {
+                status = "검사 결과 없음";
+            }
+            if (string.IsNullOrWhiteSpace(detectedType))
+            {
+                detectedType = templateType;
+            }
+
+            lastTemplateStatus = status;
+            templateStatusLabel.Text = "상태: " + status + " / 유형: " + detectedType +
+                                       " / 발견: " + EmptyToDash(found) +
+                                       " / 누락 필수: " + EmptyToDash(missingRequired);
+            templateStatusLabel.ForeColor = IsTemplateStatusUsable() ? Color.FromArgb(20, 95, 55) : Color.FromArgb(150, 80, 20);
+            UpdateWorkflowStatus();
+
+            Log("템플릿 검사: " + status + " (" + detectedType + ")");
+            if (showMessage)
+            {
+                string message = "상태: " + status + Environment.NewLine +
+                                 "유형: " + detectedType + Environment.NewLine +
+                                 "발견 placeholder: " + EmptyToDash(found) + Environment.NewLine +
+                                 "누락 필수 필드: " + EmptyToDash(missingRequired) + Environment.NewLine +
+                                 "누락 권장 필드: " + EmptyToDash(missingRecommended);
+                MessageBox.Show(this, message, "템플릿 검사 결과", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            }
+        }
+
+        private string RunTemplateTool(string scriptName, string arguments, int timeoutMs)
+        {
+            string pythonPath = PathResolver.ResolvePythonPath();
+            string scriptPath = PathResolver.ResolveEngineToolPath(scriptName);
+            if (string.IsNullOrWhiteSpace(pythonPath) || !File.Exists(pythonPath))
+            {
+                throw new FileNotFoundException("Python 실행 파일을 찾지 못했습니다. REPORT_AUTOMATION_PYTHON 환경변수를 확인하세요.");
+            }
+            if (string.IsNullOrWhiteSpace(scriptPath) || !File.Exists(scriptPath))
+            {
+                throw new FileNotFoundException("템플릿 도구를 찾지 못했습니다.", scriptName);
+            }
+
+            var startInfo = new ProcessStartInfo();
+            startInfo.FileName = pythonPath;
+            startInfo.Arguments = QuoteArg(scriptPath) + " " + arguments;
+            startInfo.UseShellExecute = false;
+            startInfo.CreateNoWindow = true;
+            startInfo.RedirectStandardOutput = true;
+            startInfo.RedirectStandardError = true;
+            startInfo.StandardOutputEncoding = System.Text.Encoding.UTF8;
+            startInfo.StandardErrorEncoding = System.Text.Encoding.UTF8;
+
+            using (Process process = Process.Start(startInfo))
+            {
+                if (!process.WaitForExit(timeoutMs))
+                {
+                    try { process.Kill(); } catch { }
+                    throw new TimeoutException("템플릿 도구 실행 시간이 초과되었습니다.");
+                }
+                string stdout = process.StandardOutput.ReadToEnd();
+                string stderr = process.StandardError.ReadToEnd();
+                if (process.ExitCode != 0)
+                {
+                    throw new InvalidOperationException(string.IsNullOrWhiteSpace(stderr) ? stdout.Trim() : stderr.Trim());
+                }
+                return stdout;
+            }
+        }
+
+        private static string QuoteArg(string value)
+        {
+            return "\"" + (value ?? "").Replace("\"", "\\\"") + "\"";
+        }
+
+        private static string EmptyToDash(string value)
+        {
+            return string.IsNullOrWhiteSpace(value) ? "-" : value;
+        }
+
+        private static string ReadJsonStringValue(string json, string key)
+        {
+            string marker = "\"" + key + "\"";
+            int keyIndex = json.IndexOf(marker, StringComparison.Ordinal);
+            if (keyIndex < 0)
+            {
+                return "";
+            }
+            int colonIndex = json.IndexOf(':', keyIndex + marker.Length);
+            if (colonIndex < 0)
+            {
+                return "";
+            }
+            int start = json.IndexOf('"', colonIndex + 1);
+            if (start < 0)
+            {
+                return "";
+            }
+            int end = json.IndexOf('"', start + 1);
+            if (end < 0)
+            {
+                return "";
+            }
+            return json.Substring(start + 1, end - start - 1);
+        }
+
+        private static string ReadJsonArrayValue(string json, string key)
+        {
+            string marker = "\"" + key + "\"";
+            int keyIndex = json.IndexOf(marker, StringComparison.Ordinal);
+            if (keyIndex < 0)
+            {
+                return "";
+            }
+            int colonIndex = json.IndexOf(':', keyIndex + marker.Length);
+            int start = json.IndexOf('[', colonIndex + 1);
+            int end = json.IndexOf(']', start + 1);
+            if (colonIndex < 0 || start < 0 || end < 0)
+            {
+                return "";
+            }
+            string raw = json.Substring(start + 1, end - start - 1).Trim();
+            if (string.IsNullOrWhiteSpace(raw))
+            {
+                return "";
+            }
+            return raw.Replace("\"", "").Replace(",", ", ");
+        }
+
+        private static string BuildTemplateGuideText()
+        {
+            return "보고서 자동화 템플릿 가이드" + Environment.NewLine +
+                   Environment.NewLine +
+                   "1. 최소 HWPX 템플릿" + Environment.NewLine +
+                   "- 한글 문서에서 본문이 들어갈 위치에 {{BODY}} 한 줄을 유지합니다." + Environment.NewLine +
+                   "- 표지, 글꼴, 여백, 제목 스타일, 로고, 쪽번호는 자유롭게 수정할 수 있습니다." + Environment.NewLine +
+                   Environment.NewLine +
+                   "2. 최소 PPTX 보고서 템플릿" + Environment.NewLine +
+                   "- 반복 슬라이드에 {{SECTION_TITLE}}, {{NARRATIVE}}, {{TABLE}}, {{CHART}} 텍스트 상자를 둡니다." + Environment.NewLine +
+                   "- shape 이름이 RA_로 시작하는 요소는 삭제하거나 이름을 바꾸지 않습니다." + Environment.NewLine +
+                   Environment.NewLine +
+                   "3. 최소 차트 검토 PPTX 템플릿" + Environment.NewLine +
+                   "- 반복 슬라이드에 {{CHART_TITLE}}, {{CHART}}, {{CHART_NOTE}}를 둡니다." + Environment.NewLine +
+                   Environment.NewLine +
+                   "4. 수정 가능 영역" + Environment.NewLine +
+                   "- 글꼴, 색상, 배경, 마스터 슬라이드, 표지, 페이지 번호, placeholder의 위치와 크기" + Environment.NewLine +
+                   Environment.NewLine +
+                   "5. 수정 금지 영역" + Environment.NewLine +
+                   "- 중괄호 placeholder 텍스트, RA_로 시작하는 shape/bookmark 이름, 반복 슬라이드, {{BODY}}" + Environment.NewLine;
         }
 
         private void RunButton_Click(object sender, EventArgs e)
@@ -2727,6 +3161,36 @@ namespace ReportAutomationLauncher
             candidates.Add(Path.Combine(baseDir, "report_automation_engine", "excel_report_generator.py"));
             candidates.Add(Path.Combine(baseDir, "..", "..", "report_automation_engine", "excel_report_generator.py"));
             candidates.Add(Path.Combine(Environment.CurrentDirectory, "report_automation_engine", "excel_report_generator.py"));
+
+            foreach (string candidate in candidates)
+            {
+                string fullPath = Path.GetFullPath(candidate);
+                if (File.Exists(fullPath))
+                {
+                    return fullPath;
+                }
+            }
+
+            return Path.GetFullPath(candidates[1]);
+        }
+
+        public static string ResolveEngineToolPath(string fileName)
+        {
+            string enginePath = ResolveExcelEnginePath();
+            if (!string.IsNullOrWhiteSpace(enginePath))
+            {
+                string candidate = Path.Combine(Path.GetDirectoryName(enginePath), fileName);
+                if (File.Exists(candidate))
+                {
+                    return candidate;
+                }
+            }
+
+            string baseDir = AppDomain.CurrentDomain.BaseDirectory;
+            var candidates = new List<string>();
+            candidates.Add(Path.Combine(baseDir, "report_automation_engine", fileName));
+            candidates.Add(Path.Combine(baseDir, "..", "..", "report_automation_engine", fileName));
+            candidates.Add(Path.Combine(Environment.CurrentDirectory, "report_automation_engine", fileName));
 
             foreach (string candidate in candidates)
             {
