@@ -134,6 +134,13 @@ namespace ReportAutomationLauncher
         private readonly CheckBox tableCheck = new CheckBox();
         private readonly CheckBox qaCheck = new CheckBox();
         private readonly CheckBox draftTextCheck = new CheckBox();
+        private readonly ComboBox decimalPlacesCombo = new ComboBox();
+        private readonly ComboBox chartOutputCombo = new ComboBox();
+        private readonly ComboBox tableInsertModeCombo = new ComboBox();
+        private readonly CheckBox llmEnabledCheck = new CheckBox();
+        private readonly ComboBox llmProviderCombo = new ComboBox();
+        private readonly TextBox llmModelText = new TextBox();
+        private readonly TextBox llmApiKeyText = new TextBox();
         private readonly CheckBox copyWorkbookCheck = new CheckBox();
         private readonly CheckBox keepExcelOpenCheck = new CheckBox();
         private readonly Button runButton = new Button();
@@ -227,6 +234,11 @@ namespace ReportAutomationLauncher
             outputTypeCombo.SelectedIndex = 0;
             reportProfileCombo.SelectedIndex = 0;
             styleProfileCombo.SelectedIndex = 0;
+            decimalPlacesCombo.SelectedIndex = 1;
+            chartOutputCombo.SelectedIndex = 0;
+            tableInsertModeCombo.SelectedIndex = 0;
+            llmProviderCombo.SelectedIndex = 0;
+            llmModelText.Text = "gpt-4.1-mini";
             analysisCheck.Checked = true;
             chartCheck.Checked = true;
             tableCheck.Checked = true;
@@ -408,14 +420,14 @@ namespace ReportAutomationLauncher
             AddLabel(grid, 0, "출력 형식");
             outputTypeCombo.DropDownStyle = ComboBoxStyle.DropDownList;
             outputTypeCombo.Items.Add("Excel 산출 시트");
+            outputTypeCombo.Items.Add("HWPX 보고서");
+            outputTypeCombo.Items.Add("PowerPoint 보고서");
             outputTypeCombo.Dock = DockStyle.Fill;
             grid.Controls.Add(outputTypeCombo, 1, 0);
             grid.SetColumnSpan(outputTypeCombo, 2);
 
             AddPathRow(grid, 1, "HWP/HWPX 템플릿", hwpTemplateText, "찾기", BrowseHwpTemplate);
             AddPathRow(grid, 2, "PPTX 템플릿", pptTemplateText, "찾기", BrowsePptTemplate);
-            hwpTemplateText.Enabled = false;
-            pptTemplateText.Enabled = false;
 
             var components = new FlowLayoutPanel();
             components.Dock = DockStyle.Fill;
@@ -486,21 +498,91 @@ namespace ReportAutomationLauncher
             var panel = new TableLayoutPanel();
             panel.Dock = DockStyle.Fill;
             panel.ColumnCount = 1;
-            panel.RowCount = 3;
+            panel.RowCount = 4;
+            panel.RowStyles.Add(new RowStyle(SizeType.AutoSize));
             panel.RowStyles.Add(new RowStyle(SizeType.AutoSize));
             panel.RowStyles.Add(new RowStyle(SizeType.AutoSize));
             panel.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
 
             panel.Controls.Add(BuildOutputGroup(), 0, 0);
             panel.Controls.Add(BuildOptionsGroup(), 0, 1);
+            panel.Controls.Add(BuildAdvancedOptionsGroup(), 0, 2);
 
             var note = new Label();
-            note.Text = "현재 선택값은 실행 설정 파일과 Excel의 보고서_설정 시트에 남습니다. 문장 미리보기/수동 편집 UI는 다음 알파에서 연결합니다.";
+            note.Text = "현재 선택값은 실행 설정 파일과 Excel의 보고서_설정 시트에 남습니다. 아직 미구현된 출력도 설정 계약으로 먼저 저장합니다.";
             note.AutoSize = true;
             note.ForeColor = Color.DimGray;
             note.Margin = new Padding(0, 10, 0, 0);
-            panel.Controls.Add(note, 0, 2);
+            panel.Controls.Add(note, 0, 3);
             return panel;
+        }
+
+        private Control BuildAdvancedOptionsGroup()
+        {
+            var group = new GroupBox();
+            group.Text = "고급 옵션";
+            group.Dock = DockStyle.Top;
+            group.AutoSize = true;
+            group.Padding = new Padding(10);
+
+            var grid = CreateGrid(6);
+            group.Controls.Add(grid);
+
+            AddLabel(grid, 0, "수치 표기");
+            decimalPlacesCombo.DropDownStyle = ComboBoxStyle.DropDownList;
+            decimalPlacesCombo.Items.Add("소수점 없음");
+            decimalPlacesCombo.Items.Add("소수점 1자리");
+            decimalPlacesCombo.Items.Add("소수점 2자리");
+            decimalPlacesCombo.Dock = DockStyle.Fill;
+            grid.Controls.Add(decimalPlacesCombo, 1, 0);
+            grid.SetColumnSpan(decimalPlacesCombo, 2);
+
+            AddLabel(grid, 1, "차트 출력");
+            chartOutputCombo.DropDownStyle = ComboBoxStyle.DropDownList;
+            chartOutputCombo.Items.Add("Excel 차트 데이터");
+            chartOutputCombo.Items.Add("HWP 메타파일 붙여넣기용");
+            chartOutputCombo.Items.Add("PPTX 차트 객체");
+            chartOutputCombo.Dock = DockStyle.Fill;
+            grid.Controls.Add(chartOutputCombo, 1, 1);
+            grid.SetColumnSpan(chartOutputCombo, 2);
+
+            AddLabel(grid, 2, "삽입표 방식");
+            tableInsertModeCombo.DropDownStyle = ComboBoxStyle.DropDownList;
+            tableInsertModeCombo.Items.Add("Excel 삽입표 시트");
+            tableInsertModeCombo.Items.Add("HWP 표 객체");
+            tableInsertModeCombo.Items.Add("선택 붙여넣기");
+            tableInsertModeCombo.Dock = DockStyle.Fill;
+            grid.Controls.Add(tableInsertModeCombo, 1, 2);
+            grid.SetColumnSpan(tableInsertModeCombo, 2);
+
+            llmEnabledCheck.Text = "LLM 문장 고도화 사용";
+            llmEnabledCheck.AutoSize = true;
+            AddLabel(grid, 3, "LLM");
+            grid.Controls.Add(llmEnabledCheck, 1, 3);
+            grid.SetColumnSpan(llmEnabledCheck, 2);
+
+            var llmPanel = new FlowLayoutPanel();
+            llmPanel.Dock = DockStyle.Fill;
+            llmPanel.AutoSize = true;
+            llmProviderCombo.DropDownStyle = ComboBoxStyle.DropDownList;
+            llmProviderCombo.Width = 130;
+            llmProviderCombo.Items.Add("OpenAI");
+            llmProviderCombo.Items.Add("Claude");
+            llmProviderCombo.Items.Add("사용자 지정");
+            llmModelText.Width = 220;
+            llmPanel.Controls.Add(llmProviderCombo);
+            llmPanel.Controls.Add(llmModelText);
+            AddLabel(grid, 4, "제공자/모델");
+            grid.Controls.Add(llmPanel, 1, 4);
+            grid.SetColumnSpan(llmPanel, 2);
+
+            llmApiKeyText.Dock = DockStyle.Fill;
+            llmApiKeyText.PasswordChar = '*';
+            AddLabel(grid, 5, "API 키");
+            grid.Controls.Add(llmApiKeyText, 1, 5);
+            grid.SetColumnSpan(llmApiKeyText, 2);
+
+            return group;
         }
 
         private Control BuildRunGroup()
@@ -696,8 +778,9 @@ namespace ReportAutomationLauncher
             AddLabel(grid, 0, "보고서 유형");
             reportProfileCombo.DropDownStyle = ComboBoxStyle.DropDownList;
             reportProfileCombo.Items.Add("인식도/만족도 조사형");
-            reportProfileCombo.Items.Add("산업 실태조사형(준비 중)");
-            reportProfileCombo.Items.Add("정책 수요조사형(준비 중)");
+            reportProfileCombo.Items.Add("산업 실태조사형");
+            reportProfileCombo.Items.Add("정책 수요조사형");
+            reportProfileCombo.Items.Add("일반 빈도/교차표형");
             reportProfileCombo.Dock = DockStyle.Fill;
             grid.Controls.Add(reportProfileCombo, 1, 0);
             grid.SetColumnSpan(reportProfileCombo, 2);
@@ -705,8 +788,9 @@ namespace ReportAutomationLauncher
             AddLabel(grid, 1, "문체");
             styleProfileCombo.DropDownStyle = ComboBoxStyle.DropDownList;
             styleProfileCombo.Items.Add("공식 보고서체");
-            styleProfileCombo.Items.Add("간결 요약체(준비 중)");
-            styleProfileCombo.Items.Add("상세 해석체(준비 중)");
+            styleProfileCombo.Items.Add("간결 요약체");
+            styleProfileCombo.Items.Add("상세 해석체");
+            styleProfileCombo.Items.Add("검토 메모체");
             styleProfileCombo.Dock = DockStyle.Fill;
             grid.Controls.Add(styleProfileCombo, 1, 1);
             grid.SetColumnSpan(styleProfileCombo, 2);
@@ -1087,12 +1171,28 @@ namespace ReportAutomationLauncher
 
         private void BrowseHwpTemplate(object sender, EventArgs e)
         {
-            MessageBox.Show(this, "HWP/HWPX 템플릿 출력은 다음 알파 단계에서 활성화합니다. 현재는 Excel 산출 시트 안정화가 우선입니다.", "준비 중", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            using (var dialog = new OpenFileDialog())
+            {
+                dialog.Title = "HWP/HWPX 템플릿 선택";
+                dialog.Filter = "HWP/HWPX files (*.hwp;*.hwpx)|*.hwp;*.hwpx|All files (*.*)|*.*";
+                if (dialog.ShowDialog(this) == DialogResult.OK)
+                {
+                    hwpTemplateText.Text = dialog.FileName;
+                }
+            }
         }
 
         private void BrowsePptTemplate(object sender, EventArgs e)
         {
-            MessageBox.Show(this, "PowerPoint 템플릿 출력은 다음 알파 단계에서 활성화합니다. 현재는 Excel 산출 시트 안정화가 우선입니다.", "준비 중", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            using (var dialog = new OpenFileDialog())
+            {
+                dialog.Title = "PowerPoint 템플릿 선택";
+                dialog.Filter = "PowerPoint files (*.pptx;*.ppt)|*.pptx;*.ppt|All files (*.*)|*.*";
+                if (dialog.ShowDialog(this) == DialogResult.OK)
+                {
+                    pptTemplateText.Text = dialog.FileName;
+                }
+            }
         }
 
         private void RunButton_Click(object sender, EventArgs e)
@@ -1167,9 +1267,13 @@ namespace ReportAutomationLauncher
             lines.Add("출력 형식: " + options.OutputType);
             lines.Add("보고서 유형: " + options.ReportProfile);
             lines.Add("문체: " + options.StyleProfile);
+            lines.Add("수치 표기: 소수점 " + options.DecimalPlaces + "자리");
+            lines.Add("차트 출력: " + options.ChartOutputMode);
+            lines.Add("삽입표 방식: " + options.TableInsertMode);
+            lines.Add("LLM 문장 고도화: " + (options.UseLlm ? options.LlmProvider + " / " + options.LlmModel : "사용 안 함"));
             lines.Add("작업 방식: " + (options.CopyWorkbook ? "원본 옆 복사본 생성" : "원본 파일 직접 산출"));
             lines.Add("선택 배너: " + options.BannerSetting);
-            lines.Add("구성요소: 분석문, 차트 데이터, 삽입용 집계표, QA/출처/수정이력");
+            lines.Add("구성요소: " + BuildComponentSummary(options));
             if (!string.IsNullOrWhiteSpace(options.LastGeneratedWorkbookPath))
             {
                 lines.Add("산출 엑셀: " + options.LastGeneratedWorkbookPath);
@@ -1185,6 +1289,17 @@ namespace ReportAutomationLauncher
             lines.Add("");
             lines.Add("Excel에서 보고서_분석문, 보고서_차트데이터, 보고서_삽입표, 보고서_QA 시트를 확인하세요.");
             return string.Join(Environment.NewLine, lines.ToArray());
+        }
+
+        private static string BuildComponentSummary(LauncherOptions options)
+        {
+            var components = new List<string>();
+            if (options.IncludeAnalysis) components.Add("분석문");
+            if (options.IncludeCharts) components.Add("차트 데이터");
+            if (options.IncludeTables) components.Add("삽입용 집계표");
+            if (options.IncludeQa) components.Add("QA/출처/수정이력");
+            if (options.GenerateDraftText) components.Add("문장 초안 TXT");
+            return components.Count == 0 ? "선택 없음" : string.Join(", ", components.ToArray());
         }
 
         private void PopulateResultFiles(LauncherOptions options)
@@ -1610,6 +1725,13 @@ namespace ReportAutomationLauncher
             options.PptTemplatePath = pptTemplateText.Text.Trim();
             options.BannerSetting = bannerText.Text.Trim();
             options.TitlePrefixes = titlePrefixesText.Text.Trim();
+            options.DecimalPlaces = SelectedDecimalPlaces();
+            options.ChartOutputMode = chartOutputCombo.SelectedItem == null ? "" : chartOutputCombo.SelectedItem.ToString();
+            options.TableInsertMode = tableInsertModeCombo.SelectedItem == null ? "" : tableInsertModeCombo.SelectedItem.ToString();
+            options.UseLlm = llmEnabledCheck.Checked;
+            options.LlmProvider = llmProviderCombo.SelectedItem == null ? "" : llmProviderCombo.SelectedItem.ToString();
+            options.LlmModel = llmModelText.Text.Trim();
+            options.LlmApiKey = llmApiKeyText.Text.Trim();
             options.IncludeAnalysis = analysisCheck.Checked;
             options.IncludeCharts = chartCheck.Checked;
             options.IncludeTables = tableCheck.Checked;
@@ -1619,6 +1741,15 @@ namespace ReportAutomationLauncher
             options.KeepExcelOpen = keepExcelOpenCheck.Checked;
             options.Validate();
             return options;
+        }
+
+        private int SelectedDecimalPlaces()
+        {
+            if (decimalPlacesCombo.SelectedIndex < 0)
+            {
+                return 1;
+            }
+            return decimalPlacesCombo.SelectedIndex;
         }
 
         private void Log(string message)
@@ -1643,6 +1774,13 @@ namespace ReportAutomationLauncher
         public string PptTemplatePath;
         public string BannerSetting = "전체";
         public string TitlePrefixes = "";
+        public int DecimalPlaces = 1;
+        public string ChartOutputMode = "Excel 차트 데이터";
+        public string TableInsertMode = "Excel 삽입표 시트";
+        public bool UseLlm;
+        public string LlmProvider = "OpenAI";
+        public string LlmModel = "gpt-4.1-mini";
+        public string LlmApiKey;
         public bool IncludeAnalysis = true;
         public bool IncludeCharts = true;
         public bool IncludeTables = true;
@@ -1701,6 +1839,26 @@ namespace ReportAutomationLauncher
             {
                 TitlePrefixes = "";
             }
+            if (DecimalPlaces < 0 || DecimalPlaces > 2)
+            {
+                DecimalPlaces = 1;
+            }
+            if (string.IsNullOrWhiteSpace(ChartOutputMode))
+            {
+                ChartOutputMode = "Excel 차트 데이터";
+            }
+            if (string.IsNullOrWhiteSpace(TableInsertMode))
+            {
+                TableInsertMode = "Excel 삽입표 시트";
+            }
+            if (string.IsNullOrWhiteSpace(LlmProvider))
+            {
+                LlmProvider = "OpenAI";
+            }
+            if (string.IsNullOrWhiteSpace(LlmModel))
+            {
+                LlmModel = "gpt-4.1-mini";
+            }
         }
 
         public static LauncherOptions FromArgs(string[] args)
@@ -1735,6 +1893,12 @@ namespace ReportAutomationLauncher
             options.PptTemplatePath = Get(values, "ppt-template", "");
             options.BannerSetting = Get(values, "banner", "전체");
             options.TitlePrefixes = Get(values, "prefixes", "");
+            options.DecimalPlaces = GetInt(values, "decimal-places", 1);
+            options.ChartOutputMode = Get(values, "chart-output", "Excel 차트 데이터");
+            options.TableInsertMode = Get(values, "table-insert", "Excel 삽입표 시트");
+            options.UseLlm = flags.Contains("use-llm");
+            options.LlmProvider = Get(values, "llm-provider", "OpenAI");
+            options.LlmModel = Get(values, "llm-model", "gpt-4.1-mini");
             options.GenerateDraftText = !flags.Contains("no-draft");
             options.CopyWorkbook = !flags.Contains("no-copy");
             options.KeepExcelOpen = flags.Contains("keep-open");
@@ -1746,6 +1910,17 @@ namespace ReportAutomationLauncher
         {
             string value;
             return values.TryGetValue(key, out value) ? value : fallback;
+        }
+
+        private static int GetInt(Dictionary<string, string> values, string key, int fallback)
+        {
+            string value;
+            int parsed;
+            if (values.TryGetValue(key, out value) && int.TryParse(value, out parsed))
+            {
+                return parsed;
+            }
+            return fallback;
         }
     }
 
@@ -1873,6 +2048,13 @@ namespace ReportAutomationLauncher
                 writer.WriteLine("PptTemplate=" + options.PptTemplatePath);
                 writer.WriteLine("BannerSetting=" + options.BannerSetting);
                 writer.WriteLine("TitlePrefixes=" + options.TitlePrefixes);
+                writer.WriteLine("DecimalPlaces=" + options.DecimalPlaces);
+                writer.WriteLine("ChartOutputMode=" + options.ChartOutputMode);
+                writer.WriteLine("TableInsertMode=" + options.TableInsertMode);
+                writer.WriteLine("UseLlm=" + options.UseLlm);
+                writer.WriteLine("LlmProvider=" + options.LlmProvider);
+                writer.WriteLine("LlmModel=" + options.LlmModel);
+                writer.WriteLine("LlmApiKeyConfigured=" + !string.IsNullOrWhiteSpace(options.LlmApiKey));
                 writer.WriteLine("IncludeAnalysis=" + options.IncludeAnalysis);
                 writer.WriteLine("IncludeCharts=" + options.IncludeCharts);
                 writer.WriteLine("IncludeTables=" + options.IncludeTables);
