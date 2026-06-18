@@ -26,6 +26,8 @@
 - LLM 제공자, 모델, API 키 입력 여부 선택
 - Excel 산출 시트 생성
 - Python 문장 초안 TXT 생성
+- `report_package.json` 생성
+- `preflight_report.json` 생성 및 문서 생성 준비 상태 표시
 - 결과 탭에서 산출 엑셀/초안 TXT 열기
 - 문장 초안 미리보기와 클립보드 복사
 - 문장별 수정/복사/검토본 저장
@@ -47,6 +49,6 @@
 
 1. 검토본을 Excel 산출 시트 또는 별도 검토 시트로 되돌려 쓰기
 2. QA 경고 규칙을 프로젝트별 설정 JSON으로 분리
-3. HWPX 템플릿 placeholder 위치에 본문/표/차트 삽입
-4. PPTX 보고서 및 차트 검토 슬라이드 생성
+3. `report_package.json` 기반 HWPX 템플릿 placeholder 삽입
+4. `report_package.json` 기반 PPTX 보고서 및 차트 검토 슬라이드 생성
 5. Python 런타임/엔진 파일 패키징 방식 정리

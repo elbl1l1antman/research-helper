@@ -15,6 +15,10 @@
   - 런처가 만든 `보고서_분석문*` 시트가 있으면 해당 시트의 최종 분석문 열을 우선 사용해 TXT 초안을 빠르게 생성합니다.
   - 제공받은 `excel_report_generator_with_style.py`를 프로젝트용으로 가져오면서 기본 설정 fallback과 주석을 보강했습니다.
 
+- `report_package.py`
+  - Excel 산출 시트를 헤더명 기반으로 읽어 `report_package.json`과 `preflight_report.json`을 생성합니다.
+  - HWPX/PPTX 문서 생성 전 문장, 표, 차트, QA, 템플릿 상태를 `ready`, `ready_with_warnings`, `blocked`로 검증합니다.
+
 - `hwpx_report_writer.py`
   - HWPX 내부 XML을 읽어 표와 문단 흐름을 분석합니다.
   - 현재는 HWPX에 직접 삽입하기보다, 기존 HWPX 표 구조를 분석하고 문장 생성 로직을 검증하는 보조 도구로 봅니다.
@@ -63,6 +67,15 @@ python report_automation_engine\excel_report_generator.py `
 - `--sheet <name>`: 원본 표 블록 직접 분석 시 특정 시트만 분석합니다.
 - `--max-tables <count>`: 원본 표 블록 직접 분석 시 처리할 최대 표 수입니다.
 - `--raw-tables`: `보고서_분석문*` 산출 시트를 무시하고 원본 표 블록을 직접 분석합니다.
+
+Excel 산출 시트가 생성된 뒤에는 package/preflight를 만들 수 있습니다.
+
+```powershell
+python report_automation_engine\report_package.py `
+  --excel "C:\path\table_report_alpha.xlsx" `
+  --package-output "C:\path\report_package.json" `
+  --preflight-output "C:\path\preflight_report.json"
+```
 
 HWPX 분석기는 명령행 인자를 받을 수 있습니다.
 

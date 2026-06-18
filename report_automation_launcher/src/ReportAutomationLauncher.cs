@@ -53,8 +53,9 @@ namespace ReportAutomationLauncher
                 if (options.GenerateDraftText)
                 {
                     options.LastDraftTextPath = EngineRunner.TryGenerateDraft(generatedWorkbookPath, Console.WriteLine);
-                    AutomationRunner.WriteLauncherConfig(generatedWorkbookPath, options);
                 }
+                EngineRunner.TryGenerateReportPackage(generatedWorkbookPath, options, Console.WriteLine);
+                AutomationRunner.WriteLauncherConfig(generatedWorkbookPath, options);
                 return 0;
             }
             catch (Exception ex)
@@ -1584,6 +1585,32 @@ namespace ReportAutomationLauncher
             return raw.Replace("\"", "").Replace(",", ", ");
         }
 
+        private static string ReadJsonPrimitiveValue(string json, string key)
+        {
+            string marker = "\"" + key + "\"";
+            int keyIndex = json.IndexOf(marker, StringComparison.Ordinal);
+            if (keyIndex < 0)
+            {
+                return "";
+            }
+            int colonIndex = json.IndexOf(':', keyIndex + marker.Length);
+            if (colonIndex < 0)
+            {
+                return "";
+            }
+            int start = colonIndex + 1;
+            while (start < json.Length && char.IsWhiteSpace(json[start]))
+            {
+                start++;
+            }
+            int end = start;
+            while (end < json.Length && ",}\r\n ".IndexOf(json[end]) < 0)
+            {
+                end++;
+            }
+            return json.Substring(start, end - start).Trim().Trim('"');
+        }
+
         private static int JsonValueStart(string json, string key, char valueStart)
         {
             string marker = "\"" + key + "\"";
@@ -1651,8 +1678,9 @@ namespace ReportAutomationLauncher
                     if (options.GenerateDraftText)
                     {
                         options.LastDraftTextPath = EngineRunner.TryGenerateDraft(generatedWorkbookPath, Log);
-                        AutomationRunner.WriteLauncherConfig(generatedWorkbookPath, options);
                     }
+                    EngineRunner.TryGenerateReportPackage(generatedWorkbookPath, options, Log);
+                    AutomationRunner.WriteLauncherConfig(generatedWorkbookPath, options);
                     BeginInvoke(new Action(delegate()
                     {
                         resultSummaryText.Text = BuildResultSummary(options);
@@ -1709,9 +1737,33 @@ namespace ReportAutomationLauncher
             {
                 lines.Add("문장 초안: 생성하지 못했습니다. 로그를 확인하세요.");
             }
+            if (!string.IsNullOrWhiteSpace(options.LastReportPackagePath))
+            {
+                lines.Add("Report package: " + options.LastReportPackagePath);
+            }
+            if (!string.IsNullOrWhiteSpace(options.LastPreflightReportPath))
+            {
+                lines.Add("Preflight: " + options.LastPreflightReportPath);
+                lines.Add(BuildPreflightSummary(options.LastPreflightReportPath));
+            }
             lines.Add("");
             lines.Add("Excel에서 보고서_분석문, 보고서_차트데이터, 보고서_삽입표, 보고서_QA 시트를 확인하세요.");
             return string.Join(Environment.NewLine, lines.ToArray());
+        }
+
+        private static string BuildPreflightSummary(string path)
+        {
+            if (string.IsNullOrWhiteSpace(path) || !File.Exists(path))
+            {
+                return "문서 생성 준비 상태: 확인 실패";
+            }
+            string json = File.ReadAllText(path, System.Text.Encoding.UTF8);
+            return "문서 생성 준비 상태: " + EmptyToDash(ReadJsonStringValue(json, "status")) +
+                   " / 문장 " + EmptyToDash(ReadJsonPrimitiveValue(json, "section_count")) +
+                   " / 차트 " + EmptyToDash(ReadJsonPrimitiveValue(json, "chart_candidate_count")) +
+                   " / 삽입표 " + EmptyToDash(ReadJsonPrimitiveValue(json, "table_count")) +
+                   " / 경고 " + EmptyToDash(ReadJsonPrimitiveValue(json, "qa_warning_count")) +
+                   " / 오류 " + EmptyToDash(ReadJsonPrimitiveValue(json, "qa_error_count"));
         }
 
         private static string BuildComponentSummary(LauncherOptions options)
@@ -2213,6 +2265,8 @@ namespace ReportAutomationLauncher
         public bool KeepExcelOpen;
         public string LastGeneratedWorkbookPath;
         public string LastDraftTextPath;
+        public string LastReportPackagePath;
+        public string LastPreflightReportPath;
 
         public void Validate()
         {
@@ -2484,6 +2538,8 @@ namespace ReportAutomationLauncher
                 writer.WriteLine("IncludeQa=" + options.IncludeQa);
                 writer.WriteLine("GenerateDraftText=" + options.GenerateDraftText);
                 writer.WriteLine("DraftText=" + options.LastDraftTextPath);
+                writer.WriteLine("ReportPackage=" + options.LastReportPackagePath);
+                writer.WriteLine("PreflightReport=" + options.LastPreflightReportPath);
                 writer.WriteLine("CreatedAt=" + DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss"));
             }
         }
@@ -2615,6 +2671,74 @@ namespace ReportAutomationLauncher
                 log("문장 초안 생성 실패: " + ex.Message);
             }
             return "";
+        }
+
+        public static void TryGenerateReportPackage(string workbookPath, LauncherOptions options, Action<string> log)
+        {
+            try
+            {
+                string pythonPath = PathResolver.ResolvePythonPath();
+                string toolPath = PathResolver.ResolveEngineToolPath("report_package.py");
+                if (string.IsNullOrWhiteSpace(pythonPath) || !File.Exists(pythonPath) || string.IsNullOrWhiteSpace(toolPath) || !File.Exists(toolPath))
+                {
+                    log("report package 도구를 찾지 못해 preflight 생성을 건너뜁니다.");
+                    return;
+                }
+
+                string directory = Path.GetDirectoryName(workbookPath);
+                string stem = Path.GetFileNameWithoutExtension(workbookPath);
+                string packagePath = Path.Combine(directory, stem + "_report_package.json");
+                string preflightPath = Path.Combine(directory, stem + "_preflight_report.json");
+
+                var startInfo = new ProcessStartInfo();
+                startInfo.FileName = pythonPath;
+                startInfo.Arguments = Quote(toolPath) +
+                                      " --excel " + Quote(workbookPath) +
+                                      " --package-output " + Quote(packagePath) +
+                                      " --preflight-output " + Quote(preflightPath) +
+                                      " --hwp-template " + Quote(options.HwpTemplatePath) +
+                                      " --ppt-template " + Quote(options.PptTemplatePath) +
+                                      " --output-type " + Quote(options.OutputType) +
+                                      " --report-profile " + Quote(options.ReportProfile) +
+                                      " --style-profile " + Quote(options.StyleProfile) +
+                                      " --banner " + Quote(options.BannerSetting) +
+                                      " --decimal-places " + Quote(options.DecimalPlaces.ToString());
+                startInfo.UseShellExecute = false;
+                startInfo.CreateNoWindow = true;
+                startInfo.RedirectStandardOutput = true;
+                startInfo.RedirectStandardError = true;
+                startInfo.StandardOutputEncoding = System.Text.Encoding.UTF8;
+                startInfo.StandardErrorEncoding = System.Text.Encoding.UTF8;
+
+                log("report package와 preflight를 생성합니다.");
+                using (Process process = Process.Start(startInfo))
+                {
+                    if (!process.WaitForExit(120000))
+                    {
+                        try { process.Kill(); } catch { }
+                        log("preflight 생성 시간이 길어져 이번 실행에서는 건너뜁니다.");
+                        return;
+                    }
+                    string stdout = process.StandardOutput.ReadToEnd();
+                    string stderr = process.StandardError.ReadToEnd();
+                    if (process.ExitCode != 0)
+                    {
+                        log("preflight 생성 실패: " + (string.IsNullOrWhiteSpace(stderr) ? stdout : stderr).Trim());
+                        return;
+                    }
+                }
+
+                options.LastReportPackagePath = File.Exists(packagePath) ? packagePath : "";
+                options.LastPreflightReportPath = File.Exists(preflightPath) ? preflightPath : "";
+                if (!string.IsNullOrWhiteSpace(options.LastPreflightReportPath))
+                {
+                    log("preflight 저장: " + options.LastPreflightReportPath);
+                }
+            }
+            catch (Exception ex)
+            {
+                log("preflight 생성 실패: " + ex.Message);
+            }
         }
 
         private static string Quote(string value)
