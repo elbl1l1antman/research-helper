@@ -19,6 +19,10 @@
   - Excel 산출 시트를 헤더명 기반으로 읽어 `report_package.json`과 `preflight_report.json`을 생성합니다.
   - HWPX/PPTX 문서 생성 전 문장, 표, 차트, QA, 템플릿 상태를 `ready`, `ready_with_warnings`, `blocked`로 검증합니다.
 
+- `document_writer.py`
+  - `report_package.json`을 읽어 PPTX 초본을 생성합니다.
+  - v1은 차트 객체 대신 편집 가능한 텍스트 기반 차트 데이터 블록을 생성합니다.
+
 - `hwpx_report_writer.py`
   - HWPX 내부 XML을 읽어 표와 문단 흐름을 분석합니다.
   - 현재는 HWPX에 직접 삽입하기보다, 기존 HWPX 표 구조를 분석하고 문장 생성 로직을 검증하는 보조 도구로 봅니다.
@@ -110,6 +114,16 @@ python report_automation_engine\template_autofix.py `
 - HWPX 보고서: `{{BODY}}`
 - PPTX 보고서: `{{SECTION_TITLE}}`, `{{NARRATIVE}}`, `{{TABLE}}`, `{{CHART}}`
 - 차트 검토 PPTX: `{{CHART_TITLE}}`, `{{CHART}}`, `{{CHART_NOTE}}`
+
+PPTX 초본 writer는 다음처럼 실행합니다.
+
+```powershell
+python -m report_automation_engine\document_writer `
+  --package "C:\path\report_package.json" `
+  --preflight "C:\path\preflight_report.json" `
+  --type chart_review `
+  --output "C:\path\chart_review_draft.pptx"
+```
 
 ## 코드리뷰 포인트
 

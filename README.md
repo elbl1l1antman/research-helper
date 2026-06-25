@@ -80,6 +80,7 @@ Python 기반 보조 엔진입니다.
 
 - `excel_report_generator.py`: 문장 초안 TXT 생성
 - `report_package.py`: Excel 산출 시트를 중간 JSON 계약으로 변환하고 preflight 수행
+- `document_writer.py`: `report_package.json` 기반 PPTX 초본 생성 시작점
 - `template_inspector.py`: HWPX/PPTX 템플릿 placeholder 검사
 - `template_factory.py`: 기본 HWPX/PPTX 템플릿 생성
 - `template_autofix.py`: 원본 보존 방식의 템플릿 자동 보정
@@ -236,6 +237,16 @@ python -m report_automation_engine.template_inspector `
   --output "C:\path\template_report.json"
 ```
 
+PPTX 초본 생성:
+
+```powershell
+python -m report_automation_engine.document_writer `
+  --package "C:\path\report_package.json" `
+  --preflight "C:\path\preflight_report.json" `
+  --type chart_review `
+  --output "C:\path\chart_review_draft.pptx"
+```
+
 ## 버전 관리
 
 현재 버전은 `VERSION` 파일에 기록합니다.
@@ -248,6 +259,23 @@ python -m report_automation_engine.template_inspector `
 - 릴리스 기준점은 Git tag로 기록: `v0.0.1`, `v0.0.2`, ...
 
 자세한 정책은 `VERSIONING.md`를 참고합니다.
+
+## 라이선스
+
+이 프로젝트는 `ReportAutomation Personal and Internal Use License`를 사용합니다.
+
+허용:
+
+- 개인 개발, 개인 사용, 테스트
+- 회사/기관 내부 개발과 내부 업무 자동화
+
+금지:
+
+- 이 코드를 포함하거나 변형한 유료 프로그램 판매
+- 유료 add-in, 유료 템플릿, 유료 SaaS, 상업용 패키지로 제공
+- 유료 납품물에 이 코드 또는 실질적 파생물을 포함해 제3자에게 제공
+
+이 라이선스는 OSI 기준 오픈소스 라이선스가 아니라 source-available 성격의 제한 라이선스입니다.
 
 ## 개발 방향
 
