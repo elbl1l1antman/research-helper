@@ -1,6 +1,6 @@
 # ReportAutomation
 
-Current version: `0.0.2`
+Current version: `0.0.3`
 
 `ReportAutomation`은 엑셀 집계표를 기반으로 조사 보고서 작성용 산출물을 자동 생성하는 런처 기반 프로젝트입니다.
 
@@ -84,6 +84,16 @@ Python 기반 보조 엔진입니다.
 - `template_factory.py`: 기본 HWPX/PPTX 템플릿 생성
 - `template_autofix.py`: 원본 보존 방식의 템플릿 자동 보정
 - `hwpx_report_writer.py`: HWPX 분석 보조
+
+### `old/legacy`
+
+더 이상 현재 런처 기반 워크플로우에서 사용하지 않는 파일을 보관하는 archive 영역입니다.
+
+원칙:
+
+- 대체 구현이 커밋된 뒤에만 이동
+- 원래 경로, retired version, 대체 기능을 README나 메모로 남김
+- 현재 실행/빌드/배포 경로에서는 참조하지 않음
 
 ## 현재 알파에서 가능한 기능
 

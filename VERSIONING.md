@@ -1,6 +1,6 @@
 # Versioning
 
-Current version: `0.0.2`
+Current version: `0.0.3`
 
 ## Policy
 
@@ -8,12 +8,15 @@ Current version: `0.0.2`
 - Every requested push or publish should include an explicit version check.
 - If code, docs, or packaged binaries changed, bump `VERSION` before pushing.
 - Create a matching Git tag for release points: `v0.0.1`, `v0.0.2`, ...
+- Keep deprecated assets under `old/legacy/` with a short note explaining what replaced them.
 - Default bump:
   - Patch: fixes, docs, small UX improvements, internal hardening.
   - Minor: new user-facing workflow or output format.
   - Major: breaking file format, CLI, template, or workflow change.
 
 ## Current Baseline
+
+`0.0.3` adds the `old/legacy/` archive for version-managed retired assets.
 
 `0.0.2` updates the GitHub README with the project structure and current alpha workflow.
 
