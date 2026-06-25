@@ -14,6 +14,11 @@ import zipfile
 from pathlib import Path
 from typing import Any, Dict, Iterable, List
 
+try:
+    from .template_factory import write_pptx_template
+except ImportError:
+    from template_factory import write_pptx_template
+
 
 EMU_WIDE = (12192000, 6858000)
 
@@ -162,15 +167,7 @@ def load_json(path: str | Path | None) -> Dict[str, Any]:
 
 
 def write_pptx(path: Path, slides: List[List[Dict[str, str]]]) -> None:
-    with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as zf:
-        zf.writestr("[Content_Types].xml", content_types_xml(len(slides)))
-        zf.writestr("_rels/.rels", package_rels_xml())
-        zf.writestr("docProps/app.xml", app_props_xml(len(slides)))
-        zf.writestr("docProps/core.xml", core_props_xml())
-        zf.writestr("ppt/presentation.xml", presentation_xml(len(slides)))
-        zf.writestr("ppt/_rels/presentation.xml.rels", presentation_rels_xml(len(slides)))
-        for index, slide in enumerate(slides, start=1):
-            zf.writestr(f"ppt/slides/slide{index}.xml", slide_xml(slide))
+    write_pptx_template(path, [[item["text"] for item in slide] for slide in slides])
 
 
 def slide_xml(slide: List[Dict[str, str]]) -> str:
