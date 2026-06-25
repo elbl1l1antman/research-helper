@@ -45,6 +45,7 @@ Private mPrevEnableEvents As Boolean
 Private mPrevDisplayAlerts As Boolean
 Private mPrevCalculation As XlCalculation
 Private mPrevStatusBar As Variant
+Private mPrevEnableCancelKey As XlEnableCancelKey
 
 ' UserForm에서 전달한 1회성 실행 옵션. 설정 시트를 생성한 뒤 이 값으로 덮어쓴다.
 Private mHasOptionOverrides As Boolean
@@ -87,6 +88,15 @@ Public Sub ReportAutomation_ShowOptions()
     Exit Sub
 
 Fallback:
+    Dim frmErrNum As Long, frmErrDesc As String
+    frmErrNum = Err.Number
+    frmErrDesc = Err.Description
+    On Error GoTo 0
+    If frmErrNum = 18 Then Exit Sub
+    If frmErrNum <> 0 And frmErrNum <> 424 And frmErrNum <> 91 Then
+        MsgBox "옵션 폼을 여는 중 오류가 발생했습니다(" & frmErrNum & "): " & frmErrDesc & vbCrLf & _
+               "기본 실행으로 진행합니다.", vbExclamation, "보고서 자동화"
+    End If
     ReportAutomation_GenerateExcelOutputs
 End Sub
 
@@ -130,7 +140,9 @@ End Function
 ' ============================================================
 Public Function ReportAutomation_DefaultBannerSetting() As String
     Dim ws As Worksheet
-    If Not ActiveWorkbook Is Nothing Then Set ws = ReportAutomation_FindLatestOutputSheet(ActiveWorkbook, "보고서_설정")
+    If Not ActiveWorkbook Is Nothing And Not ActiveWorkbook Is ThisWorkbook Then
+        Set ws = ReportAutomation_FindLatestOutputSheet(ActiveWorkbook, "보고서_설정")
+    End If
     ReportAutomation_DefaultBannerSetting = CStr(ReportAutomation_SettingValue("추출 배너 목록", "전체", ws))
 End Function
 
@@ -140,7 +152,9 @@ End Function
 ' ============================================================
 Public Function ReportAutomation_DefaultTitlePrefixes() As String
     Dim ws As Worksheet
-    If Not ActiveWorkbook Is Nothing Then Set ws = ReportAutomation_FindLatestOutputSheet(ActiveWorkbook, "보고서_설정")
+    If Not ActiveWorkbook Is Nothing And Not ActiveWorkbook Is ThisWorkbook Then
+        Set ws = ReportAutomation_FindLatestOutputSheet(ActiveWorkbook, "보고서_설정")
+    End If
     ReportAutomation_DefaultTitlePrefixes = CStr(ReportAutomation_SettingValue("제목 제거 접두어", "", ws))
 End Function
 
@@ -247,7 +261,8 @@ Private Sub ReportAutomation_GenerateExcelOutputsCore(ByVal silent As Boolean)
         ReportAutomation_SetSettingValue wsSettings, "제목 제거 접두어", mOverrideTitlePrefixes
     End If
     ReportAutomation_WriteTableList wsList, tables, dataWs
-    ReportAutomation_WriteNarratives wsNarr, wsChart, wsInsert, wsQA, tables, dataWs, wsSettings
+    Dim qaCount As Long
+    ReportAutomation_WriteNarratives wsNarr, wsChart, wsInsert, wsQA, tables, dataWs, wsSettings, qaCount
     ReportAutomation_WriteSourceSheet wsSource
     ReportAutomation_WriteRevisionSheet wsRevision
     ReportAutomation_WriteMetaSheet wsMeta, wb, dataWs, tables, wsSettings, wsList, wsNarr, wsChart, wsInsert
@@ -259,9 +274,17 @@ Private Sub ReportAutomation_GenerateExcelOutputsCore(ByVal silent As Boolean)
     ReportAutomation_EndOperation
 
     If Not silent Then
+        Dim qaMsg As String
+        qaMsg = IIf(qaCount > 0, vbCrLf & "QA 경고: " & qaCount & "건  (보고서_QA 시트 참조)", "")
         MsgBox "보고서 자동화 산출 시트를 생성했습니다." & vbCrLf & _
                "원본 시트: " & dataWs.Name & vbCrLf & _
-               "탐지 표 수: " & tables.Count, vbInformation, "보고서 자동화"
+               "탐지 표 수: " & tables.Count & qaMsg, vbInformation, "보고서 자동화"
+        If MsgBox("통합문서를 저장하시겠습니까?", vbQuestion + vbYesNo, "보고서 자동화") = vbYes Then
+            On Error Resume Next
+            wb.Save
+            If Err.Number <> 0 Then MsgBox "저장 중 오류: " & Err.Description, vbExclamation, "보고서 자동화"
+            On Error GoTo 0
+        End If
     End If
     ReportAutomation_ClearOptionOverrides
     Exit Sub
@@ -272,6 +295,13 @@ ErrHandler:
     errNum = Err.Number: errSrc = Err.Source: errDesc = Err.Description
     ReportAutomation_EndOperation
     On Error Resume Next
+    If errNum = 18 Then
+        ReportAutomation_LogEvent wb, "generate_excel_outputs", "", "CANCELLED", "사용자가 작업을 취소했습니다."
+        On Error GoTo 0
+        If Not silent Then MsgBox "작업이 취소되었습니다.", vbInformation, "보고서 자동화"
+        ReportAutomation_ClearOptionOverrides
+        Exit Sub
+    End If
     ReportAutomation_LogEvent wb, "generate_excel_outputs", "", "ERROR", errDesc
     On Error GoTo 0
     If silent Then
@@ -340,10 +370,13 @@ End Function
 Private Function ReportAutomation_CountTableTitleRows(ByVal ws As Worksheet) As Long
     Dim lastRow As Long
     lastRow = ReportAutomation_LastUsedRow(ws)
+    If lastRow < 1 Then Exit Function
 
+    Dim arr As Variant
+    arr = ws.Range(ws.Cells(1, 1), ws.Cells(lastRow, 1)).Value
     Dim r As Long
     For r = 1 To lastRow
-        If ReportAutomation_IsTableTitle(ws.Cells(r, 1).Value) Then
+        If ReportAutomation_IsTableTitle(arr(r, 1)) Then
             ReportAutomation_CountTableTitleRows = ReportAutomation_CountTableTitleRows + 1
         End If
     Next r
@@ -568,11 +601,17 @@ End Function
 ' 용  도 : 표 유형 분류, 평균 포함 여부, N/% 구조 판정
 ' ============================================================
 Private Function ReportAutomation_BlockContainsText(ByVal ws As Worksheet, ByVal startRow As Long, ByVal endRow As Long, ByVal lastCol As Long, ByVal needle As String) As Boolean
-    Dim r As Long, c As Long
     If endRow > ws.Rows.Count Then endRow = ws.Rows.Count
-    For r = startRow To endRow
-        For c = 1 To lastCol
-            If InStr(1, CStr(ws.Cells(r, c).Value), needle, vbTextCompare) > 0 Then
+    Dim arr As Variant
+    arr = ws.Range(ws.Cells(startRow, 1), ws.Cells(endRow, lastCol)).Value
+    If Not IsArray(arr) Then
+        If InStr(1, CStr(arr), needle, vbTextCompare) > 0 Then ReportAutomation_BlockContainsText = True
+        Exit Function
+    End If
+    Dim r As Long, c As Long
+    For r = 1 To UBound(arr, 1)
+        For c = 1 To UBound(arr, 2)
+            If InStr(1, CStr(arr(r, c)), needle, vbTextCompare) > 0 Then
                 ReportAutomation_BlockContainsText = True
                 Exit Function
             End If
@@ -587,7 +626,10 @@ End Function
 ' ============================================================
 Private Function ReportAutomation_TableWarning(ByVal ws As Worksheet, ByVal startRow As Long, ByVal endRow As Long, ByVal lastCol As Long) As String
     Dim warningText As String
-    If startRow + 1 > endRow Or InStr(1, CStr(ws.Cells(startRow + 1, 1).Value), "BASE:", vbTextCompare) = 0 Then
+    Dim baseCellValue As String
+    If startRow + 1 <= endRow Then baseCellValue = CStr(ws.Cells(startRow + 1, 1).Value)
+    If startRow + 1 > endRow Or _
+       (InStr(1, baseCellValue, "BASE:", vbTextCompare) = 0 And InStr(1, baseCellValue, "Base :", vbTextCompare) = 0) Then
         warningText = "BASE 행 확인 필요"
     End If
     If lastCol <= 1 Then
@@ -607,6 +649,25 @@ Private Function ReportAutomation_AddOutputSheet(ByVal wb As Workbook, ByVal bas
 End Function
 
 ' ============================================================
+' 함수명 : ReportAutomation_GetSettingHint
+' 설  명 : 설정 항목별 입력 예시 문자열을 반환한다.
+' ============================================================
+Private Function ReportAutomation_GetSettingHint(ByVal labelText As String) As String
+    Select Case labelText
+        Case "추출 배너 목록":        ReportAutomation_GetSettingHint = "전체 / 전체,성별 / 전체,성별,연령대"
+        Case "제목 제거 접두어":      ReportAutomation_GetSettingHint = "쉼표 구분 (예: 사업체 특성별,응답자 특성별)"
+        Case "문체 프로필":           ReportAutomation_GetSettingHint = "공공조사 보고서형 / 학술보고서형"
+        Case "수치 표기":             ReportAutomation_GetSettingHint = "소수점 1자리 / 정수 / 소수점 2자리"
+        Case "QA 실행 여부":          ReportAutomation_GetSettingHint = "수치 QA / 문체 QA / 표 서식 QA / 사용 안 함"
+        Case "LLM 문장 고도화":       ReportAutomation_GetSettingHint = "사용 안 함 / 사용"
+        Case "LLM 제공자":            ReportAutomation_GetSettingHint = "사용 안 함 / OpenAI / Claude"
+        Case "LLM API 키 입력 방식":  ReportAutomation_GetSettingHint = "실행 시 입력 / 환경변수 / 설정파일"
+        Case "N 표기 여부":           ReportAutomation_GetSettingHint = "가중 사례수와 실제 사례수 보존 / 가중 사례수만"
+        Case "비교 기준":             ReportAutomation_GetSettingHint = "전체 대비 / 배너 간 비교"
+    End Select
+End Function
+
+' ============================================================
 ' 프로시저 : ReportAutomation_WriteSettingsSheet
 ' 설  명  : 보고서 생성 기준과 후속 자동화 옵션을 설정 시트에 기록한다.
 ' 용  도  : 사용자가 문체/수치 표기/LLM 사용 여부를 나중에 편집할 수 있게 한다.
@@ -615,6 +676,7 @@ Private Sub ReportAutomation_WriteSettingsSheet(ByVal ws As Worksheet, ByVal wb 
     ws.Range("A1").Value = "보고서 자동화 설정"
     ws.Range("A1").Font.Bold = True
     ws.Range("A1").Font.Size = 14
+    ws.Range("C1").Value = "입력 예시"
 
     ' 현재 단계에서는 기본값을 먼저 깔아두고, 후속 UI에서 사용자가 수정하는 구조를 염두에 둔다.
     Dim labels As Variant, values As Variant
@@ -639,11 +701,18 @@ Private Sub ReportAutomation_WriteSettingsSheet(ByVal ws As Worksheet, ByVal wb 
         Else
             ws.Cells(i + 3, 2).Value = ReportAutomation_SettingValue(CStr(labels(i)), values(i), priorSettingsWs)
         End If
+        Dim settingHint As String
+        settingHint = ReportAutomation_GetSettingHint(CStr(labels(i)))
+        If Len(settingHint) > 0 Then
+            ws.Cells(i + 3, 3).Value = settingHint
+            ws.Cells(i + 3, 3).Font.Color = RGB(89, 89, 89)
+            ws.Cells(i + 3, 3).Font.Italic = True
+        End If
     Next i
 
-    ws.Columns("A:B").AutoFit
+    ws.Columns("A:C").AutoFit
     ws.Range("A3:A" & UBound(labels) + 3).Font.Bold = True
-    ReportAutomation_StyleHeader ws.Range("A1:B1")
+    ReportAutomation_StyleHeader ws.Range("A1:C1")
 End Sub
 
 ' ============================================================
@@ -686,7 +755,7 @@ End Sub
 ' ============================================================
 Private Sub ReportAutomation_WriteNarratives(ByVal wsNarr As Worksheet, ByVal wsChart As Worksheet, ByVal wsInsert As Worksheet, _
                                              ByVal wsQA As Worksheet, ByVal tables As Collection, ByVal dataWs As Worksheet, _
-                                             ByVal wsSettings As Worksheet)
+                                             ByVal wsSettings As Worksheet, ByRef qaCount As Long)
     wsNarr.Range("A1:I1").Value = Array("table_key", "문항/표 제목", "분석문_기본", "분석문_세부", "분석문_LLM", _
                                         "주요 수치 요약", "검토 상태", "사용자 수정문", "최종 사용문")
     wsChart.Range("A1:H1").Value = Array("table_key", "series_group", "category", "measure", "value", "display_value", "sort_order", "include_chart")
@@ -713,6 +782,7 @@ Private Sub ReportAutomation_WriteNarratives(ByVal wsNarr As Worksheet, ByVal ws
     Dim i As Long, rec As Variant
     For i = 1 To tables.Count
         rec = tables(i)
+        Application.StatusBar = "보고서 자동화 처리 중: " & i & " / " & tables.Count & "번째 표  (Esc로 취소)"
 
         ' points는 분석문/차트/삽입표에 공통으로 쓰는 핵심 수치 목록이다.
         ' 각 원소는 Array(category, percent, weighted_n, raw_n, source_cell) 구조를 따른다.
@@ -778,6 +848,15 @@ Private Sub ReportAutomation_WriteNarratives(ByVal wsNarr As Worksheet, ByVal ws
             qaRow = qaRow + 1
         End If
     Next i
+
+    ' QA 요약 행 - 총 처리 표 수와 경고 건수를 한 눈에 파악할 수 있도록 마지막에 기록한다.
+    qaCount = qaRow - 2
+    If qaCount > 0 Then
+        wsQA.Cells(qaRow + 1, 1).Value = "[요약]"
+        wsQA.Cells(qaRow + 1, 4).Value = "총 " & tables.Count & "개 표 처리 / 경고 " & qaCount & "건"
+        wsQA.Cells(qaRow + 1, 6).Value = Format(Now, "yyyy-mm-dd hh:nn:ss")
+        ReportAutomation_StyleHeader wsQA.Range(wsQA.Cells(qaRow + 1, 1), wsQA.Cells(qaRow + 1, 6))
+    End If
 
     wsNarr.Columns("A:I").AutoFit
     wsNarr.Columns("C:I").ColumnWidth = 36
@@ -1501,11 +1580,6 @@ Private Function ReportAutomation_NormalizeAnalysisTitle(ByVal titleText As Stri
                 text = ReportAutomation_CleanText(Mid$(text, Len(pfx) + 1))
                 Exit For
             End If
-            ' 뒤에 공백이 붙지 않은 형태도 처리한다 (예: "성별" vs "성별 ").
-            If Left$(text, Len(pfx & " ")) = pfx & " " Then
-                text = ReportAutomation_CleanText(Mid$(text, Len(pfx) + 2))
-                Exit For
-            End If
         End If
     Next pIdx
 
@@ -1766,7 +1840,8 @@ Private Function ReportAutomation_UniqueSheetName(ByVal wb As Workbook, ByVal ba
     n = 1
     Do While ReportAutomation_WorksheetExists(wb, candidate)
         n = n + 1
-        candidate = Left$(name, 28) & "_" & n
+        Dim sfx As String: sfx = "_" & n
+        candidate = Left$(name, 31 - Len(sfx)) & sfx
     Loop
     ReportAutomation_UniqueSheetName = candidate
 End Function
@@ -1875,11 +1950,13 @@ Private Sub ReportAutomation_BeginOperation(ByVal statusText As String)
     mPrevCalculation = Application.Calculation
     mPrevStatusBar = Application.StatusBar
 
+    mPrevEnableCancelKey = Application.EnableCancelKey
     ' 수천 행 집계표에서 시트 생성/서식 적용을 반복하므로 성능 옵션을 임시로 낮춘다.
     Application.ScreenUpdating = False
     Application.EnableEvents = False
     Application.DisplayAlerts = False
     Application.Calculation = xlCalculationManual
+    Application.EnableCancelKey = xlErrorHandler
     Application.StatusBar = statusText
     On Error GoTo 0
 End Sub
@@ -1895,6 +1972,7 @@ Private Sub ReportAutomation_EndOperation()
     Application.EnableEvents = mPrevEnableEvents
     Application.DisplayAlerts = mPrevDisplayAlerts
     Application.Calculation = mPrevCalculation
+    Application.EnableCancelKey = mPrevEnableCancelKey
     Application.StatusBar = mPrevStatusBar
     On Error GoTo 0
 End Sub
