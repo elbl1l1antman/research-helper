@@ -1,6 +1,6 @@
 # Versioning
 
-Current version: `0.0.1`
+Current version: `0.0.2`
 
 ## Policy
 
@@ -14,6 +14,8 @@ Current version: `0.0.1`
   - Major: breaking file format, CLI, template, or workflow change.
 
 ## Current Baseline
+
+`0.0.2` updates the GitHub README with the project structure and current alpha workflow.
 
 `0.0.1` marks the first launcher-based alpha baseline:
 
