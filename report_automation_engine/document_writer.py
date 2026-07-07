@@ -1,26 +1,23 @@
-"""Create first-pass PPTX drafts from report_package.json.
-
-This writer intentionally uses only the standard library.  It creates editable
-PowerPoint XML slides with text placeholders and chart data blocks; full chart
-objects can replace these blocks after the package contract stabilizes.
-"""
+"""Create editable PPTX drafts from report_package.json."""
 
 from __future__ import annotations
 
 import argparse
-import html
 import json
-import zipfile
 from pathlib import Path
 from typing import Any, Dict, Iterable, List
 
-try:
-    from .template_factory import write_pptx_template
-except ImportError:
-    from template_factory import write_pptx_template
+from pptx import Presentation
+from pptx.chart.data import ChartData
+from pptx.dml.color import RGBColor
+from pptx.enum.chart import XL_CHART_TYPE, XL_LEGEND_POSITION
+from pptx.enum.shapes import MSO_SHAPE
+from pptx.util import Inches, Pt
 
 
-EMU_WIDE = (12192000, 6858000)
+ACCENT = RGBColor(0xD9, 0x42, 0x2E)
+BLUE = RGBColor(0x2F, 0x66, 0xA7)
+GRAY = RGBColor(0x66, 0x66, 0x66)
 
 
 def write_document(
@@ -34,85 +31,177 @@ def write_document(
     preflight = load_json(preflight_path) if preflight_path else {}
     if preflight.get("status") == "blocked":
         raise ValueError("preflight status is blocked; fix errors before creating PPTX output")
+
+    prs = new_presentation(template_path)
+    if document_type == "chart_review":
+        build_chart_review(prs, package)
+    elif document_type == "pptx_report":
+        build_report(prs, package)
+    else:
+        raise ValueError(f"unsupported document type: {document_type}")
+
     output = Path(output_path)
     output.parent.mkdir(parents=True, exist_ok=True)
-
-    if document_type == "chart_review":
-        slides = chart_review_slides(package)
-    elif document_type == "pptx_report":
-        slides = report_slides(package)
-    else:
-        raise ValueError(f"unsupported document type for this writer: {document_type}")
-
-    # ponytail: template_path is accepted for the stable CLI now; v1 writes a
-    # minimal deck until template cloning is worth the extra OpenXML surface.
-    _ = template_path
-    write_pptx(output, slides)
+    prs.save(output)
     return output
 
 
-def chart_review_slides(package: Dict[str, Any]) -> List[List[Dict[str, str]]]:
-    slides = [title_slide(package, "Chart Review Draft")]
+def new_presentation(template_path: str | Path | None) -> Presentation:
+    prs = Presentation(str(template_path)) if template_path and Path(template_path).exists() else Presentation()
+    # Keep template theme/size, but remove placeholder sample slides from output.
+    for slide_id in list(prs.slides._sldIdLst):
+        prs.part.drop_rel(slide_id.rId)
+        prs.slides._sldIdLst.remove(slide_id)
+    prs.slide_width = Inches(13.333)
+    prs.slide_height = Inches(7.5)
+    return prs
+
+
+def blank_layout(prs: Presentation):
+    return prs.slide_layouts[6] if len(prs.slide_layouts) > 6 else prs.slide_layouts[0]
+
+
+def build_chart_review(prs: Presentation, package: Dict[str, Any]) -> None:
+    add_title_slide(prs, package, "Chart Review Draft")
     charts = [row for row in package.get("charts", []) if row.get("include_chart")]
     if not charts:
-        slides.append(text_slide("검토 필요", ["차트 후보가 없습니다.", "preflight_report.json을 확인하세요."]))
-        return slides
+        add_text_slide(prs, "검토 필요", ["차트 후보가 없습니다.", "preflight_report.json을 확인하세요."])
+        return
 
+    failures = []
     for table_key, rows in group_by(charts, "table_key").items():
-        title = section_title(package, table_key) or table_key
-        chart_type = choose_chart_type(rows)
-        highlight = max(rows, key=lambda row: number(row.get("value")) or 0)
-        body = [
-            f"차트 유형: {chart_type}",
-            f"강조 항목: {highlight.get('category', '')} ({highlight.get('display_value', highlight.get('value', ''))})",
-            "",
-            *chart_lines(rows),
-            "",
-            f"source: {table_key}",
-        ]
-        slides.append(text_slide(title, body))
-    return slides
+        try:
+            title = section_title(package, table_key) or table_key or "Chart"
+            slide = prs.slides.add_slide(blank_layout(prs))
+            add_title(slide, title)
+            add_chart(slide, rows, Inches(0.7), Inches(1.35), Inches(7.2), Inches(4.8))
+            add_note(slide, chart_note(rows), Inches(8.25), Inches(1.35), Inches(4.3), Inches(4.8))
+            add_source(slide, f"source: {table_key}")
+        except Exception as exc:
+            failures.append(f"{table_key}: {exc}")
+    if failures:
+        add_text_slide(prs, "검토 필요", failures)
 
 
-def report_slides(package: Dict[str, Any]) -> List[List[Dict[str, str]]]:
-    slides = [title_slide(package, "Report Draft")]
+def build_report(prs: Presentation, package: Dict[str, Any]) -> None:
+    add_title_slide(prs, package, "Report Draft")
     for section in package.get("sections", []):
-        key = section.get("table_key", "")
-        body = [
-            section.get("narrative_final", ""),
-            "",
-            "표",
-            *table_lines(package, key),
-            "",
-            "차트",
-            *chart_lines([row for row in package.get("charts", []) if row.get("table_key") == key and row.get("include_chart")]),
-            "",
-            f"source: {key}",
-        ]
-        slides.append(text_slide(section.get("title") or key or "Untitled", body))
+        key = str(section.get("table_key", ""))
+        slide = prs.slides.add_slide(blank_layout(prs))
+        add_title(slide, str(section.get("title") or key or "Untitled"))
+        add_textbox(slide, str(section.get("narrative_final", "")), Inches(0.65), Inches(1.05), Inches(5.8), Inches(1.4), 13)
+        add_table(slide, table_rows(package, key), Inches(0.65), Inches(2.65), Inches(5.8), Inches(3.7))
+        add_chart(slide, chart_rows(package, key), Inches(6.75), Inches(1.35), Inches(5.8), Inches(4.95))
+        add_source(slide, f"source: {key}")
     if package.get("qa"):
-        slides.append(text_slide("QA Summary", [f"{q.get('severity', '')}: {q.get('message', '')}" for q in package["qa"][:12]]))
-    return slides
+        add_text_slide(prs, "QA Summary", [f"{q.get('severity', '')}: {q.get('message', '')}" for q in package["qa"][:16]])
 
 
-def title_slide(package: Dict[str, Any], fallback_title: str) -> List[Dict[str, str]]:
+def add_title_slide(prs: Presentation, package: Dict[str, Any], fallback_title: str) -> None:
     meta = package.get("meta", {})
-    title = meta.get("report_title") or meta.get("source_file_name") or fallback_title
-    return [
-        box("title", str(title)),
-        box("subtitle", str(meta.get("created_at", ""))),
+    slide = prs.slides.add_slide(blank_layout(prs))
+    add_title(slide, str(meta.get("report_title") or meta.get("source_file_name") or fallback_title), top=Inches(2.2), size=30)
+    add_textbox(slide, str(meta.get("created_at", "")), Inches(1.0), Inches(3.1), Inches(11.2), Inches(0.5), 14, GRAY)
+
+
+def add_text_slide(prs: Presentation, title: str, lines: Iterable[str]) -> None:
+    slide = prs.slides.add_slide(blank_layout(prs))
+    add_title(slide, title)
+    add_textbox(slide, "\n".join(str(line) for line in lines), Inches(0.8), Inches(1.35), Inches(11.6), Inches(5.4), 14)
+
+
+def add_title(slide, text: str, top=Inches(0.35), size=22) -> None:
+    add_textbox(slide, text, Inches(0.65), top, Inches(12.0), Inches(0.6), size, BLUE, bold=True)
+
+
+def add_textbox(slide, text: str, left, top, width, height, size: int, color=RGBColor(0, 0, 0), bold=False) -> None:
+    shape = slide.shapes.add_textbox(left, top, width, height)
+    frame = shape.text_frame
+    frame.word_wrap = True
+    frame.clear()
+    for idx, line in enumerate(str(text).splitlines() or [""]):
+        paragraph = frame.paragraphs[0] if idx == 0 else frame.add_paragraph()
+        run = paragraph.add_run()
+        run.text = line
+        run.font.name = "Arial"
+        run.font.size = Pt(size)
+        run.font.bold = bold
+        run.font.color.rgb = color
+
+
+def add_note(slide, text: str, left, top, width, height) -> None:
+    add_textbox(slide, text, left, top, width, height, 12, GRAY)
+
+
+def add_source(slide, text: str) -> None:
+    add_textbox(slide, text, Inches(0.65), Inches(6.85), Inches(12.0), Inches(0.3), 9, GRAY)
+
+
+def add_table(slide, rows: List[Dict[str, Any]], left, top, width, height) -> None:
+    if not rows:
+        add_textbox(slide, "삽입표 데이터 없음", left, top, width, height, 11, GRAY)
+        return
+    visible = rows[:8]
+    table_shape = slide.shapes.add_table(len(visible) + 1, 3, left, top, width, height)
+    table = table_shape.table
+    for idx, heading in enumerate(["항목", "%", "N"]):
+        cell = table.cell(0, idx)
+        cell.text = heading
+        cell.text_frame.paragraphs[0].runs[0].font.bold = True
+    for row_idx, row in enumerate(visible, start=1):
+        table.cell(row_idx, 0).text = str(row.get("category", ""))
+        table.cell(row_idx, 1).text = display_percent(row)
+        table.cell(row_idx, 2).text = str(row.get("weighted_n", "") or "")
+
+
+def add_chart(slide, rows: List[Dict[str, Any]], left, top, width, height) -> None:
+    rows = [row for row in rows if number(row.get("value")) is not None]
+    if not rows:
+        add_textbox(slide, "차트 데이터 없음", left, top, width, height, 12, GRAY)
+        return
+    rows = sorted(rows, key=lambda row: number(row.get("sort_order")) or 9999)[:10]
+    chart_data = ChartData()
+    chart_data.categories = [str(row.get("category", "")) for row in rows]
+    chart_data.add_series("값", [number(row.get("value")) or 0 for row in rows])
+    chart_type = XL_CHART_TYPE.PIE if choose_chart_type(rows) == "pie" else XL_CHART_TYPE.COLUMN_CLUSTERED
+    chart = slide.shapes.add_chart(chart_type, left, top, width, height, chart_data).chart
+    chart.has_legend = chart_type == XL_CHART_TYPE.PIE
+    if chart.has_legend:
+        chart.legend.position = XL_LEGEND_POSITION.RIGHT
+    highlight_max(chart, rows)
+
+
+def highlight_max(chart, rows: List[Dict[str, Any]]) -> None:
+    max_idx = max(range(len(rows)), key=lambda idx: number(rows[idx].get("value")) or 0)
+    points = chart.series[0].points
+    for idx, point in enumerate(points):
+        fill = point.format.fill
+        fill.solid()
+        fill.fore_color.rgb = ACCENT if idx == max_idx else BLUE
+
+
+def chart_note(rows: List[Dict[str, Any]]) -> str:
+    chart_type = choose_chart_type(rows)
+    highlight = max(rows, key=lambda row: number(row.get("value")) or 0)
+    lines = [
+        f"차트 유형: {chart_type}",
+        f"강조 항목: {highlight.get('category', '')} ({highlight.get('display_value') or highlight.get('value', '')})",
+        "",
+        "데이터",
     ]
+    lines.extend(f"- {row.get('category', '')}: {row.get('display_value') or row.get('value', '')}" for row in rows[:10])
+    return "\n".join(lines)
 
 
-def text_slide(title: str, lines: Iterable[str]) -> List[Dict[str, str]]:
-    return [
-        box("title", title),
-        box("body", "\n".join(str(line) for line in lines if line is not None)),
-    ]
+def table_rows(package: Dict[str, Any], table_key: str) -> List[Dict[str, Any]]:
+    for table in package.get("tables", []):
+        if table.get("table_key") == table_key:
+            return list(table.get("rows", []))
+    return []
 
 
-def box(kind: str, text: str) -> Dict[str, str]:
-    return {"kind": kind, "text": text}
+def chart_rows(package: Dict[str, Any], table_key: str) -> List[Dict[str, Any]]:
+    return [row for row in package.get("charts", []) if row.get("table_key") == table_key and row.get("include_chart")]
 
 
 def section_title(package: Dict[str, Any], table_key: str) -> str:
@@ -122,28 +211,15 @@ def section_title(package: Dict[str, Any], table_key: str) -> str:
     return ""
 
 
-def table_lines(package: Dict[str, Any], table_key: str) -> List[str]:
-    for table in package.get("tables", []):
-        if table.get("table_key") == table_key:
-            return [
-                f"{row.get('category', '')}\t{row.get('percent', '')}{row.get('unit', '')}\tN={row.get('weighted_n', '')}"
-                for row in table.get("rows", [])[:8]
-            ]
-    return ["삽입표 데이터 없음"]
-
-
-def chart_lines(rows: List[Dict[str, Any]]) -> List[str]:
-    if not rows:
-        return ["차트 데이터 없음"]
-    return [
-        f"{row.get('category', '')}\t{row.get('display_value') or row.get('value', '')}"
-        for row in sorted(rows, key=lambda row: number(row.get("sort_order")) or 9999)[:10]
-    ]
-
-
 def choose_chart_type(rows: List[Dict[str, Any]]) -> str:
     categories = {str(row.get("category", "")) for row in rows if row.get("category")}
     return "pie" if len(categories) == 2 else "column"
+
+
+def display_percent(row: Dict[str, Any]) -> str:
+    value = row.get("percent")
+    unit = row.get("unit") or "%"
+    return "" if value in (None, "") else f"{value}{unit}"
 
 
 def group_by(rows: List[Dict[str, Any]], key: str) -> Dict[str, List[Dict[str, Any]]]:
@@ -166,112 +242,8 @@ def load_json(path: str | Path | None) -> Dict[str, Any]:
     return json.loads(Path(path).read_text(encoding="utf-8"))
 
 
-def write_pptx(path: Path, slides: List[List[Dict[str, str]]]) -> None:
-    write_pptx_template(path, [[item["text"] for item in slide] for slide in slides])
-
-
-def slide_xml(slide: List[Dict[str, str]]) -> str:
-    shapes = []
-    for idx, item in enumerate(slide, start=1):
-        if item["kind"] == "title":
-            shapes.append(text_shape(idx, item["text"], 650000, 400000, 10800000, 700000, 3000))
-        elif item["kind"] == "subtitle":
-            shapes.append(text_shape(idx, item["text"], 650000, 1250000, 10800000, 420000, 1700))
-        else:
-            shapes.append(text_shape(idx, item["text"], 650000, 1350000, 10800000, 4800000, 1600))
-    return f'''<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<p:sld xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"
- xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"
- xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main">
-  <p:cSld><p:spTree>
-    <p:nvGrpSpPr><p:cNvPr id="1" name=""/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr>
-    <p:grpSpPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="0" cy="0"/><a:chOff x="0" y="0"/><a:chExt cx="0" cy="0"/></a:xfrm></p:grpSpPr>
-    {''.join(shapes)}
-  </p:spTree></p:cSld>
-  <p:clrMapOvr><a:masterClrMapping/></p:clrMapOvr>
-</p:sld>'''
-
-
-def text_shape(idx: int, text: str, x: int, y: int, cx: int, cy: int, size: int) -> str:
-    escaped = html.escape(text)
-    lines = escaped.split("\n") or [""]
-    paragraphs = "".join(f'<a:p><a:r><a:rPr lang="ko-KR" sz="{size}"/><a:t>{line}</a:t></a:r></a:p>' for line in lines)
-    return f'''
-<p:sp>
-  <p:nvSpPr><p:cNvPr id="{idx + 1}" name="RA_WRITER_{idx}"/><p:cNvSpPr txBox="1"/><p:nvPr/></p:nvSpPr>
-  <p:spPr><a:xfrm><a:off x="{x}" y="{y}"/><a:ext cx="{cx}" cy="{cy}"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></p:spPr>
-  <p:txBody><a:bodyPr wrap="square"/><a:lstStyle/>{paragraphs}</p:txBody>
-</p:sp>'''
-
-
-def content_types_xml(slide_count: int) -> str:
-    overrides = "\n".join(
-        f'<Override PartName="/ppt/slides/slide{i}.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.slide+xml"/>'
-        for i in range(1, slide_count + 1)
-    )
-    return f'''<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
-  <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
-  <Default Extension="xml" ContentType="application/xml"/>
-  <Override PartName="/ppt/presentation.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.presentation.main+xml"/>
-  <Override PartName="/docProps/core.xml" ContentType="application/vnd.openxmlformats-package.core-properties+xml"/>
-  <Override PartName="/docProps/app.xml" ContentType="application/vnd.openxmlformats-officedocument.extended-properties+xml"/>
-  {overrides}
-</Types>'''
-
-
-def package_rels_xml() -> str:
-    return '''<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
-  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="ppt/presentation.xml"/>
-  <Relationship Id="rId2" Type="http://schemas.openxmlformats.org/package/2006/relationships/metadata/core-properties" Target="docProps/core.xml"/>
-  <Relationship Id="rId3" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/extended-properties" Target="docProps/app.xml"/>
-</Relationships>'''
-
-
-def presentation_rels_xml(slide_count: int) -> str:
-    rels = "\n".join(
-        f'<Relationship Id="rId{i}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slide" Target="slides/slide{i}.xml"/>'
-        for i in range(1, slide_count + 1)
-    )
-    return f'''<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
-  {rels}
-</Relationships>'''
-
-
-def presentation_xml(slide_count: int) -> str:
-    slide_ids = "\n".join(f'<p:sldId id="{255 + i}" r:id="rId{i}"/>' for i in range(1, slide_count + 1))
-    return f'''<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<p:presentation xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"
- xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"
- xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main">
-  <p:sldIdLst>{slide_ids}</p:sldIdLst>
-  <p:sldSz cx="{EMU_WIDE[0]}" cy="{EMU_WIDE[1]}" type="wide"/>
-  <p:notesSz cx="6858000" cy="9144000"/>
-</p:presentation>'''
-
-
-def app_props_xml(slide_count: int) -> str:
-    return f'''<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<Properties xmlns="http://schemas.openxmlformats.org/officeDocument/2006/extended-properties"
- xmlns:vt="http://schemas.openxmlformats.org/officeDocument/2006/docPropsVTypes">
-  <Application>ReportAutomation</Application>
-  <Slides>{slide_count}</Slides>
-</Properties>'''
-
-
-def core_props_xml() -> str:
-    return '''<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<cp:coreProperties xmlns:cp="http://schemas.openxmlformats.org/package/2006/metadata/core-properties"
- xmlns:dc="http://purl.org/dc/elements/1.1/">
-  <dc:title>ReportAutomation PPTX Draft</dc:title>
-  <dc:creator>ReportAutomation</dc:creator>
-</cp:coreProperties>'''
-
-
 def run_cli(argv: List[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Create PPTX drafts from report_package.json.")
+    parser = argparse.ArgumentParser(description="Create editable PPTX drafts from report_package.json.")
     parser.add_argument("--package", required=True)
     parser.add_argument("--preflight")
     parser.add_argument("--template")

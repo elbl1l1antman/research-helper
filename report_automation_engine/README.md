@@ -21,7 +21,7 @@
 
 - `document_writer.py`
   - `report_package.json`을 읽어 PPTX 초본을 생성합니다.
-  - v1은 차트 객체 대신 편집 가능한 텍스트 기반 차트 데이터 블록을 생성합니다.
+  - PowerPoint에서 편집 가능한 차트 객체와 표 객체를 생성합니다.
 
 - `hwpx_report_writer.py`
   - HWPX 내부 XML을 읽어 표와 문단 흐름을 분석합니다.
@@ -118,7 +118,7 @@ python report_automation_engine\template_autofix.py `
 PPTX 초본 writer는 다음처럼 실행합니다.
 
 ```powershell
-python -m report_automation_engine\document_writer `
+python -m report_automation_engine.document_writer `
   --package "C:\path\report_package.json" `
   --preflight "C:\path\preflight_report.json" `
   --type chart_review `

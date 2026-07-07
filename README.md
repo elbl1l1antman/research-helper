@@ -111,17 +111,19 @@ Python 기반 보조 엔진입니다.
 - `report_package.json` 생성
 - `preflight_report.json` 생성
 - 문서 생성 준비 상태 표시
+- CLI 기반 PPTX 보고서/차트 검토 초본 생성
+- PowerPoint 편집 가능한 차트 객체 생성
 
 ## 아직 개발 중인 기능
 
 다음 기능은 계획과 기반 작업은 있으나, 현재 알파에서 완성 기능으로 열지 않습니다.
 
 - HWPX 보고서 직접 생성
-- PPTX 보고서 직접 생성
-- 차트 검토 PPTX 직접 생성
+- 런처에서 PPTX 보고서 직접 생성
+- 런처에서 차트 검토 PPTX 직접 생성
 - HWP 바이너리 직접 편집
-- HWPX/PPTX 템플릿에 본문, 표, 차트를 완전 자동 삽입
-- PowerPoint 편집 가능한 차트 객체 생성
+- HWPX 템플릿에 본문, 표, 차트를 완전 자동 삽입
+- PPTX 템플릿 디자인을 보존한 placeholder 기반 정밀 치환
 
 다음 개발 계획은 `report_automation_launcher/NEXT_DOCUMENT_OUTPUT_PLAN.md`를 기준으로 진행합니다.
 
