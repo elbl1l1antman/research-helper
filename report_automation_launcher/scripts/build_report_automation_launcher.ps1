@@ -45,6 +45,7 @@ $exePath = Join-Path $OutputDir "ReportAutomationLauncher.exe"
     /reference:System.dll `
     /reference:System.Core.dll `
     /reference:System.Drawing.dll `
+    /reference:System.Web.Extensions.dll `
     /reference:System.Windows.Forms.dll `
     /reference:Microsoft.CSharp.dll `
     "$SourcePath"

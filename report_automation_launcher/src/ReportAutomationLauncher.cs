@@ -5,6 +5,7 @@ using System.Drawing;
 using System.IO;
 using System.Runtime.InteropServices;
 using System.Threading;
+using System.Web.Script.Serialization;
 using System.Windows.Forms;
 
 namespace ReportAutomationLauncher
@@ -169,11 +170,42 @@ namespace ReportAutomationLauncher
         private readonly ComboBox qaFilterCombo = new ComboBox();
         private readonly ListView qaIssueList = new ListView();
         private readonly Label draftPreviewStatusLabel = new Label();
+        private readonly TextBox dashboardWorkbookText = new TextBox();
+        private readonly Button dashboardBrowseButton = new Button();
+        private readonly Button dashboardInspectButton = new Button();
+        private readonly ComboBox dashboardSheetCombo = new ComboBox();
+        private readonly ComboBox dashboardEntityColumnCombo = new ComboBox();
+        private readonly ComboBox dashboardOutputModeCombo = new ComboBox();
+        private readonly ComboBox dashboardPageSizeCombo = new ComboBox();
+        private readonly ComboBox dashboardDesignCombo = new ComboBox();
+        private readonly ComboBox dashboardFontCombo = new ComboBox();
+        private readonly TextBox dashboardTemplateText = new TextBox();
+        private readonly Button dashboardTemplateBrowseButton = new Button();
+        private readonly CheckedListBox dashboardEntityList = new CheckedListBox();
+        private readonly CheckedListBox dashboardColumnList = new CheckedListBox();
+        private readonly ListView dashboardColumnPreviewList = new ListView();
+        private readonly TextBox dashboardNarrativeTemplateText = new TextBox();
+        private readonly TextBox dashboardStatusText = new TextBox();
+        private readonly Button dashboardSelectAllEntitiesButton = new Button();
+        private readonly Button dashboardClearEntitiesButton = new Button();
+        private readonly Button dashboardSelectAllColumnsButton = new Button();
+        private readonly Button dashboardClearColumnsButton = new Button();
+        private readonly Button dashboardGenerateButton = new Button();
+        private readonly Button dashboardOpenOutputButton = new Button();
+        private readonly ComboBox[] dashboardKpiColumnCombos = new ComboBox[6];
+        private readonly TextBox[] dashboardKpiLabelTexts = new TextBox[6];
+        private readonly TextBox[] dashboardKpiUnitTexts = new TextBox[6];
+        private readonly ComboBox[] dashboardChartTypeCombos = new ComboBox[4];
+        private readonly TextBox[] dashboardChartTitleTexts = new TextBox[4];
+        private readonly TextBox[] dashboardChartColumnsTexts = new TextBox[4];
+        private readonly TextBox[] dashboardChartLabelsTexts = new TextBox[4];
         private readonly List<DraftSentenceItem> draftSentenceItems = new List<DraftSentenceItem>();
         private readonly List<DraftQaIssue> draftQaIssues = new List<DraftQaIssue>();
         private readonly HashSet<string> recommendedBanners = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         private string lastTemplateStatus = "미검사";
         private string currentDraftPath = "";
+        private DashboardWorkbookInfo currentDashboardInfo;
+        private string lastDashboardOutputPath = "";
 
         public MainForm()
         {
@@ -216,6 +248,7 @@ namespace ReportAutomationLauncher
             workflowTabs.TabPages.Add(CreateStepPage("2 데이터 확인", BuildDataReviewGroup()));
             workflowTabs.TabPages.Add(CreateStepPage("3 작성 규칙", BuildRulesPage()));
             workflowTabs.TabPages.Add(CreateStepPage("4 실행/결과", BuildRunGroup()));
+            workflowTabs.TabPages.Add(CreateStepPage("대시보드 PPT", BuildDashboardPage()));
             workflowTabs.SelectedIndexChanged += delegate { UpdateWorkflowStatus(); };
             root.Controls.Add(workflowTabs, 0, 3);
 
@@ -250,6 +283,10 @@ namespace ReportAutomationLauncher
             tableInsertModeCombo.SelectedIndex = 0;
             llmProviderCombo.SelectedIndex = 0;
             llmModelText.Text = "gpt-4.1-mini";
+            dashboardOutputModeCombo.SelectedIndex = 0;
+            dashboardPageSizeCombo.SelectedIndex = 0;
+            dashboardDesignCombo.SelectedIndex = 0;
+            dashboardFontCombo.SelectedIndex = 0;
             analysisCheck.Checked = true;
             chartCheck.Checked = true;
             tableCheck.Checked = true;
@@ -758,6 +795,307 @@ namespace ReportAutomationLauncher
             draftReviewTabs.TabPages.Add(CreateStepPage("문장 리뷰", BuildSentenceReviewPanel()));
             draftReviewTabs.TabPages.Add(CreateStepPage("QA 경고", BuildQaReviewPanel()));
             panel.Controls.Add(draftReviewTabs, 0, 5);
+            return panel;
+        }
+
+        private Control BuildDashboardPage()
+        {
+            var root = new TableLayoutPanel();
+            root.Dock = DockStyle.Fill;
+            root.ColumnCount = 1;
+            root.RowCount = 5;
+            root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+            root.RowStyles.Add(new RowStyle(SizeType.Percent, 32));
+            root.RowStyles.Add(new RowStyle(SizeType.Percent, 34));
+            root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+            root.RowStyles.Add(new RowStyle(SizeType.Percent, 34));
+
+            root.Controls.Add(BuildDashboardFileGroup(), 0, 0);
+            root.Controls.Add(BuildDashboardSelectionGroup(), 0, 1);
+            root.Controls.Add(BuildDashboardMappingGroup(), 0, 2);
+            root.Controls.Add(BuildDashboardCommandGroup(), 0, 3);
+
+            dashboardStatusText.Multiline = true;
+            dashboardStatusText.ReadOnly = true;
+            dashboardStatusText.ScrollBars = ScrollBars.Vertical;
+            dashboardStatusText.Dock = DockStyle.Fill;
+            dashboardStatusText.Text = "Excel을 읽은 뒤 사용할 sheet, 기관, 열을 선택하세요.";
+            root.Controls.Add(dashboardStatusText, 0, 4);
+            return root;
+        }
+
+        private Control BuildDashboardFileGroup()
+        {
+            var group = new GroupBox();
+            group.Text = "대시보드 원자료";
+            group.Dock = DockStyle.Top;
+            group.AutoSize = true;
+            group.Padding = new Padding(10);
+
+            var grid = CreateGrid(4);
+            group.Controls.Add(grid);
+            AddLabel(grid, 0, "Excel 원자료");
+            dashboardWorkbookText.Dock = DockStyle.Fill;
+            grid.Controls.Add(dashboardWorkbookText, 1, 0);
+            dashboardBrowseButton.Text = "찾기";
+            dashboardBrowseButton.Click += DashboardBrowseButton_Click;
+            grid.Controls.Add(dashboardBrowseButton, 2, 0);
+
+            AddLabel(grid, 1, "sheet");
+            dashboardSheetCombo.DropDownStyle = ComboBoxStyle.DropDownList;
+            dashboardSheetCombo.Dock = DockStyle.Fill;
+            dashboardSheetCombo.SelectedIndexChanged += DashboardSheetCombo_SelectedIndexChanged;
+            grid.Controls.Add(dashboardSheetCombo, 1, 1);
+            dashboardInspectButton.Text = "데이터 읽기";
+            dashboardInspectButton.Click += DashboardInspectButton_Click;
+            grid.Controls.Add(dashboardInspectButton, 2, 1);
+
+            AddLabel(grid, 2, "작업용 PPT 템플릿");
+            dashboardTemplateText.Dock = DockStyle.Fill;
+            grid.Controls.Add(dashboardTemplateText, 1, 2);
+            dashboardTemplateBrowseButton.Text = "찾기";
+            dashboardTemplateBrowseButton.Click += DashboardTemplateBrowseButton_Click;
+            grid.Controls.Add(dashboardTemplateBrowseButton, 2, 2);
+
+            var note = new Label();
+            note.Text = "템플릿을 지정하면 첫 슬라이드의 RA_DASH_* 위치와 폰트를 유지하고 데이터만 교체합니다.";
+            note.AutoSize = true;
+            note.ForeColor = Color.DimGray;
+            grid.Controls.Add(note, 1, 3);
+            grid.SetColumnSpan(note, 2);
+            return group;
+        }
+
+        private Control BuildDashboardSelectionGroup()
+        {
+            var split = new TableLayoutPanel();
+            split.Dock = DockStyle.Fill;
+            split.ColumnCount = 3;
+            split.RowCount = 1;
+            split.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 35));
+            split.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 30));
+            split.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 35));
+
+            var previewGroup = new GroupBox();
+            previewGroup.Text = "열 미리보기";
+            previewGroup.Dock = DockStyle.Fill;
+            dashboardColumnPreviewList.Dock = DockStyle.Fill;
+            dashboardColumnPreviewList.View = View.Details;
+            dashboardColumnPreviewList.FullRowSelect = true;
+            dashboardColumnPreviewList.GridLines = true;
+            dashboardColumnPreviewList.Columns.Add("열", 150);
+            dashboardColumnPreviewList.Columns.Add("유형", 70);
+            dashboardColumnPreviewList.Columns.Add("예시값", 140);
+            dashboardColumnPreviewList.Columns.Add("결측", 60);
+            previewGroup.Controls.Add(dashboardColumnPreviewList);
+            split.Controls.Add(previewGroup, 0, 0);
+
+            var entityGroup = new GroupBox();
+            entityGroup.Text = "기관/기업 선택";
+            entityGroup.Dock = DockStyle.Fill;
+            var entityPanel = new TableLayoutPanel();
+            entityPanel.Dock = DockStyle.Fill;
+            entityPanel.RowCount = 3;
+            entityPanel.ColumnCount = 1;
+            entityPanel.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+            entityPanel.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+            entityPanel.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+            var entityTop = new FlowLayoutPanel();
+            entityTop.Dock = DockStyle.Fill;
+            var entityLabel = new Label();
+            entityLabel.Text = "기관명 열";
+            entityLabel.AutoSize = true;
+            entityLabel.Margin = new Padding(0, 7, 6, 0);
+            dashboardEntityColumnCombo.Width = 160;
+            dashboardEntityColumnCombo.DropDownStyle = ComboBoxStyle.DropDownList;
+            dashboardEntityColumnCombo.SelectedIndexChanged += delegate { PopulateDashboardEntities(); };
+            entityTop.Controls.Add(entityLabel);
+            entityTop.Controls.Add(dashboardEntityColumnCombo);
+            entityPanel.Controls.Add(entityTop, 0, 0);
+            dashboardEntityList.Dock = DockStyle.Fill;
+            dashboardEntityList.CheckOnClick = true;
+            entityPanel.Controls.Add(dashboardEntityList, 0, 1);
+            var entityButtons = new FlowLayoutPanel();
+            entityButtons.Dock = DockStyle.Fill;
+            entityButtons.AutoSize = true;
+            dashboardSelectAllEntitiesButton.Text = "전체 선택";
+            dashboardSelectAllEntitiesButton.Click += delegate { SetChecked(dashboardEntityList, true); };
+            dashboardClearEntitiesButton.Text = "선택 해제";
+            dashboardClearEntitiesButton.Click += delegate { SetChecked(dashboardEntityList, false); };
+            entityButtons.Controls.Add(dashboardSelectAllEntitiesButton);
+            entityButtons.Controls.Add(dashboardClearEntitiesButton);
+            entityPanel.Controls.Add(entityButtons, 0, 2);
+            entityGroup.Controls.Add(entityPanel);
+            split.Controls.Add(entityGroup, 1, 0);
+
+            var columnGroup = new GroupBox();
+            columnGroup.Text = "사용할 열 선택";
+            columnGroup.Dock = DockStyle.Fill;
+            var columnPanel = new TableLayoutPanel();
+            columnPanel.Dock = DockStyle.Fill;
+            columnPanel.RowCount = 2;
+            columnPanel.ColumnCount = 1;
+            columnPanel.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+            columnPanel.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+            dashboardColumnList.Dock = DockStyle.Fill;
+            dashboardColumnList.CheckOnClick = true;
+            dashboardColumnList.ItemCheck += delegate { BeginInvoke(new Action(RefreshDashboardMappingCandidates)); };
+            columnPanel.Controls.Add(dashboardColumnList, 0, 0);
+            var columnButtons = new FlowLayoutPanel();
+            columnButtons.Dock = DockStyle.Fill;
+            columnButtons.AutoSize = true;
+            dashboardSelectAllColumnsButton.Text = "전체 선택";
+            dashboardSelectAllColumnsButton.Click += delegate { SetChecked(dashboardColumnList, true); RefreshDashboardMappingCandidates(); };
+            dashboardClearColumnsButton.Text = "선택 해제";
+            dashboardClearColumnsButton.Click += delegate { SetChecked(dashboardColumnList, false); RefreshDashboardMappingCandidates(); };
+            columnButtons.Controls.Add(dashboardSelectAllColumnsButton);
+            columnButtons.Controls.Add(dashboardClearColumnsButton);
+            columnPanel.Controls.Add(columnButtons, 0, 1);
+            columnGroup.Controls.Add(columnPanel);
+            split.Controls.Add(columnGroup, 2, 0);
+            return split;
+        }
+
+        private Control BuildDashboardMappingGroup()
+        {
+            var tabs = new TabControl();
+            tabs.Dock = DockStyle.Fill;
+            tabs.TabPages.Add(CreateStepPage("KPI", BuildDashboardKpiPanel()));
+            tabs.TabPages.Add(CreateStepPage("차트", BuildDashboardChartPanel()));
+            tabs.TabPages.Add(CreateStepPage("분석문", BuildDashboardNarrativePanel()));
+            return tabs;
+        }
+
+        private Control BuildDashboardKpiPanel()
+        {
+            var grid = CreateGrid(6);
+            for (int i = 0; i < 6; i++)
+            {
+                AddLabel(grid, i, "KPI " + (i + 1));
+                var row = new FlowLayoutPanel();
+                row.Dock = DockStyle.Fill;
+                row.AutoSize = true;
+                dashboardKpiLabelTexts[i] = new TextBox();
+                dashboardKpiLabelTexts[i].Width = 120;
+                dashboardKpiLabelTexts[i].Text = DefaultKpiLabel(i);
+                dashboardKpiColumnCombos[i] = new ComboBox();
+                dashboardKpiColumnCombos[i].Width = 180;
+                dashboardKpiColumnCombos[i].DropDownStyle = ComboBoxStyle.DropDownList;
+                dashboardKpiUnitTexts[i] = new TextBox();
+                dashboardKpiUnitTexts[i].Width = 50;
+                dashboardKpiUnitTexts[i].Text = DefaultKpiUnit(i);
+                row.Controls.Add(dashboardKpiLabelTexts[i]);
+                row.Controls.Add(dashboardKpiColumnCombos[i]);
+                row.Controls.Add(dashboardKpiUnitTexts[i]);
+                grid.Controls.Add(row, 1, i);
+                grid.SetColumnSpan(row, 2);
+            }
+            return grid;
+        }
+
+        private Control BuildDashboardChartPanel()
+        {
+            var grid = CreateGrid(4);
+            for (int i = 0; i < 4; i++)
+            {
+                AddLabel(grid, i, "차트 " + (i + 1));
+                var row = new FlowLayoutPanel();
+                row.Dock = DockStyle.Fill;
+                row.AutoSize = true;
+                dashboardChartTitleTexts[i] = new TextBox();
+                dashboardChartTitleTexts[i].Width = 140;
+                dashboardChartTitleTexts[i].Text = DefaultChartTitle(i);
+                dashboardChartTypeCombos[i] = new ComboBox();
+                dashboardChartTypeCombos[i].Width = 90;
+                dashboardChartTypeCombos[i].DropDownStyle = ComboBoxStyle.DropDownList;
+                dashboardChartTypeCombos[i].Items.Add("auto");
+                dashboardChartTypeCombos[i].Items.Add("column");
+                dashboardChartTypeCombos[i].Items.Add("pie");
+                dashboardChartTypeCombos[i].Items.Add("line");
+                dashboardChartTypeCombos[i].Items.Add("progress");
+                dashboardChartTypeCombos[i].SelectedIndex = i == 3 ? 3 : 0;
+                dashboardChartColumnsTexts[i] = new TextBox();
+                dashboardChartColumnsTexts[i].Width = 260;
+                dashboardChartColumnsTexts[i].Text = DefaultChartColumns(i);
+                dashboardChartLabelsTexts[i] = new TextBox();
+                dashboardChartLabelsTexts[i].Width = 180;
+                dashboardChartLabelsTexts[i].Text = DefaultChartLabels(i);
+                row.Controls.Add(dashboardChartTitleTexts[i]);
+                row.Controls.Add(dashboardChartTypeCombos[i]);
+                row.Controls.Add(dashboardChartColumnsTexts[i]);
+                row.Controls.Add(dashboardChartLabelsTexts[i]);
+                grid.Controls.Add(row, 1, i);
+                grid.SetColumnSpan(row, 2);
+            }
+            return grid;
+        }
+
+        private Control BuildDashboardNarrativePanel()
+        {
+            dashboardNarrativeTemplateText.Multiline = true;
+            dashboardNarrativeTemplateText.ScrollBars = ScrollBars.Vertical;
+            dashboardNarrativeTemplateText.Dock = DockStyle.Fill;
+            dashboardNarrativeTemplateText.Text = "{{기관명}}은 매출액 {{매출액}}, 만족도 {{만족도}}%를 기록했다.";
+            return dashboardNarrativeTemplateText;
+        }
+
+        private Control BuildDashboardCommandGroup()
+        {
+            var panel = new FlowLayoutPanel();
+            panel.Dock = DockStyle.Fill;
+            panel.AutoSize = true;
+            var outputLabel = new Label();
+            outputLabel.Text = "출력";
+            outputLabel.AutoSize = true;
+            outputLabel.Margin = new Padding(0, 7, 6, 0);
+            dashboardOutputModeCombo.DropDownStyle = ComboBoxStyle.DropDownList;
+            dashboardOutputModeCombo.Width = 150;
+            dashboardOutputModeCombo.Items.Add("단일 기관");
+            dashboardOutputModeCombo.Items.Add("여러 기관 일괄");
+            var sizeLabel = new Label();
+            sizeLabel.Text = "용지";
+            sizeLabel.AutoSize = true;
+            sizeLabel.Margin = new Padding(12, 7, 6, 0);
+            dashboardPageSizeCombo.DropDownStyle = ComboBoxStyle.DropDownList;
+            dashboardPageSizeCombo.Width = 90;
+            dashboardPageSizeCombo.Items.Add("A4");
+            dashboardPageSizeCombo.Items.Add("B5");
+            var designLabel = new Label();
+            designLabel.Text = "디자인";
+            designLabel.AutoSize = true;
+            designLabel.Margin = new Padding(12, 7, 6, 0);
+            dashboardDesignCombo.DropDownStyle = ComboBoxStyle.DropDownList;
+            dashboardDesignCombo.Width = 130;
+            dashboardDesignCombo.Items.Add("모던 블루");
+            dashboardDesignCombo.Items.Add("모던 민트");
+            dashboardDesignCombo.Items.Add("그래파이트");
+            var fontLabel = new Label();
+            fontLabel.Text = "폰트";
+            fontLabel.AutoSize = true;
+            fontLabel.Margin = new Padding(12, 7, 6, 0);
+            dashboardFontCombo.DropDownStyle = ComboBoxStyle.DropDownList;
+            dashboardFontCombo.Width = 130;
+            dashboardFontCombo.Items.Add("맑은 고딕");
+            dashboardFontCombo.Items.Add("나눔고딕");
+            dashboardFontCombo.Items.Add("Noto Sans CJK KR");
+            dashboardFontCombo.Items.Add("Arial");
+            dashboardGenerateButton.Text = "대시보드 PPT 생성";
+            dashboardGenerateButton.Width = 140;
+            dashboardGenerateButton.Click += DashboardGenerateButton_Click;
+            dashboardOpenOutputButton.Text = "결과 열기";
+            dashboardOpenOutputButton.Width = 90;
+            dashboardOpenOutputButton.Enabled = false;
+            dashboardOpenOutputButton.Click += DashboardOpenOutputButton_Click;
+            panel.Controls.Add(outputLabel);
+            panel.Controls.Add(dashboardOutputModeCombo);
+            panel.Controls.Add(sizeLabel);
+            panel.Controls.Add(dashboardPageSizeCombo);
+            panel.Controls.Add(designLabel);
+            panel.Controls.Add(dashboardDesignCombo);
+            panel.Controls.Add(fontLabel);
+            panel.Controls.Add(dashboardFontCombo);
+            panel.Controls.Add(dashboardGenerateButton);
+            panel.Controls.Add(dashboardOpenOutputButton);
             return panel;
         }
 
@@ -2048,6 +2386,563 @@ namespace ReportAutomationLauncher
             }
         }
 
+        private void DashboardBrowseButton_Click(object sender, EventArgs e)
+        {
+            using (var dialog = new OpenFileDialog())
+            {
+                dialog.Title = "대시보드 원자료 Excel 선택";
+                dialog.Filter = "Excel files (*.xlsx;*.xlsm)|*.xlsx;*.xlsm|All files (*.*)|*.*";
+                if (dialog.ShowDialog(this) == DialogResult.OK)
+                {
+                    dashboardWorkbookText.Text = dialog.FileName;
+                    LoadDashboardInspectionAsync();
+                }
+            }
+        }
+
+        private void DashboardInspectButton_Click(object sender, EventArgs e)
+        {
+            LoadDashboardInspectionAsync();
+        }
+
+        private void DashboardTemplateBrowseButton_Click(object sender, EventArgs e)
+        {
+            using (var dialog = new OpenFileDialog())
+            {
+                dialog.Title = "작업용 PPT 템플릿 선택";
+                dialog.Filter = "PowerPoint files (*.pptx)|*.pptx|All files (*.*)|*.*";
+                if (dialog.ShowDialog(this) == DialogResult.OK)
+                {
+                    dashboardTemplateText.Text = dialog.FileName;
+                }
+            }
+        }
+
+        private void LoadDashboardInspectionAsync()
+        {
+            string path = dashboardWorkbookText.Text.Trim();
+            if (string.IsNullOrWhiteSpace(path) && File.Exists(workbookPathText.Text.Trim()))
+            {
+                path = workbookPathText.Text.Trim();
+                dashboardWorkbookText.Text = path;
+            }
+            if (string.IsNullOrWhiteSpace(path) || !File.Exists(path))
+            {
+                MessageBox.Show(this, "대시보드 원자료 Excel 파일을 선택하세요.", "대시보드", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                return;
+            }
+
+            dashboardInspectButton.Enabled = false;
+            dashboardGenerateButton.Enabled = false;
+            dashboardStatusText.Text = "Excel 원자료를 읽는 중입니다...";
+
+            var thread = new Thread(delegate()
+            {
+                try
+                {
+                    string outputPath = Path.Combine(Path.GetTempPath(), "dashboard_excel_inspect.json");
+                    RunPythonTool("dashboard_package.py", "--excel " + QuoteArg(path) + " --inspect-output " + QuoteArg(outputPath), 120000);
+                    DashboardWorkbookInfo info = DashboardWorkbookInfo.Load(outputPath);
+                    BeginInvoke(new Action(delegate()
+                    {
+                        currentDashboardInfo = info;
+                        PopulateDashboardWorkbook(info);
+                        dashboardStatusText.Text = "sheet " + info.Sheets.Count + "개를 읽었습니다. 사용할 sheet, 기관, 열을 선택하세요.";
+                    }));
+                }
+                catch (Exception ex)
+                {
+                    BeginInvoke(new Action(delegate()
+                    {
+                        dashboardStatusText.Text = "대시보드 원자료 확인 실패: " + ex.Message;
+                        MessageBox.Show(this, ex.Message, "대시보드 원자료 확인 실패", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                    }));
+                }
+                finally
+                {
+                    BeginInvoke(new Action(delegate()
+                    {
+                        dashboardInspectButton.Enabled = true;
+                        dashboardGenerateButton.Enabled = true;
+                    }));
+                }
+            });
+            thread.SetApartmentState(ApartmentState.STA);
+            thread.Start();
+        }
+
+        private void PopulateDashboardWorkbook(DashboardWorkbookInfo info)
+        {
+            dashboardSheetCombo.Items.Clear();
+            foreach (DashboardSheetInfo sheet in info.Sheets)
+            {
+                dashboardSheetCombo.Items.Add(sheet.Name);
+            }
+            if (dashboardSheetCombo.Items.Count > 0)
+            {
+                dashboardSheetCombo.SelectedIndex = 0;
+            }
+        }
+
+        private void DashboardSheetCombo_SelectedIndexChanged(object sender, EventArgs e)
+        {
+            PopulateDashboardSheet();
+        }
+
+        private void PopulateDashboardSheet()
+        {
+            DashboardSheetInfo sheet = SelectedDashboardSheet();
+            dashboardColumnPreviewList.Items.Clear();
+            dashboardEntityColumnCombo.Items.Clear();
+            dashboardColumnList.Items.Clear();
+            dashboardEntityList.Items.Clear();
+            if (sheet == null)
+            {
+                return;
+            }
+
+            foreach (DashboardColumnInfo column in sheet.Columns)
+            {
+                var item = new ListViewItem(column.Name);
+                item.SubItems.Add(column.InferredType);
+                item.SubItems.Add(column.Sample);
+                item.SubItems.Add(column.MissingCount.ToString());
+                dashboardColumnPreviewList.Items.Add(item);
+                dashboardEntityColumnCombo.Items.Add(column.Name);
+                dashboardColumnList.Items.Add(column.Name, true);
+            }
+
+            int entityIndex = FindColumnIndex(sheet, "기관명", "기업명", "회사명", "업체명", "기관");
+            if (entityIndex >= 0)
+            {
+                dashboardEntityColumnCombo.SelectedIndex = entityIndex;
+            }
+            else if (dashboardEntityColumnCombo.Items.Count > 0)
+            {
+                dashboardEntityColumnCombo.SelectedIndex = 0;
+            }
+            RefreshDashboardMappingCandidates();
+        }
+
+        private DashboardSheetInfo SelectedDashboardSheet()
+        {
+            if (currentDashboardInfo == null || dashboardSheetCombo.SelectedItem == null)
+            {
+                return null;
+            }
+            string name = dashboardSheetCombo.SelectedItem.ToString();
+            foreach (DashboardSheetInfo sheet in currentDashboardInfo.Sheets)
+            {
+                if (string.Equals(sheet.Name, name, StringComparison.OrdinalIgnoreCase))
+                {
+                    return sheet;
+                }
+            }
+            return null;
+        }
+
+        private void PopulateDashboardEntities()
+        {
+            dashboardEntityList.Items.Clear();
+            DashboardSheetInfo sheet = SelectedDashboardSheet();
+            if (sheet == null || dashboardEntityColumnCombo.SelectedItem == null)
+            {
+                return;
+            }
+            string column = dashboardEntityColumnCombo.SelectedItem.ToString();
+            var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (Dictionary<string, object> row in sheet.Preview)
+            {
+                object value;
+                if (row.TryGetValue(column, out value))
+                {
+                    string text = Convert.ToString(value ?? "").Trim();
+                    if (text.Length > 0 && seen.Add(text))
+                    {
+                        dashboardEntityList.Items.Add(text, true);
+                    }
+                }
+            }
+        }
+
+        private void RefreshDashboardMappingCandidates()
+        {
+            var selected = SelectedDashboardColumns();
+            foreach (ComboBox combo in dashboardKpiColumnCombos)
+            {
+                if (combo == null)
+                {
+                    continue;
+                }
+                string previous = combo.SelectedItem == null ? "" : combo.SelectedItem.ToString();
+                combo.Items.Clear();
+                combo.Items.Add("");
+                foreach (string column in selected)
+                {
+                    combo.Items.Add(column);
+                }
+                int index = previous.Length == 0 ? -1 : combo.Items.IndexOf(previous);
+                combo.SelectedIndex = index >= 0 ? index : 0;
+            }
+            ApplyDefaultDashboardMapping();
+        }
+
+        private void ApplyDefaultDashboardMapping()
+        {
+            string[] guesses = { "매출액", "예상매출액", "종사자", "만족도", "평가점수", "성과점수" };
+            for (int i = 0; i < dashboardKpiColumnCombos.Length; i++)
+            {
+                ComboBox combo = dashboardKpiColumnCombos[i];
+                if (combo == null || combo.SelectedIndex > 0)
+                {
+                    continue;
+                }
+                int index = GuessComboIndex(combo, guesses[i]);
+                if (index >= 0)
+                {
+                    combo.SelectedIndex = index;
+                }
+            }
+        }
+
+        private List<string> SelectedDashboardColumns()
+        {
+            var selected = new List<string>();
+            for (int i = 0; i < dashboardColumnList.Items.Count; i++)
+            {
+                if (dashboardColumnList.GetItemChecked(i))
+                {
+                    selected.Add(dashboardColumnList.Items[i].ToString());
+                }
+            }
+            return selected;
+        }
+
+        private List<string> SelectedDashboardEntities()
+        {
+            var selected = new List<string>();
+            for (int i = 0; i < dashboardEntityList.Items.Count; i++)
+            {
+                if (dashboardEntityList.GetItemChecked(i))
+                {
+                    selected.Add(dashboardEntityList.Items[i].ToString());
+                }
+            }
+            if (dashboardOutputModeCombo.SelectedIndex == 0 && selected.Count > 1)
+            {
+                return new List<string> { selected[0] };
+            }
+            return selected;
+        }
+
+        private void DashboardGenerateButton_Click(object sender, EventArgs e)
+        {
+            try
+            {
+                GenerateDashboardPpt();
+            }
+            catch (Exception ex)
+            {
+                dashboardStatusText.Text = "대시보드 PPT 생성 실패: " + ex.Message;
+                MessageBox.Show(this, ex.Message, "대시보드 PPT 생성 실패", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
+        }
+
+        private void GenerateDashboardPpt()
+        {
+            string excelPath = dashboardWorkbookText.Text.Trim();
+            if (string.IsNullOrWhiteSpace(excelPath) || !File.Exists(excelPath))
+            {
+                throw new InvalidOperationException("대시보드 원자료 Excel 파일을 선택하세요.");
+            }
+            if (dashboardSheetCombo.SelectedItem == null || dashboardEntityColumnCombo.SelectedItem == null)
+            {
+                throw new InvalidOperationException("sheet와 기관명 열을 선택하세요.");
+            }
+
+            string directory = Path.GetDirectoryName(excelPath);
+            string stem = Path.GetFileNameWithoutExtension(excelPath);
+            string selectionPath = Path.Combine(directory, stem + "_dashboard_data_selection.json");
+            string mappingPath = Path.Combine(directory, stem + "_dashboard_mapping.json");
+            string packagePath = Path.Combine(directory, stem + "_dashboard_package.json");
+            string preflightPath = Path.Combine(directory, stem + "_dashboard_preflight_report.json");
+            string outputPath = Path.Combine(directory, stem + "_dashboard_" + DateTime.Now.ToString("yyyyMMdd_HHmmss") + ".pptx");
+
+            WriteJson(selectionPath, BuildDashboardSelection(excelPath));
+            WriteJson(mappingPath, BuildDashboardMapping());
+            string pageSize = dashboardPageSizeCombo.SelectedItem == null ? "A4" : dashboardPageSizeCombo.SelectedItem.ToString();
+
+            dashboardStatusText.Text = "dashboard package를 생성합니다...";
+            RunPythonTool("dashboard_package.py",
+                "--excel " + QuoteArg(excelPath) +
+                " --selection " + QuoteArg(selectionPath) +
+                " --mapping " + QuoteArg(mappingPath) +
+                " --page-size " + QuoteArg(pageSize) +
+                " --package-output " + QuoteArg(packagePath) +
+                " --preflight-output " + QuoteArg(preflightPath),
+                120000);
+
+            dashboardStatusText.Text = "대시보드 PPTX를 생성합니다...";
+            string templateArg = "";
+            if (!string.IsNullOrWhiteSpace(dashboardTemplateText.Text.Trim()) && File.Exists(dashboardTemplateText.Text.Trim()))
+            {
+                templateArg = " --template " + QuoteArg(dashboardTemplateText.Text.Trim());
+            }
+            RunPythonTool("dashboard_writer.py",
+                "--package " + QuoteArg(packagePath) +
+                " --preflight " + QuoteArg(preflightPath) +
+                templateArg +
+                " --output " + QuoteArg(outputPath),
+                120000);
+
+            lastDashboardOutputPath = outputPath;
+            dashboardOpenOutputButton.Enabled = File.Exists(outputPath);
+            dashboardStatusText.Text = "대시보드 PPT 생성 완료" + Environment.NewLine +
+                                       "선택: " + selectionPath + Environment.NewLine +
+                                       "매핑: " + mappingPath + Environment.NewLine +
+                                       "Package: " + packagePath + Environment.NewLine +
+                                       "Preflight: " + preflightPath + Environment.NewLine +
+                                       "PPTX: " + outputPath;
+        }
+
+        private Dictionary<string, object> BuildDashboardSelection(string excelPath)
+        {
+            return new Dictionary<string, object>
+            {
+                {"workbook_path", excelPath},
+                {"selected_sheet", dashboardSheetCombo.SelectedItem.ToString()},
+                {"header_row", 1},
+                {"entity_name_column", dashboardEntityColumnCombo.SelectedItem.ToString()},
+                {"selected_entity_names", SelectedDashboardEntities()},
+                {"selected_columns", SelectedDashboardColumns()},
+                {"inferred_column_types", new Dictionary<string, object>()},
+                {"user_column_types", new Dictionary<string, object>()}
+            };
+        }
+
+        private Dictionary<string, object> BuildDashboardMapping()
+        {
+            var profileFields = new List<Dictionary<string, object>>();
+            AddProfileIfSelected(profileFields, "업종");
+            AddProfileIfSelected(profileFields, "지역");
+            AddProfileIfSelected(profileFields, "담당기관");
+
+            var kpis = new List<Dictionary<string, object>>();
+            for (int i = 0; i < 6; i++)
+            {
+                string column = dashboardKpiColumnCombos[i].SelectedItem == null ? "" : dashboardKpiColumnCombos[i].SelectedItem.ToString();
+                if (string.IsNullOrWhiteSpace(column))
+                {
+                    continue;
+                }
+                kpis.Add(new Dictionary<string, object>
+                {
+                    {"label", dashboardKpiLabelTexts[i].Text.Trim()},
+                    {"value_column", column},
+                    {"unit", dashboardKpiUnitTexts[i].Text.Trim()},
+                    {"decimals", SelectedDecimalPlaces()}
+                });
+            }
+
+            var charts = new List<Dictionary<string, object>>();
+            for (int i = 0; i < 4; i++)
+            {
+                List<string> columns = SplitCsv(dashboardChartColumnsTexts[i].Text);
+                if (columns.Count == 0)
+                {
+                    continue;
+                }
+                charts.Add(new Dictionary<string, object>
+                {
+                    {"title", dashboardChartTitleTexts[i].Text.Trim()},
+                    {"chart_type", dashboardChartTypeCombos[i].SelectedItem == null ? "auto" : dashboardChartTypeCombos[i].SelectedItem.ToString()},
+                    {"value_columns", columns},
+                    {"category_labels", SplitCsv(dashboardChartLabelsTexts[i].Text)}
+                });
+            }
+
+            return new Dictionary<string, object>
+            {
+                {"output_mode", dashboardOutputModeCombo.SelectedIndex == 0 ? "single" : "batch"},
+                {"style_preset", SelectedDashboardStylePreset()},
+                {"font_family", SelectedDashboardFontFamily()},
+                {"profile_fields", profileFields},
+                {"kpi_slots", kpis},
+                {"chart_slots", charts},
+                {"narrative_template", dashboardNarrativeTemplateText.Text.Trim()}
+            };
+        }
+
+        private string SelectedDashboardStylePreset()
+        {
+            string value = dashboardDesignCombo.SelectedItem == null ? "" : dashboardDesignCombo.SelectedItem.ToString();
+            if (value.IndexOf("민트", StringComparison.OrdinalIgnoreCase) >= 0)
+            {
+                return "modern_mint";
+            }
+            if (value.IndexOf("그래파이트", StringComparison.OrdinalIgnoreCase) >= 0)
+            {
+                return "graphite";
+            }
+            return "modern_blue";
+        }
+
+        private string SelectedDashboardFontFamily()
+        {
+            string value = dashboardFontCombo.SelectedItem == null ? "" : dashboardFontCombo.SelectedItem.ToString();
+            if (string.IsNullOrWhiteSpace(value) || value == "맑은 고딕")
+            {
+                return "Malgun Gothic";
+            }
+            return value;
+        }
+
+        private void AddProfileIfSelected(List<Dictionary<string, object>> profileFields, string column)
+        {
+            if (SelectedDashboardColumns().Contains(column))
+            {
+                profileFields.Add(new Dictionary<string, object> { { "label", column }, { "column", column } });
+            }
+        }
+
+        private void DashboardOpenOutputButton_Click(object sender, EventArgs e)
+        {
+            if (!string.IsNullOrWhiteSpace(lastDashboardOutputPath) && File.Exists(lastDashboardOutputPath))
+            {
+                var info = new ProcessStartInfo(lastDashboardOutputPath);
+                info.UseShellExecute = true;
+                Process.Start(info);
+            }
+        }
+
+        private void RunPythonTool(string scriptName, string arguments, int timeoutMs)
+        {
+            string pythonPath = PathResolver.ResolvePythonPath();
+            string scriptPath = PathResolver.ResolveEngineToolPath(scriptName);
+            if (string.IsNullOrWhiteSpace(pythonPath) || !File.Exists(pythonPath))
+            {
+                throw new FileNotFoundException("Python 실행 파일을 찾지 못했습니다.");
+            }
+            if (string.IsNullOrWhiteSpace(scriptPath) || !File.Exists(scriptPath))
+            {
+                throw new FileNotFoundException("Python 도구를 찾지 못했습니다.", scriptName);
+            }
+
+            var startInfo = new ProcessStartInfo();
+            startInfo.FileName = pythonPath;
+            startInfo.Arguments = QuoteArg(scriptPath) + " " + arguments;
+            startInfo.UseShellExecute = false;
+            startInfo.CreateNoWindow = true;
+            startInfo.RedirectStandardOutput = true;
+            startInfo.RedirectStandardError = true;
+            startInfo.StandardOutputEncoding = System.Text.Encoding.UTF8;
+            startInfo.StandardErrorEncoding = System.Text.Encoding.UTF8;
+            using (Process process = Process.Start(startInfo))
+            {
+                if (!process.WaitForExit(timeoutMs))
+                {
+                    try { process.Kill(); } catch { }
+                    throw new TimeoutException("Python 도구 실행 시간이 초과되었습니다.");
+                }
+                string stdout = process.StandardOutput.ReadToEnd();
+                string stderr = process.StandardError.ReadToEnd();
+                if (process.ExitCode != 0)
+                {
+                    throw new InvalidOperationException(string.IsNullOrWhiteSpace(stderr) ? stdout.Trim() : stderr.Trim());
+                }
+            }
+        }
+
+        private static void WriteJson(string path, object value)
+        {
+            var serializer = new JavaScriptSerializer();
+            serializer.MaxJsonLength = int.MaxValue;
+            File.WriteAllText(path, serializer.Serialize(value), System.Text.Encoding.UTF8);
+        }
+
+        private static List<string> SplitCsv(string text)
+        {
+            var values = new List<string>();
+            foreach (string part in (text ?? "").Split(','))
+            {
+                string value = part.Trim();
+                if (value.Length > 0)
+                {
+                    values.Add(value);
+                }
+            }
+            return values;
+        }
+
+        private static void SetChecked(CheckedListBox list, bool check)
+        {
+            for (int i = 0; i < list.Items.Count; i++)
+            {
+                list.SetItemChecked(i, check);
+            }
+        }
+
+        private static int FindColumnIndex(DashboardSheetInfo sheet, params string[] candidates)
+        {
+            for (int i = 0; i < sheet.Columns.Count; i++)
+            {
+                foreach (string candidate in candidates)
+                {
+                    if (sheet.Columns[i].Name.IndexOf(candidate, StringComparison.OrdinalIgnoreCase) >= 0)
+                    {
+                        return i;
+                    }
+                }
+            }
+            return -1;
+        }
+
+        private static int GuessComboIndex(ComboBox combo, string text)
+        {
+            if (string.IsNullOrWhiteSpace(text))
+            {
+                return combo.Items.Count > 0 ? 0 : -1;
+            }
+            for (int i = 0; i < combo.Items.Count; i++)
+            {
+                if (combo.Items[i].ToString().IndexOf(text, StringComparison.OrdinalIgnoreCase) >= 0)
+                {
+                    return i;
+                }
+            }
+            return combo.Items.Count > 0 ? 0 : -1;
+        }
+
+        private static string DefaultKpiLabel(int index)
+        {
+            string[] values = { "매출액", "예상 매출액", "종사자 수", "만족도", "평가점수", "성과점수" };
+            return values[index];
+        }
+
+        private static string DefaultKpiUnit(int index)
+        {
+            string[] values = { "원", "원", "명", "%", "점", "점" };
+            return values[index];
+        }
+
+        private static string DefaultChartTitle(int index)
+        {
+            string[] values = { "매출/예상매출", "만족/불만족", "평가/성과", "연도별 추이" };
+            return values[index];
+        }
+
+        private static string DefaultChartColumns(int index)
+        {
+            string[] values = { "매출액,예상매출액", "만족도,불만족도", "평가점수,성과점수", "매출2022,매출2023,매출2024" };
+            return values[index];
+        }
+
+        private static string DefaultChartLabels(int index)
+        {
+            string[] values = { "매출,예상", "만족,불만족", "평가,성과", "2022,2023,2024" };
+            return values[index];
+        }
+
         private void SentenceReviewList_SelectedIndexChanged(object sender, EventArgs e)
         {
             if (sentenceReviewList.SelectedItems.Count == 0)
@@ -2415,6 +3310,135 @@ namespace ReportAutomationLauncher
         public DraftSentenceItem Sentence;
         public string Type = "";
         public string Message = "";
+    }
+
+    internal sealed class DashboardWorkbookInfo
+    {
+        public string Workbook = "";
+        public readonly List<DashboardSheetInfo> Sheets = new List<DashboardSheetInfo>();
+
+        public static DashboardWorkbookInfo Load(string path)
+        {
+            var serializer = new JavaScriptSerializer();
+            serializer.MaxJsonLength = int.MaxValue;
+            var root = serializer.DeserializeObject(File.ReadAllText(path, System.Text.Encoding.UTF8)) as Dictionary<string, object>;
+            var info = new DashboardWorkbookInfo();
+            if (root == null)
+            {
+                return info;
+            }
+            info.Workbook = GetString(root, "workbook");
+            object sheetsValue;
+            if (root.TryGetValue("sheets", out sheetsValue))
+            {
+                object[] sheets = sheetsValue as object[];
+                if (sheets != null)
+                {
+                    foreach (object sheetObj in sheets)
+                    {
+                        Dictionary<string, object> rawSheet = sheetObj as Dictionary<string, object>;
+                        if (rawSheet == null)
+                        {
+                            continue;
+                        }
+                        var sheet = new DashboardSheetInfo();
+                        sheet.Name = GetString(rawSheet, "name");
+                        LoadColumns(sheet, rawSheet);
+                        LoadPreview(sheet, rawSheet);
+                        info.Sheets.Add(sheet);
+                    }
+                }
+            }
+            return info;
+        }
+
+        private static void LoadColumns(DashboardSheetInfo sheet, Dictionary<string, object> rawSheet)
+        {
+            object value;
+            if (!rawSheet.TryGetValue("columns", out value))
+            {
+                return;
+            }
+            object[] columns = value as object[];
+            if (columns == null)
+            {
+                return;
+            }
+            foreach (object columnObj in columns)
+            {
+                Dictionary<string, object> rawColumn = columnObj as Dictionary<string, object>;
+                if (rawColumn == null)
+                {
+                    continue;
+                }
+                var column = new DashboardColumnInfo();
+                column.Name = GetString(rawColumn, "name");
+                column.InferredType = GetString(rawColumn, "inferred_type");
+                column.Sample = GetString(rawColumn, "sample");
+                column.MissingCount = GetInt(rawColumn, "missing_count");
+                sheet.Columns.Add(column);
+            }
+        }
+
+        private static void LoadPreview(DashboardSheetInfo sheet, Dictionary<string, object> rawSheet)
+        {
+            object value;
+            if (!rawSheet.TryGetValue("preview", out value))
+            {
+                return;
+            }
+            object[] rows = value as object[];
+            if (rows == null)
+            {
+                return;
+            }
+            foreach (object rowObj in rows)
+            {
+                Dictionary<string, object> rawRow = rowObj as Dictionary<string, object>;
+                if (rawRow != null)
+                {
+                    sheet.Preview.Add(rawRow);
+                }
+            }
+        }
+
+        private static string GetString(Dictionary<string, object> values, string key)
+        {
+            object value;
+            return values.TryGetValue(key, out value) && value != null ? Convert.ToString(value) : "";
+        }
+
+        private static int GetInt(Dictionary<string, object> values, string key)
+        {
+            object value;
+            if (!values.TryGetValue(key, out value) || value == null)
+            {
+                return 0;
+            }
+            try
+            {
+                return Convert.ToInt32(value);
+            }
+            catch
+            {
+                return 0;
+            }
+        }
+    }
+
+    internal sealed class DashboardSheetInfo
+    {
+        public string Name = "";
+        public readonly List<DashboardColumnInfo> Columns = new List<DashboardColumnInfo>();
+        public readonly List<Dictionary<string, object>> Preview = new List<Dictionary<string, object>>();
+    }
+
+    internal sealed class DashboardColumnInfo
+    {
+        public string Name = "";
+        public string InferredType = "";
+        public string Sample = "";
+        public int MissingCount;
     }
 
     internal static class AutomationRunner

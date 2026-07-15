@@ -30,6 +30,8 @@ Excel 집계표
 - HWPX/PPTX 템플릿 선택, 검사, 자동 보정
 - Excel 산출 실행
 - 문장 초안 TXT 미리보기와 문장별 검토
+- 기업/기관 대시보드 PPT용 원자료 Excel 선택, sheet/기관/열 선택, KPI/차트 슬롯 매핑
+- 기업/기관 대시보드 PPT용 디자인 프리셋과 폰트 선택
 - `report_package.json`, `preflight_report.json` 생성 결과 표시
 
 주요 문서:
@@ -81,6 +83,8 @@ Python 기반 보조 엔진입니다.
 - `excel_report_generator.py`: 문장 초안 TXT 생성
 - `report_package.py`: Excel 산출 시트를 중간 JSON 계약으로 변환하고 preflight 수행
 - `document_writer.py`: `report_package.json` 기반 PPTX 초본 생성 시작점
+- `dashboard_package.py`: 기업/기관 가로형 원자료를 대시보드 JSON 계약으로 변환하고 preflight 수행
+- `dashboard_writer.py`: 대시보드 JSON 계약을 세로형 A4/B5 PPTX로 생성
 - `template_inspector.py`: HWPX/PPTX 템플릿 placeholder 검사
 - `template_factory.py`: 기본 HWPX/PPTX 템플릿 생성
 - `template_autofix.py`: 원본 보존 방식의 템플릿 자동 보정
@@ -113,6 +117,9 @@ Python 기반 보조 엔진입니다.
 - 문서 생성 준비 상태 표시
 - CLI 기반 PPTX 보고서/차트 검토 초본 생성
 - PowerPoint 편집 가능한 차트 객체 생성
+- 기업/기관 세로형 A4/B5 대시보드 PPTX 생성
+- 대시보드 PPTX 디자인 프리셋 3종: 모던 블루, 모던 민트, 그래파이트
+- 대시보드 PPTX 하단 인포그래픽 일러스트 자동 삽입
 
 ## 아직 개발 중인 기능
 
@@ -195,6 +202,24 @@ HWPX/PPTX writer가 직접 읽을 중간 데이터 계약입니다.
 ```
 
 `RA_`로 시작하는 shape 이름은 자동화용 식별자로 취급합니다.
+
+### 대시보드 PPTX 작업 템플릿
+
+기업/기관 대시보드 PPTX는 사용자가 편집한 첫 슬라이드의 `RA_DASH_*` shape 위치와 글꼴을 재사용할 수 있습니다. KPI는 항목명과 값을 반드시 별도 텍스트 상자로 두는 것을 권장합니다.
+
+```text
+RA_DASH_KPI_1_LABEL
+RA_DASH_KPI_1_VALUE
+...
+RA_DASH_KPI_6_LABEL
+RA_DASH_KPI_6_VALUE
+RA_DASH_NARRATIVE_TEXT
+RA_DASH_CHART_1_TITLE
+...
+RA_DASH_CHART_4_TITLE
+```
+
+위 이름이 없으면 카드 내부 텍스트 상자를 추정해 사용하지만, 생성된 결과물에서는 항목명과 값이 다시 분리된 텍스트 상자로 삽입됩니다.
 
 ## 실행 파일
 

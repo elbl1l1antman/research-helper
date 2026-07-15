@@ -165,6 +165,7 @@ def add_chart(slide, rows: List[Dict[str, Any]], left, top, width, height) -> No
     chart_data.add_series("값", [number(row.get("value")) or 0 for row in rows])
     chart_type = XL_CHART_TYPE.PIE if choose_chart_type(rows) == "pie" else XL_CHART_TYPE.COLUMN_CLUSTERED
     chart = slide.shapes.add_chart(chart_type, left, top, width, height, chart_data).chart
+    chart.has_title = False
     chart.has_legend = chart_type == XL_CHART_TYPE.PIE
     if chart.has_legend:
         chart.legend.position = XL_LEGEND_POSITION.RIGHT

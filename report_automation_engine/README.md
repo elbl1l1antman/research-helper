@@ -23,6 +23,16 @@
   - `report_package.json`을 읽어 PPTX 초본을 생성합니다.
   - PowerPoint에서 편집 가능한 차트 객체와 표 객체를 생성합니다.
 
+- `dashboard_package.py`
+  - 기관/기업 1행, 지표 여러 열의 가로형 Excel 원자료를 읽어 `dashboard_package.json`과 `dashboard_preflight_report.json`을 생성합니다.
+  - Excel 검사 모드에서는 sheet, 열, 예시값, 열 유형, 상위 30행 미리보기를 JSON으로 저장합니다.
+
+- `dashboard_writer.py`
+  - `dashboard_package.json`을 읽어 기업/기관별 세로형 A4/B5 대시보드 PPTX를 생성합니다.
+  - KPI 카드는 텍스트/도형, 차트는 PowerPoint에서 편집 가능한 chart object로 생성합니다.
+  - mapping의 `style_preset`과 `font_family`로 디자인 프리셋과 본문 폰트를 지정합니다.
+  - `--template`을 지정하면 사용자가 편집한 PPTX 첫 슬라이드의 `RA_DASH_*` 위치와 폰트를 재사용합니다.
+
 - `hwpx_report_writer.py`
   - HWPX 내부 XML을 읽어 표와 문단 흐름을 분석합니다.
   - 현재는 HWPX에 직접 삽입하기보다, 기존 HWPX 표 구조를 분석하고 문장 생성 로직을 검증하는 보조 도구로 봅니다.
@@ -123,6 +133,47 @@ python -m report_automation_engine.document_writer `
   --preflight "C:\path\preflight_report.json" `
   --type chart_review `
   --output "C:\path\chart_review_draft.pptx"
+```
+
+기업/기관 대시보드 PPTX는 원자료를 먼저 검사하고, 사용자가 선택한 데이터/매핑 JSON을 기준으로 생성합니다.
+
+대시보드 mapping JSON에서 사용할 수 있는 디자인 옵션:
+
+- `style_preset`: `modern_blue`, `modern_mint`, `graphite`
+- `font_family`: `Malgun Gothic`, `Noto Sans CJK KR`, `Arial` 등 PowerPoint에서 사용할 글꼴명
+
+대시보드 작업용 PPTX 템플릿을 직접 편집할 때는 항목명과 값을 한 텍스트 상자에 합치지 말고 별도 텍스트 상자로 둡니다.
+자동화는 다음 shape 이름을 우선 인식합니다.
+
+- KPI 항목명: `RA_DASH_KPI_1_LABEL` ~ `RA_DASH_KPI_6_LABEL`
+- KPI 값: `RA_DASH_KPI_1_VALUE` ~ `RA_DASH_KPI_6_VALUE`
+- 본문 요약: `RA_DASH_NARRATIVE_TEXT`
+- 차트 카드 제목: `RA_DASH_CHART_1_TITLE` ~ `RA_DASH_CHART_4_TITLE`
+
+기존 템플릿에 위 이름이 없으면 카드 내부의 텍스트 상자 위치를 추정해 사용하며, 생성 시에는 기존 카드 내부 텍스트를 제거한 뒤 항목/값을 분리된 텍스트 상자로 다시 삽입합니다.
+
+```powershell
+python -m report_automation_engine.dashboard_package `
+  --excel "C:\path\company_data.xlsx" `
+  --inspect-output "C:\path\dashboard_excel_inspect.json"
+```
+
+```powershell
+python -m report_automation_engine.dashboard_package `
+  --excel "C:\path\company_data.xlsx" `
+  --selection "C:\path\dashboard_data_selection.json" `
+  --mapping "C:\path\dashboard_mapping.json" `
+  --page-size A4 `
+  --package-output "C:\path\dashboard_package.json" `
+  --preflight-output "C:\path\dashboard_preflight_report.json"
+```
+
+```powershell
+python -m report_automation_engine.dashboard_writer `
+  --package "C:\path\dashboard_package.json" `
+  --preflight "C:\path\dashboard_preflight_report.json" `
+  --template "C:\path\dashboard_template.pptx" `
+  --output "C:\path\organization_dashboard.pptx"
 ```
 
 ## 코드리뷰 포인트
