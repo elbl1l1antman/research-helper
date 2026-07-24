@@ -8,9 +8,6 @@ Option Explicit
 ' 추가기능 버전. 산출 메타 시트와 로그 시트에 함께 기록해 결과 파일의 생성 기준을 추적한다.
 Public Const REPORT_AUTOMATION_VERSION As String = "0.1.0"
 
-' 사용자 통합문서 안에 생성하는 내부 로그 시트명. 일반 사용자에게는 보이지 않도록 VeryHidden 처리한다.
-Private Const REPORT_LOG_SHEET As String = "_ReportAutomation_Log"
-
 ' 단순 분포표(좁은 표)와 배너 교차표를 구분하는 열 수 기준값.
 Private Const SIMPLE_TABLE_MAX_COL As Long = 6
 
@@ -37,15 +34,6 @@ Private Const IDX_END_ROW    As Long = 6
 Private Const IDX_LAST_COL   As Long = 7
 Private Const IDX_TABLE_TYPE As Long = 8
 Private Const IDX_WARNING    As Long = 9
-
-' Application 상태를 일시 변경하기 전 원래 값을 저장하는 모듈 전역 변수들.
-' 오류가 발생해도 ReportAutomation_EndOperation에서 최대한 원복한다.
-Private mPrevScreenUpdating As Boolean
-Private mPrevEnableEvents As Boolean
-Private mPrevDisplayAlerts As Boolean
-Private mPrevCalculation As XlCalculation
-Private mPrevStatusBar As Variant
-Private mPrevEnableCancelKey As XlEnableCancelKey
 
 ' UserForm에서 전달한 1회성 실행 옵션. 설정 시트를 생성한 뒤 이 값으로 덮어쓴다.
 Private mHasOptionOverrides As Boolean
@@ -1599,17 +1587,6 @@ End Function
 ' 함수명 : ReportAutomation_CleanText
 ' 설  명 : 줄바꿈/비분리 공백/중복 공백을 정리한 단일 줄 텍스트를 반환한다.
 ' ============================================================
-Private Function ReportAutomation_CleanText(ByVal text As String) As String
-    text = Replace(text, ChrW(160), " ")
-    text = Replace(text, vbCr, " ")
-    text = Replace(text, vbLf, " ")
-    Do While InStr(1, text, "  ", vbBinaryCompare) > 0
-        text = Replace(text, "  ", " ")
-    Loop
-    ReportAutomation_CleanText = Trim$(text)
-End Function
-
-' ============================================================
 ' 함수명 : ReportAutomation_IsMultiResponse
 ' 설  명 : 제목/기준 문구에 복수응답을 시사하는 표현이 있는지 판정한다.
 ' ============================================================
@@ -1625,18 +1602,8 @@ End Function
 ' 함수명 : ReportAutomation_FormatPercent
 ' 설  명 : 비율 값을 보고서 기본 표기인 소수점 1자리 퍼센트로 변환한다.
 ' ============================================================
-Private Function ReportAutomation_FormatPercent(ByVal valueData As Double) As String
-    ReportAutomation_FormatPercent = Format(valueData, "0.0") & "%"
-End Function
-
-' ============================================================
 ' 함수명 : ReportAutomation_FormatScore
 ' 설  명 : 100점 환산 점수를 보고서 문장 표기인 소수점 1자리 점수로 변환한다.
-' ============================================================
-Private Function ReportAutomation_FormatScore(ByVal valueData As Double) As String
-    ReportAutomation_FormatScore = Format(valueData, "0.0") & "점"
-End Function
-
 ' ============================================================
 ' 함수명 : ReportAutomation_PointKind
 ' 설  명 : point 배열의 선택 확장 필드에서 값 유형을 읽는다. 기본값은 percent.
@@ -1679,75 +1646,18 @@ End Function
 ' 함수명 : ReportAutomation_Quoted
 ' 설  명 : 응답 항목명을 보고서 문장용 작은따옴표 표기로 감싼다.
 ' ============================================================
-Private Function ReportAutomation_Quoted(ByVal text As String) As String
-    ReportAutomation_Quoted = "'" & text & "'"
-End Function
-
-' ============================================================
 ' 함수명 : ReportAutomation_TopicParticle
 ' 설  명 : 앞 단어 받침 여부에 따라 보조사 "은/는"을 반환한다.
-' ============================================================
-Private Function ReportAutomation_TopicParticle(ByVal text As String) As String
-    ReportAutomation_TopicParticle = IIf(ReportAutomation_HasBatchim(text), "은", "는")
-End Function
-
 ' ============================================================
 ' 함수명 : ReportAutomation_ObjectParticle
 ' 설  명 : 앞 단어 받침 여부에 따라 목적격 조사 "을/를"을 반환한다.
 ' ============================================================
-Private Function ReportAutomation_ObjectParticle(ByVal text As String) As String
-    ReportAutomation_ObjectParticle = IIf(ReportAutomation_HasBatchim(text), "을", "를")
-End Function
-
-' ============================================================
 ' 함수명 : ReportAutomation_SubjectParticle
 ' 설  명 : 앞 단어 받침 여부에 따라 주격 조사 "이/가"를 반환한다.
-' ============================================================
-Private Function ReportAutomation_SubjectParticle(ByVal text As String) As String
-    ReportAutomation_SubjectParticle = IIf(ReportAutomation_HasBatchim(text), "이", "가")
-End Function
-
 ' ============================================================
 ' 함수명 : ReportAutomation_HasBatchim
 ' 설  명 : 문자열 마지막 의미 문자에 한글 받침이 있는지 판정한다.
 ' 보  조 : 숫자/영문 끝 글자도 자연스러운 조사 선택을 위해 간단히 처리한다.
-' ============================================================
-Private Function ReportAutomation_HasBatchim(ByVal text As String) As Boolean
-    Dim cleaned As String
-    cleaned = ReportAutomation_CleanText(text)
-    If Right$(cleaned, 1) = ")" Then
-        Dim parenPos As Long
-        parenPos = InStrRev(cleaned, "(")
-        If parenPos > 1 Then cleaned = Trim$(Left$(cleaned, parenPos - 1))
-    End If
-    Do While Len(cleaned) > 0 And InStr(1, "'""”)]} ", Right$(cleaned, 1), vbBinaryCompare) > 0
-        cleaned = Left$(cleaned, Len(cleaned) - 1)
-    Loop
-    If Len(cleaned) = 0 Then Exit Function
-
-    Dim ch As String
-    ch = Right$(cleaned, 1)
-
-    ' 숫자는 한국어로 읽었을 때 받침이 있는 숫자만 받침 있음으로 본다.
-    If ch Like "#" Then
-        ReportAutomation_HasBatchim = (InStr(1, "013678", ch, vbBinaryCompare) > 0)
-        Exit Function
-    End If
-
-    ' AscW가 음수로 반환되는 환경을 고려해 0~65535 범위로 보정한다.
-    Dim code As Long
-    code = AscW(ch)
-    If code < 0 Then code = code + 65536
-
-    ' 한글 완성형 음절은 (코드-가) Mod 28 값으로 받침 유무를 판정한다.
-    If code >= 44032 And code <= 55203 Then
-        ReportAutomation_HasBatchim = (((code - 44032) Mod 28) <> 0)
-    Else
-        ch = LCase$(ch)
-        ReportAutomation_HasBatchim = (InStr(1, "bcklmnpst", ch, vbBinaryCompare) > 0)
-    End If
-End Function
-
 ' ============================================================
 ' 프로시저 : ReportAutomation_WriteSourceSheet
 ' 설  명  : 보고서에 사용할 출처 관리용 기본 시트를 생성한다.
@@ -1817,88 +1727,21 @@ End Sub
 ' 설  명  : 산출 시트 헤더 행에 공통 서식을 적용한다.
 ' 범  위  : 굵게, 연한 파랑 배경, 기본 테두리
 ' ============================================================
-Private Sub ReportAutomation_StyleHeader(ByVal targetRange As Range)
-    With targetRange
-        .Font.Bold = True
-        .Interior.Color = RGB(221, 235, 247)
-        .Borders.LineStyle = xlContinuous
-    End With
-End Sub
-
-' ============================================================
 ' 함수명 : ReportAutomation_UniqueSheetName
 ' 설  명 : Excel의 31자 제한을 지키면서 중복 없는 산출 시트명을 만든다.
 ' 방식   : baseName_mmdd_hhnn 형식, 중복 시 뒤에 _2, _3 추가
-' ============================================================
-Private Function ReportAutomation_UniqueSheetName(ByVal wb As Workbook, ByVal baseName As String) As String
-    Dim name As String
-    name = Left$(baseName & "_" & Format(Now, "mmdd_hhnn"), 31)
-    Dim candidate As String
-    candidate = name
-
-    Dim n As Long
-    n = 1
-    Do While ReportAutomation_WorksheetExists(wb, candidate)
-        n = n + 1
-        Dim sfx As String: sfx = "_" & n
-        candidate = Left$(name, 31 - Len(sfx)) & sfx
-    Loop
-    ReportAutomation_UniqueSheetName = candidate
-End Function
-
 ' ============================================================
 ' 함수명 : ReportAutomation_FindLatestOutputSheet
 ' 설  명 : 특정 접두어로 시작하는 산출 시트 중 통합문서에서 가장 뒤에 있는 시트를 찾는다.
 ' 용  도 : 이전 실행의 설정 시트를 읽어 사용자가 편집한 옵션을 다음 실행에 승계한다.
 ' ============================================================
-Private Function ReportAutomation_FindLatestOutputSheet(ByVal wb As Workbook, ByVal baseName As String) As Worksheet
-    Dim ws As Worksheet
-    For Each ws In wb.Worksheets
-        If Left$(ws.Name, Len(baseName)) = baseName Then
-            Set ReportAutomation_FindLatestOutputSheet = ws
-        End If
-    Next ws
-End Function
-
-' ============================================================
 ' 함수명 : ReportAutomation_SettingValue
 ' 설  명 : 이전 설정 시트에서 동일 라벨 값을 찾아 반환하고, 없으면 기본값을 반환한다.
 ' 주  의 : 원본 통합문서/시트명처럼 실행마다 달라지는 값은 호출부에서 별도로 고정한다.
 ' ============================================================
-Private Function ReportAutomation_SettingValue(ByVal labelText As String, ByVal defaultValue As Variant, ByVal priorSettingsWs As Worksheet) As Variant
-    If priorSettingsWs Is Nothing Then
-        ReportAutomation_SettingValue = defaultValue
-        Exit Function
-    End If
-
-    Dim r As Long
-    For r = 3 To priorSettingsWs.Cells(priorSettingsWs.Rows.Count, 1).End(xlUp).Row
-        If Trim$(CStr(priorSettingsWs.Cells(r, 1).Value)) = labelText Then
-            ReportAutomation_SettingValue = priorSettingsWs.Cells(r, 2).Value
-            Exit Function
-        End If
-    Next r
-
-    ReportAutomation_SettingValue = defaultValue
-End Function
-
-' ============================================================
 ' 프로시저 : ReportAutomation_SetSettingValue
 ' 설  명  : 설정 시트에서 라벨을 찾아 값을 갱신한다.
 ' 용  도  : UserForm에서 입력받은 값을 생성 직후 설정 시트에 반영한다.
-' ============================================================
-Private Sub ReportAutomation_SetSettingValue(ByVal ws As Worksheet, ByVal labelText As String, ByVal valueText As String)
-    If ws Is Nothing Then Exit Sub
-
-    Dim r As Long
-    For r = 3 To ws.Cells(ws.Rows.Count, 1).End(xlUp).Row
-        If Trim$(CStr(ws.Cells(r, 1).Value)) = labelText Then
-            ws.Cells(r, 2).Value = valueText
-            Exit Sub
-        End If
-    Next r
-End Sub
-
 ' ============================================================
 ' 프로시저 : ReportAutomation_ClearOptionOverrides
 ' 설  명  : UserForm에서 넘긴 1회성 override 값을 초기화한다.
@@ -1914,158 +1757,30 @@ End Sub
 ' 설  명 : 셀의 표시 텍스트를 읽되, 병합셀인 경우 병합 영역의 좌상단 값을 반환한다.
 ' 용  도 : 배너 교차표의 병합 헤더를 모든 소속 열에서 동일하게 인식한다.
 ' ============================================================
-Private Function ReportAutomation_CellText(ByVal ws As Worksheet, ByVal rowIndex As Long, ByVal colIndex As Long) As String
-    Dim cell As Range
-    Set cell = ws.Cells(rowIndex, colIndex)
-
-    If cell.MergeCells Then
-        ReportAutomation_CellText = Trim$(CStr(cell.MergeArea.Cells(1, 1).Value))
-    Else
-        ReportAutomation_CellText = Trim$(CStr(cell.Value))
-    End If
-End Function
-
-' ============================================================
 ' 함수명 : ReportAutomation_WorksheetExists
 ' 설  명 : 통합문서에 특정 이름의 워크시트가 있는지 확인한다.
-' ============================================================
-Private Function ReportAutomation_WorksheetExists(ByVal wb As Workbook, ByVal sheetName As String) As Boolean
-    Dim ws As Worksheet
-    On Error Resume Next
-    Set ws = wb.Worksheets(sheetName)
-    On Error GoTo 0
-    ReportAutomation_WorksheetExists = Not ws Is Nothing
-End Function
-
 ' ============================================================
 ' 프로시저 : ReportAutomation_BeginOperation
 ' 설  명  : 긴 작업 전 Excel 상태를 저장하고 화면갱신/이벤트/계산을 잠시 끈다.
 ' 효과    : 대형 집계표 처리 속도 개선 및 중간 이벤트 충돌 방지
 ' ============================================================
-Private Sub ReportAutomation_BeginOperation(ByVal statusText As String)
-    On Error Resume Next
-    mPrevScreenUpdating = Application.ScreenUpdating
-    mPrevEnableEvents = Application.EnableEvents
-    mPrevDisplayAlerts = Application.DisplayAlerts
-    mPrevCalculation = Application.Calculation
-    mPrevStatusBar = Application.StatusBar
-
-    mPrevEnableCancelKey = Application.EnableCancelKey
-    ' 수천 행 집계표에서 시트 생성/서식 적용을 반복하므로 성능 옵션을 임시로 낮춘다.
-    Application.ScreenUpdating = False
-    Application.EnableEvents = False
-    Application.DisplayAlerts = False
-    Application.Calculation = xlCalculationManual
-    Application.EnableCancelKey = xlErrorHandler
-    Application.StatusBar = statusText
-    On Error GoTo 0
-End Sub
-
-' ============================================================
 ' 프로시저 : ReportAutomation_EndOperation
 ' 설  명  : BeginOperation에서 바꾼 Excel Application 상태를 원래대로 복원한다.
 ' 주  의  : 오류 처리 경로에서도 호출되므로 On Error Resume Next로 최대한 복구한다.
 ' ============================================================
-Private Sub ReportAutomation_EndOperation()
-    On Error Resume Next
-    Application.ScreenUpdating = mPrevScreenUpdating
-    Application.EnableEvents = mPrevEnableEvents
-    Application.DisplayAlerts = mPrevDisplayAlerts
-    Application.Calculation = mPrevCalculation
-    Application.EnableCancelKey = mPrevEnableCancelKey
-    Application.StatusBar = mPrevStatusBar
-    On Error GoTo 0
-End Sub
-
-' ============================================================
 ' 프로시저 : ReportAutomation_LogEvent
 ' 설  명  : 사용자 통합문서 내부 로그 시트에 실행 결과를 남긴다.
 ' 주  의  : 로그 시트는 VeryHidden 처리해 사용자의 보고서 시트 목록을 방해하지 않는다.
-' ============================================================
-Private Sub ReportAutomation_LogEvent(ByVal wb As Workbook, ByVal actionName As String, ByVal targetName As String, ByVal statusText As String, ByVal detailText As String)
-    If wb Is Nothing Then Exit Sub
-
-    Dim ws As Worksheet
-    On Error Resume Next
-    Set ws = wb.Worksheets(REPORT_LOG_SHEET)
-    On Error GoTo 0
-
-    If ws Is Nothing Then
-        ' 최초 실행 시에만 로그 시트를 만들고 헤더를 구성한다.
-        Set ws = wb.Worksheets.Add(After:=wb.Worksheets(wb.Worksheets.Count))
-        ws.Name = REPORT_LOG_SHEET
-        ws.Range("A1:F1").Value = Array("logged_at", "version", "action", "target", "status", "detail")
-        ReportAutomation_StyleHeader ws.Range("A1:F1")
-        ws.Visible = xlSheetVeryHidden
-    End If
-
-    ' 로그는 append-only로 누적해 반복 실행/오류 이력을 보존한다.
-    Dim nextRow As Long
-    nextRow = ws.Cells(ws.Rows.Count, 1).End(xlUp).Row + 1
-    ws.Cells(nextRow, 1).Value = Format(Now, "yyyy-mm-dd hh:nn:ss")
-    ws.Cells(nextRow, 2).Value = REPORT_AUTOMATION_VERSION
-    ws.Cells(nextRow, 3).Value = actionName
-    ws.Cells(nextRow, 4).Value = targetName
-    ws.Cells(nextRow, 5).Value = statusText
-    ws.Cells(nextRow, 6).Value = detailText
-End Sub
-
 ' ============================================================
 ' 함수명 : ReportAutomation_ReadBannerSetting
 ' 설  명 : 설정 시트의 "추출 배너 목록" 항목을 읽는다.
 ' 반환값 : 쉼표 구분 배너 목록 문자열. 항목이 없으면 "전체" 반환.
 ' 예  시 : "전체" / "전체,성별" / "전체,성별,연령대"
 ' ============================================================
-Private Function ReportAutomation_ReadBannerSetting(ByVal ws As Worksheet) As String
-    If ws Is Nothing Then
-        ReportAutomation_ReadBannerSetting = "전체"
-        Exit Function
-    End If
-
-    Dim r As Long
-    For r = 3 To ws.Cells(ws.Rows.Count, 1).End(xlUp).Row
-        If Trim$(CStr(ws.Cells(r, 1).Value)) = "추출 배너 목록" Then
-            Dim val As String
-            val = Trim$(CStr(ws.Cells(r, 2).Value))
-            ReportAutomation_ReadBannerSetting = IIf(Len(val) > 0, val, "전체")
-            Exit Function
-        End If
-    Next r
-    ReportAutomation_ReadBannerSetting = "전체"
-End Function
-
-' ============================================================
 ' 함수명 : ReportAutomation_ReadTitlePrefixes
 ' 설  명 : 설정 시트의 "제목 제거 접두어" 항목을 읽어 배열로 반환한다.
 ' 반환값 : 쉼표로 분리된 접두어 문자열 배열. 항목 없으면 빈 배열.
 ' 사용법 : 설정 시트 B열에 쉼표 구분으로 입력 (예: 사업체 특성별,응답자 특성별)
-' ============================================================
-Private Function ReportAutomation_ReadTitlePrefixes(ByVal ws As Worksheet) As String()
-    Dim defaultArr() As String
-    ReDim defaultArr(0 To 0)
-    defaultArr(0) = ""
-
-    If ws Is Nothing Then
-        ReportAutomation_ReadTitlePrefixes = defaultArr
-        Exit Function
-    End If
-
-    Dim r As Long
-    For r = 3 To ws.Cells(ws.Rows.Count, 1).End(xlUp).Row
-        If Trim$(CStr(ws.Cells(r, 1).Value)) = "제목 제거 접두어" Then
-            Dim val As String
-            val = Trim$(CStr(ws.Cells(r, 2).Value))
-            If Len(val) = 0 Then
-                ReportAutomation_ReadTitlePrefixes = defaultArr
-            Else
-                ReportAutomation_ReadTitlePrefixes = Split(val, ",")
-            End If
-            Exit Function
-        End If
-    Next r
-    ReportAutomation_ReadTitlePrefixes = defaultArr
-End Function
-
 ' ============================================================
 ' 함수명 : ReportAutomation_FindBannerGroups
 ' 설  명 : 배너 교차표 헤더 영역을 스캔해 배너 그룹명과 소속 % 열을 매핑한다.
@@ -2142,39 +1857,9 @@ End Function
 ' 함수명 : ReportAutomation_CollectionToArray
 ' 설  명 : Long 값만 들어있는 Collection을 Variant 배열로 변환한다.
 ' ============================================================
-Private Function ReportAutomation_CollectionToArray(ByVal col As Collection) As Variant
-    If col.Count = 0 Then
-        ReportAutomation_CollectionToArray = Array()
-        Exit Function
-    End If
-    Dim arr() As Variant
-    ReDim arr(0 To col.Count - 1)
-    Dim i As Long
-    For i = 1 To col.Count
-        arr(i - 1) = col(i)
-    Next i
-    ReportAutomation_CollectionToArray = arr
-End Function
-
-' ============================================================
 ' 프로시저 : ReportAutomation_SortArrayDescending
 ' 설  명  : Array 안의 Array 레코드를 특정 숫자 인덱스 기준으로 내림차순 정렬한다.
 ' 용  도  : 배너별 차트 데이터를 원본 행 순서가 아니라 값이 큰 순서로 기록한다.
-' ============================================================
-Private Sub ReportAutomation_SortArrayDescending(ByRef arr As Variant, ByVal valueIndex As Long)
-    Dim i As Long, j As Long
-    For i = LBound(arr) To UBound(arr) - 1
-        For j = i + 1 To UBound(arr)
-            If CDbl(arr(j)(valueIndex)) > CDbl(arr(i)(valueIndex)) Then
-                Dim temp As Variant
-                temp = arr(i)
-                arr(i) = arr(j)
-                arr(j) = temp
-            End If
-        Next j
-    Next i
-End Sub
-
 ' ============================================================
 ' 프로시저 : ReportAutomation_AppendBannerChartRows
 ' 설  명  : 사용자가 선택한 배너 그룹의 데이터를 차트 시트에 추가 기록한다.

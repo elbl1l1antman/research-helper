@@ -13,16 +13,27 @@ if (-not $OutputDir) {
 }
 
 if (-not $ModulePath) {
-    $ModulePath = Join-Path $ProjectRoot "src\ReportAutomationAddin.bas"
+    $ModulePath = Join-Path $ProjectRoot "src"
 }
 
 if (-not (Test-Path -LiteralPath $ModulePath)) {
-    throw "VBA module not found: $ModulePath"
+    throw "VBA module path not found: $ModulePath"
 }
 
 New-Item -ItemType Directory -Force -Path $OutputDir | Out-Null
 
-$ModuleText = Get-Content -Raw -Encoding UTF8 -Path $ModulePath
+$ModuleFiles = @()
+if ((Get-Item -LiteralPath $ModulePath).PSIsContainer) {
+    $ModuleFiles = Get-ChildItem -LiteralPath $ModulePath -Filter "*.bas" | Sort-Object Name
+} else {
+    $ModuleFiles = @(Get-Item -LiteralPath $ModulePath)
+}
+
+if ($ModuleFiles.Count -eq 0) {
+    throw "No VBA .bas modules found: $ModulePath"
+}
+
+$ModuleText = ($ModuleFiles | ForEach-Object { Get-Content -Raw -Encoding UTF8 -Path $_.FullName }) -join "`n"
 $Version = "unknown"
 if ($ModuleText -match 'REPORT_AUTOMATION_VERSION\s+As\s+String\s*=\s*"([^"]+)"') {
     $Version = $Matches[1]
@@ -30,12 +41,16 @@ if ($ModuleText -match 'REPORT_AUTOMATION_VERSION\s+As\s+String\s*=\s*"([^"]+)"'
 
 $WorkbookPath = Join-Path $OutputDir "ReportAutomationAddin_dev.xlsm"
 $AddinPath = Join-Path $OutputDir "ReportAutomationAddin_dev.xlam"
-$ImportModulePath = Join-Path $OutputDir "_tmp_ReportAutomationAddin_cp949.bas"
+$ImportModulePaths = New-Object System.Collections.Generic.List[string]
 $TempWorkbookPath = Join-Path $OutputDir "_tmp_ReportAutomationAddin_dev.xlsm"
 $TempAddinPath = Join-Path $OutputDir "_tmp_ReportAutomationAddin_dev.xlam"
 
 $cp949 = [System.Text.Encoding]::GetEncoding(949)
-[System.IO.File]::WriteAllText($ImportModulePath, $ModuleText, $cp949)
+foreach ($moduleFile in $ModuleFiles) {
+    $importPath = Join-Path $OutputDir ("_tmp_" + $moduleFile.BaseName + "_cp949.bas")
+    [System.IO.File]::WriteAllText($importPath, (Get-Content -Raw -Encoding UTF8 -Path $moduleFile.FullName), $cp949)
+    $ImportModulePaths.Add($importPath) | Out-Null
+}
 
 function Add-ReportAutomationOptionsForm {
     param($Workbook)
@@ -182,23 +197,27 @@ try {
     $sheet.Range("A8").Value = "ReportAutomation_About"
     $sheet.Columns("A:B").AutoFit()
 
-    $importedModule = $workbook.VBProject.VBComponents.Import($ImportModulePath)
-    $sheet.Range("B4").Value = "VBA module imported"
-    $sheet.Range("A5").Value = "VBA module"
-    $sheet.Range("B5").Value = $importedModule.Name
+    $importedNames = New-Object System.Collections.Generic.List[string]
+    foreach ($importPath in $ImportModulePaths) {
+        $importedModule = $workbook.VBProject.VBComponents.Import($importPath)
+        $importedNames.Add($importedModule.Name) | Out-Null
+    }
+    $sheet.Range("B4").Value = "VBA modules imported"
+    $sheet.Range("A5").Value = "VBA modules"
+    $sheet.Range("B5").Value = ($importedNames -join ", ")
     Add-ReportAutomationOptionsForm $workbook
 
     if (Test-Path -LiteralPath $TempWorkbookPath) { Remove-Item -LiteralPath $TempWorkbookPath -Force }
     if (Test-Path -LiteralPath $TempAddinPath) { Remove-Item -LiteralPath $TempAddinPath -Force }
 
-    $workbook.SaveAs($TempWorkbookPath, 52)
+    $workbook.SaveAs($TempWorkbookPath, 52) | Out-Null
     Copy-Item -LiteralPath $TempWorkbookPath -Destination $WorkbookPath -Force
 
-    $workbook.IsAddin = $true
-    $workbook.SaveAs($TempAddinPath, 55)
+    [void]($workbook.IsAddin = $true)
+    $workbook.SaveAs($TempAddinPath, 55) | Out-Null
     Copy-Item -LiteralPath $TempAddinPath -Destination $AddinPath -Force
 
-    $workbook.Close($false)
+    $workbook.Close($false) | Out-Null
     $workbook = $null
 
     Write-Output "Created workbook: $WorkbookPath"
@@ -208,7 +227,7 @@ finally {
     if ($null -ne $workbook) {
         try { $workbook.Close($false) | Out-Null } catch {}
     }
-    foreach ($path in @($ImportModulePath, $TempWorkbookPath, $TempAddinPath)) {
+    foreach ($path in @($ImportModulePaths.ToArray() + @($TempWorkbookPath, $TempAddinPath))) {
         if (Test-Path -LiteralPath $path) {
             try { Remove-Item -LiteralPath $path -Force } catch {}
         }
