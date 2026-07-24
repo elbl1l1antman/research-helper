@@ -36,6 +36,10 @@
   - 사용자가 직접 열어볼 수 있는 한 장짜리 HWPX 데모 보고서를 생성합니다.
   - fake survey package를 만들고, HWPX 템플릿 생성부터 writer 실행과 미리보기 TXT 생성까지 한 번에 수행합니다.
 
+- `hwp_template_probe.py`
+  - HWP/HWPX 보고서틀을 분석해 표 객체, 주변 문단, 결과표 후보를 JSON으로 추출합니다.
+  - HWP 원본은 수정하지 않고 아래한글 COM으로 HWPX 사본을 만든 뒤 분석합니다.
+
 - `dashboard_package.py`
   - 기관/기업 1행, 지표 여러 열의 가로형 Excel 원자료를 읽어 `dashboard_package.json`과 `dashboard_preflight_report.json`을 생성합니다.
   - Excel 검사 모드에서는 sheet, 열, 예시값, 열 유형, 상위 30행 미리보기를 JSON으로 저장합니다.
@@ -194,6 +198,17 @@ python -m report_automation_engine.hwp_com_demo `
 ```
 
 성공하면 `demo_hwp_report.hwpx`를 아래한글에서 열어 확인할 수 있습니다. 함께 생성되는 `demo_preview.txt`는 HWPX 내부에 삽입된 주요 텍스트만 빠르게 확인하기 위한 파일입니다.
+
+HWP/HWPX 보고서틀의 표 구조를 분석할 때는 다음 명령을 사용합니다.
+
+```powershell
+python -m report_automation_engine.hwp_template_probe `
+  --output-dir "outputs\hwp_template_probe" `
+  "C:\path\report_template.hwpx" `
+  "C:\path\legacy_template.hwp"
+```
+
+성공하면 `hwp_template_probe_report.json`과 `hwp_template_probe_summary.json`을 기준으로 템플릿 안의 결과표 후보, 목차/표지용 레이아웃 표, 그림/표 캡션 후보를 검토할 수 있습니다.
 
 기업/기관 대시보드 PPTX는 원자료를 먼저 검사하고, 사용자가 선택한 데이터/매핑 JSON을 기준으로 생성합니다.
 

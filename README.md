@@ -1,6 +1,6 @@
 # ReportAutomation
 
-Current version: `0.0.3`
+Current version: `0.0.11`
 
 `ReportAutomation`은 엑셀 집계표를 기반으로 조사 보고서 작성용 산출물을 자동 생성하는 런처 기반 프로젝트입니다.
 
@@ -86,6 +86,7 @@ Python 기반 보조 엔진입니다.
 - `dashboard_package.py`: 기업/기관 가로형 원자료를 대시보드 JSON 계약으로 변환하고 preflight 수행
 - `dashboard_writer.py`: 대시보드 JSON 계약을 세로형 A4/B5 PPTX로 생성
 - `hwp_com_writer.py`: 아래한글 COM으로 HWPX 템플릿 사본에 본문/표 초본 생성
+- `hwp_template_probe.py`: HWP/HWPX 보고서틀의 표 구조와 결과표 후보 분석
 - `template_inspector.py`: HWPX/PPTX 템플릿 placeholder 검사
 - `template_factory.py`: 기본 HWPX/PPTX 템플릿 생성
 - `template_autofix.py`: 원본 보존 방식의 템플릿 자동 보정
@@ -133,10 +134,12 @@ Python 기반 보조 엔진입니다.
 - 런처에서 PPTX 보고서 직접 생성
 - 런처에서 차트 검토 PPTX 직접 생성
 - HWP 바이너리 직접 편집
+- HWPX 템플릿의 반복 결과 블록을 인식해 실제 보고서 표 서식을 복제한 삽입
 - HWPX 템플릿에 차트를 EMF/한글 차트 객체로 자동 삽입
 - PPTX 템플릿 디자인을 보존한 placeholder 기반 정밀 치환
 
 다음 개발 계획은 `report_automation_launcher/NEXT_DOCUMENT_OUTPUT_PLAN.md`를 기준으로 진행합니다.
+HWP/HWPX 보고서틀의 실제 표 삽입 구조는 `docs/hwp_template_table_insertion_plan.md`를 기준으로 진행합니다.
 
 ## 핵심 산출물
 
