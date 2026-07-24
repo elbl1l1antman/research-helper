@@ -85,6 +85,7 @@ Python 기반 보조 엔진입니다.
 - `document_writer.py`: `report_package.json` 기반 PPTX 초본 생성 시작점
 - `dashboard_package.py`: 기업/기관 가로형 원자료를 대시보드 JSON 계약으로 변환하고 preflight 수행
 - `dashboard_writer.py`: 대시보드 JSON 계약을 세로형 A4/B5 PPTX로 생성
+- `hwp_com_writer.py`: 아래한글 COM으로 HWPX 템플릿 사본에 본문/표 초본 생성
 - `template_inspector.py`: HWPX/PPTX 템플릿 placeholder 검사
 - `template_factory.py`: 기본 HWPX/PPTX 템플릿 생성
 - `template_autofix.py`: 원본 보존 방식의 템플릿 자동 보정
@@ -120,16 +121,19 @@ Python 기반 보조 엔진입니다.
 - 기업/기관 세로형 A4/B5 대시보드 PPTX 생성
 - 대시보드 PPTX 디자인 프리셋 3종: 모던 블루, 모던 민트, 그래파이트
 - 대시보드 PPTX 하단 인포그래픽 일러스트 자동 삽입
+- 아래한글 COM 기반 HWPX 초본 생성
+  - Windows + 아래한글 설치 + `pywin32` 환경에서 동작
+  - 원본 템플릿을 보존하고 출력 경로에 사본 저장
+  - `{{BODY}}` 위치에 제목, 분석문, 표, 출처를 반복 삽입
 
 ## 아직 개발 중인 기능
 
 다음 기능은 계획과 기반 작업은 있으나, 현재 알파에서 완성 기능으로 열지 않습니다.
 
-- HWPX 보고서 직접 생성
 - 런처에서 PPTX 보고서 직접 생성
 - 런처에서 차트 검토 PPTX 직접 생성
 - HWP 바이너리 직접 편집
-- HWPX 템플릿에 본문, 표, 차트를 완전 자동 삽입
+- HWPX 템플릿에 차트를 EMF/한글 차트 객체로 자동 삽입
 - PPTX 템플릿 디자인을 보존한 placeholder 기반 정밀 치환
 
 다음 개발 계획은 `report_automation_launcher/NEXT_DOCUMENT_OUTPUT_PLAN.md`를 기준으로 진행합니다.
@@ -274,6 +278,25 @@ python -m report_automation_engine.document_writer `
   --output "C:\path\chart_review_draft.pptx"
 ```
 
+HWPX 초본 생성:
+
+```powershell
+python -m report_automation_engine.hwp_com_writer `
+  --package "C:\path\report_package.json" `
+  --preflight "C:\path\preflight_report.json" `
+  --template "C:\path\report_template.hwpx" `
+  --output "C:\path\report_draft.hwpx" `
+  --visible false
+```
+
+HWPX writer는 아래한글 COM을 사용하므로 Windows와 아래한글 설치가 필요합니다. 실패 시 출력 파일 옆 또는 `--report-output` 경로에 `hwp_writer_report.json`을 남깁니다.
+
+Python 의존성 설치 예:
+
+```powershell
+python -m pip install -r requirements.txt
+```
+
 ## 버전 관리
 
 현재 버전은 `VERSION` 파일에 기록합니다.
@@ -304,6 +327,10 @@ python -m report_automation_engine.document_writer `
 
 이 라이선스는 OSI 기준 오픈소스 라이선스가 아니라 source-available 성격의 제한 라이선스입니다.
 
+### 외부 HWP/HWPX 도구 검토
+
+`edwardkim/rhwp`는 장기적으로 HWP/HWPX 구조 분석과 대체 writer 후보로 검토합니다. 현재 저장소에는 rhwp 코드를 포함하지 않습니다. 향후 clone, submodule, vendoring, WASM/npm 의존성으로 포함할 경우 MIT 라이선스 고지와 제3자 라이선스 문서를 별도로 추가해야 하며, rhwp의 MIT 권리와 이 프로젝트의 custom license를 분리 표기해야 합니다.
+
 ## 개발 방향
 
 현재 안정화 우선순위:
@@ -311,6 +338,6 @@ python -m report_automation_engine.document_writer `
 1. Excel 산출 시트 안정화
 2. `report_package.json` 계약 안정화
 3. `preflight_report.json` 차단/경고 정확도 개선
-4. 차트 검토 PPTX writer
-5. PPTX 보고서 writer
-6. HWPX 보고서 writer
+4. HWPX COM writer 안정화
+5. 차트 검토 PPTX writer
+6. PPTX 보고서 writer

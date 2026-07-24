@@ -1,0 +1,4 @@
+openpyxl
+python-pptx
+Pillow
+pywin32; platform_system == "Windows"

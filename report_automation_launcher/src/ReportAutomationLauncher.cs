@@ -118,6 +118,8 @@ namespace ReportAutomationLauncher
         private readonly Button autoFixTemplateButton = new Button();
         private readonly Button openTemplateGuideButton = new Button();
         private readonly Label templateStatusLabel = new Label();
+        private readonly CheckBox hwpVisibleCheck = new CheckBox();
+        private readonly CheckBox hwpKeepOpenOnErrorCheck = new CheckBox();
         private readonly TextBox bannerText = new TextBox();
         private readonly CheckedListBox bannerList = new CheckedListBox();
         private readonly TabControl workflowTabs = new TabControl();
@@ -375,7 +377,7 @@ namespace ReportAutomationLauncher
             int tableCount = tablePreviewList.Items.Count;
             int checkedBanners = CountCheckedBanners();
             bool bannerPreviewReady = bannerList.Items.Count > 0;
-            bool outputReady = outputTypeCombo.SelectedIndex >= 0 && outputTypeCombo.Text.StartsWith("Excel", StringComparison.OrdinalIgnoreCase);
+            bool outputReady = IsOutputReadyForSelectedOutput();
 
             readinessList.BeginUpdate();
             try
@@ -385,7 +387,7 @@ namespace ReportAutomationLauncher
                 AddReadinessItem("추가기능", addinReady, addinReady ? Path.GetFileName(addinPathText.Text.Trim()) : "보고서 자동화 add-in 경로를 확인하세요.");
                 AddReadinessItem("표 탐지", tableCount > 0, tableCount > 0 ? tableCount + "개 표를 발견했습니다." : "파일 등록 후 표 목록을 확인하세요.");
                 AddReadinessItem("분석 배너", bannerPreviewReady, BuildBannerReadinessText(checkedBanners, bannerPreviewReady));
-                AddReadinessItem("산출 방식", outputReady, outputReady ? "Excel 산출 시트 기준으로 실행합니다." : "현재 알파는 Excel 산출 시트만 지원합니다.");
+                AddReadinessItem("산출 방식", outputReady, BuildOutputReadinessText(outputReady));
                 AddReadinessItem("템플릿", IsTemplateReadyForSelectedOutput(), BuildTemplateReadinessText());
             }
             finally
@@ -427,6 +429,34 @@ namespace ReportAutomationLauncher
                 }
             }
             return count;
+        }
+
+        private bool IsOutputReadyForSelectedOutput()
+        {
+            string output = outputTypeCombo.Text;
+            if (output.StartsWith("Excel", StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+            if (output.IndexOf("HWP", StringComparison.OrdinalIgnoreCase) >= 0)
+            {
+                return true;
+            }
+            return false;
+        }
+
+        private string BuildOutputReadinessText(bool ready)
+        {
+            string output = outputTypeCombo.Text;
+            if (output.StartsWith("Excel", StringComparison.OrdinalIgnoreCase))
+            {
+                return "Excel 산출 시트 기준으로 실행합니다.";
+            }
+            if (output.IndexOf("HWP", StringComparison.OrdinalIgnoreCase) >= 0)
+            {
+                return "Excel 산출 후 아래한글 COM으로 HWPX 초본을 생성합니다.";
+            }
+            return ready ? output + " 기준으로 실행합니다." : "현재 런처 직접 생성은 Excel/HWPX만 지원합니다.";
         }
 
         private bool IsTemplateReadyForSelectedOutput()
@@ -505,7 +535,7 @@ namespace ReportAutomationLauncher
             group.AutoSize = true;
             group.Padding = new Padding(10);
 
-            var grid = CreateGrid(7);
+            var grid = CreateGrid(8);
             group.Controls.Add(grid);
 
             AddLabel(grid, 0, "출력 형식");
@@ -558,6 +588,17 @@ namespace ReportAutomationLauncher
             grid.Controls.Add(templateStatusLabel, 1, 4);
             grid.SetColumnSpan(templateStatusLabel, 2);
 
+            var hwpOptions = new FlowLayoutPanel();
+            hwpOptions.Dock = DockStyle.Fill;
+            hwpOptions.AutoSize = true;
+            hwpVisibleCheck.Text = "아래한글 창 표시";
+            hwpKeepOpenOnErrorCheck.Text = "실패 시 문서 유지";
+            hwpOptions.Controls.Add(hwpVisibleCheck);
+            hwpOptions.Controls.Add(hwpKeepOpenOnErrorCheck);
+            AddLabel(grid, 5, "HWPX 옵션");
+            grid.Controls.Add(hwpOptions, 1, 5);
+            grid.SetColumnSpan(hwpOptions, 2);
+
             var components = new FlowLayoutPanel();
             components.Dock = DockStyle.Fill;
             components.AutoSize = true;
@@ -571,16 +612,16 @@ namespace ReportAutomationLauncher
             components.Controls.Add(tableCheck);
             components.Controls.Add(qaCheck);
             components.Controls.Add(draftTextCheck);
-            AddLabel(grid, 5, "구성요소");
-            grid.Controls.Add(components, 1, 5);
+            AddLabel(grid, 6, "구성요소");
+            grid.Controls.Add(components, 1, 6);
             grid.SetColumnSpan(components, 2);
 
             var note = new Label();
-            note.Text = "알파 1단계에서는 Excel 산출 시트를 안정화합니다. HWPX/PPTX 템플릿 출력은 이 산출 구조가 고정된 뒤 활성화합니다.";
+            note.Text = "HWPX 보고서는 Excel 산출과 preflight 생성 후 아래한글 COM으로 새 HWPX 초본을 저장합니다. PPTX 보고서 직접 생성은 다음 단계입니다.";
             note.AutoSize = true;
             note.ForeColor = Color.DimGray;
             note.Margin = new Padding(0, 4, 0, 0);
-            grid.Controls.Add(note, 1, 6);
+            grid.Controls.Add(note, 1, 7);
             grid.SetColumnSpan(note, 2);
 
             return group;
@@ -2018,6 +2059,10 @@ namespace ReportAutomationLauncher
                         options.LastDraftTextPath = EngineRunner.TryGenerateDraft(generatedWorkbookPath, Log);
                     }
                     EngineRunner.TryGenerateReportPackage(generatedWorkbookPath, options, Log);
+                    if (options.OutputType.IndexOf("HWP", StringComparison.OrdinalIgnoreCase) >= 0)
+                    {
+                        EngineRunner.TryGenerateHwpDocument(options, Log);
+                    }
                     AutomationRunner.WriteLauncherConfig(generatedWorkbookPath, options);
                     BeginInvoke(new Action(delegate()
                     {
@@ -2083,6 +2128,18 @@ namespace ReportAutomationLauncher
             {
                 lines.Add("Preflight: " + options.LastPreflightReportPath);
                 lines.Add(BuildPreflightSummary(options.LastPreflightReportPath));
+            }
+            if (!string.IsNullOrWhiteSpace(options.LastHwpOutputPath))
+            {
+                lines.Add("HWPX 초본: " + options.LastHwpOutputPath);
+            }
+            else if (options.OutputType.IndexOf("HWP", StringComparison.OrdinalIgnoreCase) >= 0)
+            {
+                lines.Add("HWPX 초본: 생성하지 못했습니다. 로그와 writer report를 확인하세요.");
+            }
+            if (!string.IsNullOrWhiteSpace(options.LastHwpWriterReportPath))
+            {
+                lines.Add("HWPX writer report: " + options.LastHwpWriterReportPath);
             }
             lines.Add("");
             lines.Add("Excel에서 보고서_분석문, 보고서_차트데이터, 보고서_삽입표, 보고서_QA 시트를 확인하세요.");
@@ -3109,6 +3166,8 @@ namespace ReportAutomationLauncher
             options.GenerateDraftText = draftTextCheck.Checked;
             options.CopyWorkbook = copyWorkbookCheck.Checked;
             options.KeepExcelOpen = keepExcelOpenCheck.Checked;
+            options.HwpVisible = hwpVisibleCheck.Checked;
+            options.HwpKeepOpenOnError = hwpKeepOpenOnErrorCheck.Checked;
             options.Validate();
             return options;
         }
@@ -3158,10 +3217,14 @@ namespace ReportAutomationLauncher
         public bool GenerateDraftText = true;
         public bool CopyWorkbook = true;
         public bool KeepExcelOpen;
+        public bool HwpVisible;
+        public bool HwpKeepOpenOnError;
         public string LastGeneratedWorkbookPath;
         public string LastDraftTextPath;
         public string LastReportPackagePath;
         public string LastPreflightReportPath;
+        public string LastHwpOutputPath;
+        public string LastHwpWriterReportPath;
 
         public void Validate()
         {
@@ -3191,9 +3254,20 @@ namespace ReportAutomationLauncher
             {
                 PptTemplatePath = Path.GetFullPath(PptTemplatePath);
             }
-            if (!OutputType.StartsWith("Excel", StringComparison.OrdinalIgnoreCase))
+            if (OutputType.IndexOf("HWP", StringComparison.OrdinalIgnoreCase) >= 0)
             {
-                throw new InvalidOperationException("현재 알파 실행은 Excel 산출 시트만 지원합니다.");
+                if (string.IsNullOrWhiteSpace(HwpTemplatePath))
+                {
+                    throw new InvalidOperationException("HWPX 보고서 생성을 위해 HWPX 템플릿을 선택하세요.");
+                }
+                if (!File.Exists(HwpTemplatePath))
+                {
+                    throw new FileNotFoundException("HWPX 템플릿 파일을 찾을 수 없습니다.", HwpTemplatePath);
+                }
+            }
+            else if (!OutputType.StartsWith("Excel", StringComparison.OrdinalIgnoreCase))
+            {
+                throw new InvalidOperationException("현재 런처 직접 생성은 Excel 산출 시트와 HWPX 보고서만 지원합니다.");
             }
             if (string.IsNullOrWhiteSpace(BannerSetting))
             {
@@ -3274,6 +3348,8 @@ namespace ReportAutomationLauncher
             options.GenerateDraftText = !flags.Contains("no-draft");
             options.CopyWorkbook = !flags.Contains("no-copy");
             options.KeepExcelOpen = flags.Contains("keep-open");
+            options.HwpVisible = flags.Contains("hwp-visible");
+            options.HwpKeepOpenOnError = flags.Contains("hwp-keep-open-on-error");
             options.Validate();
             return options;
         }
@@ -3762,6 +3838,92 @@ namespace ReportAutomationLauncher
             catch (Exception ex)
             {
                 log("preflight 생성 실패: " + ex.Message);
+            }
+        }
+
+        public static void TryGenerateHwpDocument(LauncherOptions options, Action<string> log)
+        {
+            try
+            {
+                string pythonPath = PathResolver.ResolvePythonPath();
+                string toolPath = PathResolver.ResolveEngineToolPath("hwp_com_writer.py");
+                if (string.IsNullOrWhiteSpace(pythonPath) || !File.Exists(pythonPath) || string.IsNullOrWhiteSpace(toolPath) || !File.Exists(toolPath))
+                {
+                    log("HWPX writer 도구를 찾지 못해 HWPX 생성을 건너뜁니다.");
+                    return;
+                }
+                if (string.IsNullOrWhiteSpace(options.LastReportPackagePath) || !File.Exists(options.LastReportPackagePath))
+                {
+                    log("report_package.json이 없어 HWPX 생성을 건너뜁니다.");
+                    return;
+                }
+                if (string.IsNullOrWhiteSpace(options.LastPreflightReportPath) || !File.Exists(options.LastPreflightReportPath))
+                {
+                    log("preflight_report.json이 없어 HWPX 생성을 건너뜁니다.");
+                    return;
+                }
+                if (string.IsNullOrWhiteSpace(options.HwpTemplatePath) || !File.Exists(options.HwpTemplatePath))
+                {
+                    log("HWPX 템플릿이 없어 HWPX 생성을 건너뜁니다.");
+                    return;
+                }
+
+                string directory = Path.GetDirectoryName(options.LastGeneratedWorkbookPath);
+                string stem = Path.GetFileNameWithoutExtension(options.LastGeneratedWorkbookPath);
+                string outputPath = Path.Combine(directory, stem + "_hwp_report_" + DateTime.Now.ToString("yyyyMMdd_HHmmss") + ".hwpx");
+                string reportPath = Path.Combine(directory, stem + "_hwp_writer_report.json");
+
+                var startInfo = new ProcessStartInfo();
+                startInfo.FileName = pythonPath;
+                startInfo.Arguments = Quote(toolPath) +
+                                      " --package " + Quote(options.LastReportPackagePath) +
+                                      " --preflight " + Quote(options.LastPreflightReportPath) +
+                                      " --template " + Quote(options.HwpTemplatePath) +
+                                      " --output " + Quote(outputPath) +
+                                      " --visible " + Quote(options.HwpVisible ? "true" : "false") +
+                                      " --report-output " + Quote(reportPath) +
+                                      (options.HwpKeepOpenOnError ? " --keep-open-on-error" : "");
+                startInfo.UseShellExecute = false;
+                startInfo.CreateNoWindow = true;
+                startInfo.RedirectStandardOutput = true;
+                startInfo.RedirectStandardError = true;
+                startInfo.StandardOutputEncoding = System.Text.Encoding.UTF8;
+                startInfo.StandardErrorEncoding = System.Text.Encoding.UTF8;
+
+                log("아래한글 COM으로 HWPX 초본을 생성합니다.");
+                using (Process process = Process.Start(startInfo))
+                {
+                    if (!process.WaitForExit(180000))
+                    {
+                        try { process.Kill(); } catch { }
+                        log("HWPX 생성 시간이 길어져 이번 실행에서는 중단했습니다.");
+                        options.LastHwpWriterReportPath = File.Exists(reportPath) ? reportPath : "";
+                        return;
+                    }
+                    string stdout = process.StandardOutput.ReadToEnd();
+                    string stderr = process.StandardError.ReadToEnd();
+                    if (process.ExitCode != 0)
+                    {
+                        log("HWPX 생성 실패: " + (string.IsNullOrWhiteSpace(stderr) ? stdout : stderr).Trim());
+                        options.LastHwpWriterReportPath = File.Exists(reportPath) ? reportPath : "";
+                        return;
+                    }
+                }
+
+                options.LastHwpOutputPath = File.Exists(outputPath) ? outputPath : "";
+                options.LastHwpWriterReportPath = File.Exists(reportPath) ? reportPath : "";
+                if (!string.IsNullOrWhiteSpace(options.LastHwpOutputPath))
+                {
+                    log("HWPX 초본 저장: " + options.LastHwpOutputPath);
+                }
+                if (!string.IsNullOrWhiteSpace(options.LastHwpWriterReportPath))
+                {
+                    log("HWPX writer report 저장: " + options.LastHwpWriterReportPath);
+                }
+            }
+            catch (Exception ex)
+            {
+                log("HWPX 생성 실패: " + ex.Message);
             }
         }
 

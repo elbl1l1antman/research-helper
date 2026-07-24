@@ -23,6 +23,11 @@
   - `report_package.json`을 읽어 PPTX 초본을 생성합니다.
   - PowerPoint에서 편집 가능한 차트 객체와 표 객체를 생성합니다.
 
+- `hwp_com_writer.py`
+  - `report_package.json`을 읽어 아래한글 COM으로 HWPX 초본을 생성합니다.
+  - 원본 템플릿은 수정하지 않고 출력 경로에 사본을 만든 뒤 `{{BODY}}` 위치에 제목, 분석문, 표, 출처를 삽입합니다.
+  - 실패 시 `hwp_writer_report.json`에 실패 단계, COM action, placeholder 상태, 경고를 기록합니다.
+
 - `dashboard_package.py`
   - 기관/기업 1행, 지표 여러 열의 가로형 Excel 원자료를 읽어 `dashboard_package.json`과 `dashboard_preflight_report.json`을 생성합니다.
   - Excel 검사 모드에서는 sheet, 열, 예시값, 열 유형, 상위 30행 미리보기를 JSON으로 저장합니다.
@@ -135,6 +140,25 @@ python -m report_automation_engine.document_writer `
   --output "C:\path\chart_review_draft.pptx"
 ```
 
+HWPX 초본 writer는 아래한글이 설치된 Windows 환경에서 실행합니다.
+
+```powershell
+python -m report_automation_engine.hwp_com_writer `
+  --package "C:\path\report_package.json" `
+  --preflight "C:\path\preflight_report.json" `
+  --template "C:\path\report_template.hwpx" `
+  --output "C:\path\report_draft.hwpx" `
+  --visible false
+```
+
+주요 동작:
+
+- `preflight.status == blocked`이면 아래한글을 열기 전에 중단합니다.
+- 템플릿 사본을 출력 경로에 만든 뒤 사본만 수정합니다.
+- `{{BODY}}`를 찾지 못하면 생성하지 않고 writer report에 실패 사유를 남깁니다.
+- HWP 표 객체 생성을 우선 시도하고, COM action이 실패하면 탭 구분 텍스트 표로 대체합니다.
+- 차트는 v1에서 직접 삽입하지 않고 `[차트 삽입 필요]` 문구로 표시합니다.
+
 기업/기관 대시보드 PPTX는 원자료를 먼저 검사하고, 사용자가 선택한 데이터/매핑 JSON을 기준으로 생성합니다.
 
 대시보드 mapping JSON에서 사용할 수 있는 디자인 옵션:
@@ -181,4 +205,5 @@ python -m report_automation_engine.dashboard_writer `
 - 이 엔진은 아직 완성된 보고서 편집기가 아닙니다.
 - 엑셀 표 구조가 프로젝트별로 달라질 수 있으므로, `config/default_style_schema.json`의 제외어와 키워드를 먼저 조정하는 방식이 안전합니다.
 - HWPX 기본 템플릿 생성은 placeholder 검증용 시작 파일입니다. 한글에서 완전히 안정적으로 열리는 고품질 HWPX 생성은 한글 COM API 또는 정식 HWPX writer 레이어를 붙일 때 별도로 강화해야 합니다.
+- `edwardkim/rhwp`는 장기 HWP/HWPX 구조 분석 및 대체 writer 후보입니다. 현재는 저장소에 포함하지 않으며, 도입 시 MIT 라이선스 고지와 제3자 라이선스 문서를 먼저 추가해야 합니다.
 - 외부 EXE 런처와 연결할 때는 Python 스크립트를 별도 프로세스로 실행하고, 입력 파일/스타일 JSON/출력 경로를 인자로 넘기는 방식이 기존 VBA 매크로와 충돌이 가장 적습니다.

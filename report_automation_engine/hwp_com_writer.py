@@ -1,0 +1,480 @@
+"""Create HWPX drafts through the local Hancom HWP COM automation API.
+
+이 모듈은 HWPX를 직접 XML로 조립하지 않고, 사용자의 Windows PC에 설치된
+아래한글을 실행해 템플릿 사본에 본문과 표를 입력한다. rhwp 기반 writer는
+장기 후보로 두고, 알파 단계의 실사용 writer는 아래한글 COM을 우선한다.
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import platform
+import shutil
+import sys
+from datetime import datetime
+from pathlib import Path
+from typing import Any, Dict, List
+
+
+BODY_PLACEHOLDER = "{{BODY}}"
+REPORT_PLACEHOLDERS = {
+    "{{REPORT_TITLE}}": "report_title",
+    "{{PROJECT_NAME}}": "project_name",
+    "{{GENERATED_AT}}": "created_at",
+    "{{QA_SUMMARY}}": "qa_summary",
+}
+TABLE_COLUMNS = ["항목", "비율", "가중 N", "원 N"]
+
+
+class HwpWriterError(RuntimeError):
+    """Writer failure with a stage/action pair for the JSON report."""
+
+    def __init__(self, stage: str, action: str, message: str) -> None:
+        super().__init__(message)
+        self.stage = stage
+        self.action = action
+
+
+def write_hwp_document(
+    package_path: str | Path,
+    preflight_path: str | Path,
+    template_path: str | Path,
+    output_path: str | Path,
+    visible: bool = False,
+    report_path: str | Path | None = None,
+    keep_open_on_error: bool = False,
+) -> Path:
+    """Write a report draft and always write a companion JSON report."""
+
+    package_file = Path(package_path)
+    preflight_file = Path(preflight_path)
+    template_file = Path(template_path)
+    output_file = Path(output_path)
+    writer_report = new_report(package_file, preflight_file, template_file, output_file, visible)
+    report_file = Path(report_path) if report_path else output_file.with_name(output_file.stem + "_hwp_writer_report.json")
+    hwp = None
+
+    try:
+        package = load_json(package_file)
+        preflight = load_json(preflight_file)
+        validate_inputs(preflight, template_file, output_file)
+
+        output_file.parent.mkdir(parents=True, exist_ok=True)
+        if template_file.resolve() == output_file.resolve():
+            raise HwpWriterError("validate", "output", "원본 템플릿과 출력 경로가 같습니다. 원본 보호를 위해 중단합니다.")
+        shutil.copy2(template_file, output_file)
+        writer_report["template_copied"] = True
+
+        hwp = create_hwp_object(writer_report)
+        set_visible(hwp, visible, writer_report)
+        open_document(hwp, output_file, writer_report)
+
+        replace_header_placeholders(hwp, package, writer_report)
+        if not find_placeholder(hwp, BODY_PLACEHOLDER):
+            raise HwpWriterError("template", "find_body", "{{BODY}} placeholder를 문서 본문에서 찾지 못했습니다.")
+        writer_report["placeholders"]["body_found"] = True
+        run_action(hwp, "Delete", writer_report, "template")
+
+        write_body(hwp, package, writer_report)
+        save_as_hwpx(hwp, output_file, writer_report)
+        writer_report["status"] = "ready"
+        writer_report["finished_at"] = now()
+        return output_file
+    except HwpWriterError as exc:
+        writer_report["status"] = "failed"
+        writer_report["stage"] = exc.stage
+        writer_report["action"] = exc.action
+        writer_report["errors"].append(str(exc))
+        writer_report["finished_at"] = now()
+        raise
+    except Exception as exc:
+        writer_report["status"] = "failed"
+        writer_report["stage"] = writer_report.get("stage") or "unknown"
+        writer_report["action"] = writer_report.get("action") or "unknown"
+        writer_report["errors"].append(str(exc))
+        writer_report["finished_at"] = now()
+        raise
+    finally:
+        write_json(report_file, writer_report)
+        if hwp is not None and not (keep_open_on_error and writer_report["status"] == "failed"):
+            close_hwp(hwp, writer_report)
+
+
+def validate_inputs(preflight: Dict[str, Any], template_file: Path, output_file: Path) -> None:
+    if platform.system().lower() != "windows":
+        raise HwpWriterError("validate", "platform", "아래한글 COM writer는 Windows에서만 실행할 수 있습니다.")
+    if preflight.get("status") == "blocked":
+        raise HwpWriterError("validate", "preflight", "preflight status가 blocked입니다. 오류를 먼저 해결하세요.")
+    if not template_file.exists():
+        raise HwpWriterError("validate", "template", f"템플릿 파일을 찾을 수 없습니다: {template_file}")
+    if template_file.suffix.lower() not in {".hwpx", ".hwp"}:
+        raise HwpWriterError("validate", "template", "HWPX/HWP 템플릿만 지원합니다.")
+    if output_file.suffix.lower() not in {".hwpx", ".hwp"}:
+        raise HwpWriterError("validate", "output", "출력 파일 확장자는 .hwpx 또는 .hwp여야 합니다.")
+
+
+def create_hwp_object(report: Dict[str, Any]):
+    report["stage"] = "com"
+    report["action"] = "create_object"
+    try:
+        import win32com.client  # type: ignore
+    except Exception as exc:
+        raise HwpWriterError("com", "import_win32com", "pywin32(win32com)를 불러오지 못했습니다. pywin32 설치가 필요합니다.") from exc
+
+    last_error = None
+    for prog_id in ("HWPFrame.HwpObject", "HwpFrame.HwpObject.2"):
+        try:
+            hwp = win32com.client.gencache.EnsureDispatch(prog_id)
+            report["com"]["prog_id"] = prog_id
+            register_file_path_checker(hwp, report)
+            return hwp
+        except Exception as exc:
+            last_error = exc
+    raise HwpWriterError("com", "create_object", f"아래한글 COM 객체를 생성하지 못했습니다: {last_error}")
+
+
+def register_file_path_checker(hwp, report: Dict[str, Any]) -> None:
+    # 보안 모듈 등록은 설치 환경별로 실패할 수 있다. 실패해도 Open 단계에서 다시 명확한 오류가 난다.
+    for module in ("FilePathCheckerModule", "FilePathCheckDLL"):
+        try:
+            hwp.RegisterModule("FilePathCheckDLL", module)
+            report["com"]["file_path_checker"] = module
+            return
+        except Exception:
+            continue
+    report["warnings"].append("아래한글 FilePathCheck 보안 모듈 등록을 확인하지 못했습니다.")
+
+
+def set_visible(hwp, visible: bool, report: Dict[str, Any]) -> None:
+    report["stage"] = "com"
+    report["action"] = "set_visible"
+    try:
+        hwp.XHwpWindows.Item(0).Visible = bool(visible)
+        report["com"]["visible_applied"] = bool(visible)
+    except Exception:
+        try:
+            hwp.Visible = bool(visible)
+            report["com"]["visible_applied"] = bool(visible)
+        except Exception:
+            report["warnings"].append("아래한글 창 표시 옵션을 적용하지 못했습니다.")
+
+
+def open_document(hwp, path: Path, report: Dict[str, Any]) -> None:
+    report["stage"] = "document"
+    report["action"] = "open"
+    attempts = [
+        lambda: hwp.Open(str(path), "HWPX", "forceopen:true") if path.suffix.lower() == ".hwpx" else hwp.Open(str(path)),
+        lambda: hwp.Open(str(path)),
+    ]
+    last_error = None
+    for attempt in attempts:
+        try:
+            result = attempt()
+            if result is False:
+                last_error = "Open returned False"
+                continue
+            report["document_opened"] = True
+            return
+        except Exception as exc:
+            last_error = exc
+    raise HwpWriterError("document", "open", f"템플릿 사본을 아래한글로 열지 못했습니다: {last_error}")
+
+
+def replace_header_placeholders(hwp, package: Dict[str, Any], report: Dict[str, Any]) -> None:
+    meta = package.get("meta", {})
+    values = {
+        "report_title": str(meta.get("report_title") or meta.get("source_file_name") or "보고서 초안"),
+        "project_name": str(meta.get("project_name") or meta.get("report_profile") or ""),
+        "created_at": str(meta.get("created_at") or now()),
+        "qa_summary": qa_summary(package),
+    }
+    for placeholder, value_key in REPORT_PLACEHOLDERS.items():
+        if find_placeholder(hwp, placeholder):
+            run_action(hwp, "Delete", report, "template")
+            insert_text(hwp, values[value_key], report)
+            report["placeholders"]["replaced"].append(placeholder)
+
+
+def find_placeholder(hwp, text: str) -> bool:
+    try:
+        hwp.HAction.Run("MoveDocBegin")
+    except Exception:
+        pass
+    try:
+        params = hwp.HParameterSet.HFindReplace
+        hwp.HAction.GetDefault("RepeatFind", params.HSet)
+        params.FindString = text
+        params.IgnoreMessage = 1
+        try:
+            params.Direction = hwp.FindDir("Forward")
+        except Exception:
+            pass
+        return bool(hwp.HAction.Execute("RepeatFind", params.HSet))
+    except Exception:
+        return False
+
+
+def write_body(hwp, package: Dict[str, Any], report: Dict[str, Any]) -> None:
+    tables_by_key = {str(table.get("table_key", "")): table for table in package.get("tables", [])}
+    charts_by_key = group_charts(package.get("charts", []))
+    sections = package.get("sections", [])
+    for index, section in enumerate(sections, start=1):
+        key = str(section.get("table_key", ""))
+        title = str(section.get("title") or key or f"문항 {index}")
+        narrative = str(section.get("narrative_final") or "")
+
+        insert_text(hwp, title, report)
+        run_action(hwp, "BreakPara", report, "body")
+        insert_text(hwp, narrative, report)
+        run_action(hwp, "BreakPara", report, "body")
+        run_action(hwp, "BreakPara", report, "body")
+
+        table = tables_by_key.get(key)
+        if table:
+            insert_text(hwp, str(table.get("title") or title), report)
+            run_action(hwp, "BreakPara", report, "body")
+            if not insert_hwp_table(hwp, table_rows_for_hwp(table), report):
+                insert_text_table(hwp, table_rows_for_hwp(table), report)
+            run_action(hwp, "BreakPara", report, "body")
+        else:
+            report["warnings"].append(f"삽입표 데이터 없음: {key}")
+
+        if charts_by_key.get(key):
+            insert_text(hwp, f"[차트 삽입 필요] {title}", report)
+            run_action(hwp, "BreakPara", report, "body")
+            report["charts_deferred"] += 1
+
+        insert_text(hwp, f"source: {key}", report)
+        run_action(hwp, "BreakPara", report, "body")
+        run_action(hwp, "BreakPara", report, "body")
+        report["sections_written"] += 1
+
+
+def insert_hwp_table(hwp, rows: List[List[str]], report: Dict[str, Any]) -> bool:
+    """Try to create a real HWP table. Fall back to text table when COM differs."""
+
+    if not rows:
+        return False
+    report["stage"] = "table"
+    report["action"] = "TableCreate"
+    try:
+        params = hwp.HParameterSet.HTableCreation
+        hwp.HAction.GetDefault("TableCreate", params.HSet)
+        params.Rows = len(rows)
+        params.Cols = len(rows[0])
+        try:
+            params.WidthType = 2
+            params.HeightType = 1
+        except Exception:
+            pass
+        if not hwp.HAction.Execute("TableCreate", params.HSet):
+            return False
+        for row_idx, row in enumerate(rows):
+            for col_idx, value in enumerate(row):
+                insert_text(hwp, value, report)
+                if not (row_idx == len(rows) - 1 and col_idx == len(row) - 1):
+                    run_action(hwp, "TableRightCell", report, "table")
+        report["tables_written"] += 1
+        try:
+            hwp.HAction.Run("MoveRight")
+        except Exception:
+            pass
+        return True
+    except Exception as exc:
+        report["warnings"].append(f"HWP 표 객체 생성 실패, 텍스트 표로 대체합니다: {exc}")
+        return False
+
+
+def insert_text_table(hwp, rows: List[List[str]], report: Dict[str, Any]) -> None:
+    lines = ["\t".join(row) for row in rows]
+    insert_text(hwp, "\n".join(lines), report)
+    run_action(hwp, "BreakPara", report, "body")
+    report["text_table_fallbacks"] += 1
+
+
+def table_rows_for_hwp(table: Dict[str, Any]) -> List[List[str]]:
+    rows = [TABLE_COLUMNS]
+    for row in table.get("rows", [])[:20]:
+        rows.append(
+            [
+                str(row.get("category") or ""),
+                display_percent(row),
+                display_number(row.get("weighted_n")),
+                display_number(row.get("raw_n")),
+            ]
+        )
+    return rows
+
+
+def insert_text(hwp, text: str, report: Dict[str, Any]) -> None:
+    report["stage"] = "insert"
+    report["action"] = "InsertText"
+    try:
+        params = hwp.HParameterSet.HInsertText
+        hwp.HAction.GetDefault("InsertText", params.HSet)
+        params.Text = text
+        hwp.HAction.Execute("InsertText", params.HSet)
+    except Exception as exc:
+        raise HwpWriterError("insert", "InsertText", f"텍스트 입력 실패: {exc}") from exc
+
+
+def run_action(hwp, action: str, report: Dict[str, Any], stage: str) -> bool:
+    report["stage"] = stage
+    report["action"] = action
+    try:
+        return bool(hwp.HAction.Run(action))
+    except Exception:
+        try:
+            return bool(hwp.Run(action))
+        except Exception:
+            report["warnings"].append(f"아래한글 Action 실행 실패: {action}")
+            return False
+
+
+def save_as_hwpx(hwp, output_file: Path, report: Dict[str, Any]) -> None:
+    report["stage"] = "document"
+    report["action"] = "save_as"
+    format_name = "HWPX" if output_file.suffix.lower() == ".hwpx" else "HWP"
+    attempts = [
+        lambda: hwp.SaveAs(str(output_file), format_name, ""),
+        lambda: hwp.SaveAs(str(output_file)),
+        lambda: hwp.Save(),
+    ]
+    last_error = None
+    for attempt in attempts:
+        try:
+            result = attempt()
+            if result is False:
+                last_error = "Save returned False"
+                continue
+            if output_file.exists():
+                report["document_saved"] = True
+                return
+        except Exception as exc:
+            last_error = exc
+    raise HwpWriterError("document", "save_as", f"HWPX 저장 실패: {last_error}")
+
+
+def close_hwp(hwp, report: Dict[str, Any]) -> None:
+    try:
+        hwp.Clear(1)
+    except Exception:
+        pass
+    try:
+        hwp.Quit()
+        report["com"]["closed"] = True
+    except Exception:
+        pass
+
+
+def group_charts(rows: List[Dict[str, Any]]) -> Dict[str, List[Dict[str, Any]]]:
+    grouped: Dict[str, List[Dict[str, Any]]] = {}
+    for row in rows:
+        if row.get("include_chart"):
+            grouped.setdefault(str(row.get("table_key", "")), []).append(row)
+    return grouped
+
+
+def qa_summary(package: Dict[str, Any]) -> str:
+    qa = package.get("qa", [])
+    if not qa:
+        return "QA 이슈 없음"
+    return "\n".join(f"{item.get('severity', '')}: {item.get('message', '')}" for item in qa[:20])
+
+
+def display_percent(row: Dict[str, Any]) -> str:
+    value = row.get("percent")
+    if value in (None, ""):
+        return ""
+    unit = row.get("unit") or "%"
+    return f"{display_number(value)}{unit}"
+
+
+def display_number(value: Any) -> str:
+    if value in (None, ""):
+        return ""
+    try:
+        parsed = float(value)
+        return f"{parsed:,.1f}" if parsed % 1 else f"{parsed:,.0f}"
+    except (TypeError, ValueError):
+        return str(value)
+
+
+def new_report(package_file: Path, preflight_file: Path, template_file: Path, output_file: Path, visible: bool) -> Dict[str, Any]:
+    return {
+        "schema_version": "1.0",
+        "status": "started",
+        "stage": "",
+        "action": "",
+        "started_at": now(),
+        "finished_at": "",
+        "platform": platform.platform(),
+        "python": sys.version,
+        "package_path": str(package_file),
+        "preflight_path": str(preflight_file),
+        "template_path": str(template_file),
+        "output_path": str(output_file),
+        "visible": visible,
+        "template_copied": False,
+        "document_opened": False,
+        "document_saved": False,
+        "sections_written": 0,
+        "tables_written": 0,
+        "text_table_fallbacks": 0,
+        "charts_deferred": 0,
+        "placeholders": {"body_found": False, "replaced": []},
+        "com": {"prog_id": "", "file_path_checker": "", "visible_applied": None, "closed": False},
+        "warnings": [],
+        "errors": [],
+    }
+
+
+def load_json(path: str | Path) -> Dict[str, Any]:
+    return json.loads(Path(path).read_text(encoding="utf-8"))
+
+
+def write_json(path: str | Path, value: Dict[str, Any]) -> None:
+    Path(path).parent.mkdir(parents=True, exist_ok=True)
+    Path(path).write_text(json.dumps(value, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def now() -> str:
+    return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+
+def parse_bool(value: str) -> bool:
+    return str(value).strip().lower() in {"1", "true", "yes", "y", "on", "표시", "보임"}
+
+
+def run_cli(argv: List[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description="Create HWPX drafts through Hancom HWP COM automation.")
+    parser.add_argument("--package", required=True)
+    parser.add_argument("--preflight", required=True)
+    parser.add_argument("--template", required=True)
+    parser.add_argument("--output", required=True)
+    parser.add_argument("--visible", default="false")
+    parser.add_argument("--report-output")
+    parser.add_argument("--keep-open-on-error", action="store_true")
+    args = parser.parse_args(argv)
+
+    try:
+        output = write_hwp_document(
+            args.package,
+            args.preflight,
+            args.template,
+            args.output,
+            parse_bool(args.visible),
+            args.report_output,
+            args.keep_open_on_error,
+        )
+        print(str(output))
+        return 0
+    except Exception as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
+
+
+if __name__ == "__main__":
+    raise SystemExit(run_cli())
