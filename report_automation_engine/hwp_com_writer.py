@@ -47,12 +47,12 @@ def write_hwp_document(
 ) -> Path:
     """Write a report draft and always write a companion JSON report."""
 
-    package_file = Path(package_path)
-    preflight_file = Path(preflight_path)
-    template_file = Path(template_path)
-    output_file = Path(output_path)
+    package_file = Path(package_path).resolve()
+    preflight_file = Path(preflight_path).resolve()
+    template_file = Path(template_path).resolve()
+    output_file = Path(output_path).resolve()
     writer_report = new_report(package_file, preflight_file, template_file, output_file, visible)
-    report_file = Path(report_path) if report_path else output_file.with_name(output_file.stem + "_hwp_writer_report.json")
+    report_file = Path(report_path).resolve() if report_path else output_file.with_name(output_file.stem + "_hwp_writer_report.json")
     hwp = None
 
     try:

@@ -4472,6 +4472,8 @@ namespace ReportAutomationLauncher
             var candidates = new List<string>();
             string userProfile = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
             string baseDir = AppDomain.CurrentDomain.BaseDirectory;
+            candidates.Add(Path.Combine(baseDir, "..", "..", ".venv", "Scripts", "python.exe"));
+            candidates.Add(Path.Combine(Environment.CurrentDirectory, ".venv", "Scripts", "python.exe"));
             candidates.Add(Path.Combine(baseDir, "python.exe"));
             candidates.Add(Path.Combine(userProfile, ".cache", "codex-runtimes", "codex-primary-runtime", "dependencies", "python", "python.exe"));
             candidates.Add(@"C:\Python312\python.exe");

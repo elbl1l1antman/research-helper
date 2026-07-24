@@ -302,6 +302,14 @@ python -m report_automation_engine.hwp_com_writer `
 Python 의존성 설치 예:
 
 ```powershell
+python -m venv .venv
+.\.venv\Scripts\python.exe -m pip install --upgrade pip setuptools wheel
+.\.venv\Scripts\python.exe -m pip install -r requirements.txt
+```
+
+런처는 저장소 루트의 `.venv\Scripts\python.exe`를 우선 사용합니다. 아래한글 COM writer를 사용할 때는 이 가상환경에 `pywin32`가 설치되어 있어야 합니다.
+
+```powershell
 python -m pip install -r requirements.txt
 ```
 

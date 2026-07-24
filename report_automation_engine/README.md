@@ -141,6 +141,7 @@ python -m report_automation_engine.document_writer `
 ```
 
 HWPX 초본 writer는 아래한글이 설치된 Windows 환경에서 실행합니다.
+프로젝트 루트의 `.venv\Scripts\python.exe`에 `pywin32`를 설치하면 런처가 해당 가상환경을 우선 사용합니다.
 
 ```powershell
 python -m report_automation_engine.hwp_com_writer `
