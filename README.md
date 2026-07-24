@@ -291,6 +291,14 @@ python -m report_automation_engine.hwp_com_writer `
 
 HWPX writer는 아래한글 COM을 사용하므로 Windows와 아래한글 설치가 필요합니다. 실패 시 출력 파일 옆 또는 `--report-output` 경로에 `hwp_writer_report.json`을 남깁니다.
 
+아래한글 COM 환경만 먼저 확인할 수도 있습니다.
+
+```powershell
+python -m report_automation_engine.hwp_com_writer `
+  --check-environment `
+  --report-output "C:\path\hwp_writer_report.json"
+```
+
 Python 의존성 설치 예:
 
 ```powershell

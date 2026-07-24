@@ -237,7 +237,7 @@ namespace ReportAutomationLauncher
             root.Controls.Add(title, 0, 0);
 
             var subtitle = new Label();
-            subtitle.Text = "집계표를 등록하고, 탐지된 표/배너를 확인한 뒤, Excel 산출 시트를 생성합니다. HWPX/PPTX 출력은 다음 알파 단계에서 활성화됩니다.";
+            subtitle.Text = "집계표를 등록하고 표/배너를 확인한 뒤 Excel 산출 시트와 HWPX 초본 또는 대시보드 PPT를 생성합니다.";
             subtitle.AutoSize = true;
             subtitle.ForeColor = Color.DimGray;
             subtitle.Margin = new Padding(0, 0, 0, 10);
@@ -3873,6 +3873,12 @@ namespace ReportAutomationLauncher
                 string outputPath = Path.Combine(directory, stem + "_hwp_report_" + DateTime.Now.ToString("yyyyMMdd_HHmmss") + ".hwpx");
                 string reportPath = Path.Combine(directory, stem + "_hwp_writer_report.json");
 
+                if (!RunHwpEnvironmentCheck(pythonPath, toolPath, reportPath, options, log))
+                {
+                    options.LastHwpWriterReportPath = File.Exists(reportPath) ? reportPath : "";
+                    return;
+                }
+
                 var startInfo = new ProcessStartInfo();
                 startInfo.FileName = pythonPath;
                 startInfo.Arguments = Quote(toolPath) +
@@ -3925,6 +3931,42 @@ namespace ReportAutomationLauncher
             {
                 log("HWPX 생성 실패: " + ex.Message);
             }
+        }
+
+        private static bool RunHwpEnvironmentCheck(string pythonPath, string toolPath, string reportPath, LauncherOptions options, Action<string> log)
+        {
+            var startInfo = new ProcessStartInfo();
+            startInfo.FileName = pythonPath;
+            startInfo.Arguments = Quote(toolPath) +
+                                  " --check-environment" +
+                                  " --visible " + Quote(options.HwpVisible ? "true" : "false") +
+                                  " --report-output " + Quote(reportPath);
+            startInfo.UseShellExecute = false;
+            startInfo.CreateNoWindow = true;
+            startInfo.RedirectStandardOutput = true;
+            startInfo.RedirectStandardError = true;
+            startInfo.StandardOutputEncoding = System.Text.Encoding.UTF8;
+            startInfo.StandardErrorEncoding = System.Text.Encoding.UTF8;
+
+            log("아래한글 COM 환경을 확인합니다.");
+            using (Process process = Process.Start(startInfo))
+            {
+                if (!process.WaitForExit(60000))
+                {
+                    try { process.Kill(); } catch { }
+                    log("아래한글 COM 환경 확인 시간이 초과되었습니다.");
+                    return false;
+                }
+                string stdout = process.StandardOutput.ReadToEnd();
+                string stderr = process.StandardError.ReadToEnd();
+                if (process.ExitCode != 0)
+                {
+                    log("아래한글 COM 환경 확인 실패: " + (string.IsNullOrWhiteSpace(stderr) ? stdout : stderr).Trim());
+                    return false;
+                }
+            }
+            log("아래한글 COM 환경 확인 완료");
+            return true;
         }
 
         private static string Quote(string value)

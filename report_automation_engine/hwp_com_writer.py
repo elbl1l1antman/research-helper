@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import platform
 import shutil
 import sys
@@ -97,9 +96,54 @@ def write_hwp_document(
         writer_report["finished_at"] = now()
         raise
     finally:
-        write_json(report_file, writer_report)
         if hwp is not None and not (keep_open_on_error and writer_report["status"] == "failed"):
             close_hwp(hwp, writer_report)
+        write_json(report_file, writer_report)
+
+
+def check_environment(report_path: str | Path | None = None, visible: bool = False) -> Dict[str, Any]:
+    """Check whether pywin32 and the local HWP COM object are available."""
+
+    report = {
+        "schema_version": "1.0",
+        "status": "started",
+        "stage": "environment",
+        "action": "check_environment",
+        "started_at": now(),
+        "finished_at": "",
+        "platform": platform.platform(),
+        "python": sys.version,
+        "visible": visible,
+        "com": {"prog_id": "", "file_path_checker": "", "visible_applied": None, "closed": False},
+        "warnings": [],
+        "errors": [],
+    }
+    hwp = None
+    try:
+        if platform.system().lower() != "windows":
+            raise HwpWriterError("environment", "platform", "아래한글 COM writer는 Windows에서만 실행할 수 있습니다.")
+        hwp = create_hwp_object(report)
+        set_visible(hwp, visible, report)
+        report["status"] = "ready"
+        report["finished_at"] = now()
+        return report
+    except HwpWriterError as exc:
+        report["status"] = "failed"
+        report["stage"] = exc.stage
+        report["action"] = exc.action
+        report["errors"].append(str(exc))
+        report["finished_at"] = now()
+        return report
+    except Exception as exc:
+        report["status"] = "failed"
+        report["errors"].append(str(exc))
+        report["finished_at"] = now()
+        return report
+    finally:
+        if hwp is not None:
+            close_hwp(hwp, report)
+        if report_path:
+            write_json(report_path, report)
 
 
 def validate_inputs(preflight: Dict[str, Any], template_file: Path, output_file: Path) -> None:
@@ -450,21 +494,37 @@ def parse_bool(value: str) -> bool:
 
 def run_cli(argv: List[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Create HWPX drafts through Hancom HWP COM automation.")
-    parser.add_argument("--package", required=True)
-    parser.add_argument("--preflight", required=True)
-    parser.add_argument("--template", required=True)
-    parser.add_argument("--output", required=True)
+    parser.add_argument("--package")
+    parser.add_argument("--preflight")
+    parser.add_argument("--template")
+    parser.add_argument("--output")
     parser.add_argument("--visible", default="false")
     parser.add_argument("--report-output")
     parser.add_argument("--keep-open-on-error", action="store_true")
+    parser.add_argument("--check-environment", action="store_true")
     args = parser.parse_args(argv)
 
     try:
+        if args.check_environment:
+            report = check_environment(args.report_output, parse_bool(args.visible))
+            print(json.dumps(report, ensure_ascii=False, indent=2))
+            return 0 if report.get("status") == "ready" else 2
+
+        required = {
+            "--package": args.package,
+            "--preflight": args.preflight,
+            "--template": args.template,
+            "--output": args.output,
+        }
+        missing = [name for name, value in required.items() if not value]
+        if missing:
+            parser.error("문서 생성 모드에는 다음 인자가 필요합니다: " + ", ".join(missing))
+
         output = write_hwp_document(
-            args.package,
-            args.preflight,
-            args.template,
-            args.output,
+            str(args.package),
+            str(args.preflight),
+            str(args.template),
+            str(args.output),
             parse_bool(args.visible),
             args.report_output,
             args.keep_open_on_error,

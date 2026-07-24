@@ -144,6 +144,12 @@ HWPX 초본 writer는 아래한글이 설치된 Windows 환경에서 실행합�
 
 ```powershell
 python -m report_automation_engine.hwp_com_writer `
+  --check-environment `
+  --report-output "C:\path\hwp_writer_report.json"
+```
+
+```powershell
+python -m report_automation_engine.hwp_com_writer `
   --package "C:\path\report_package.json" `
   --preflight "C:\path\preflight_report.json" `
   --template "C:\path\report_template.hwpx" `
@@ -153,6 +159,7 @@ python -m report_automation_engine.hwp_com_writer `
 
 주요 동작:
 
+- `--check-environment`로 pywin32와 아래한글 COM 객체 생성 가능 여부를 먼저 확인할 수 있습니다.
 - `preflight.status == blocked`이면 아래한글을 열기 전에 중단합니다.
 - 템플릿 사본을 출력 경로에 만든 뒤 사본만 수정합니다.
 - `{{BODY}}`를 찾지 못하면 생성하지 않고 writer report에 실패 사유를 남깁니다.
