@@ -8,33 +8,6 @@ Option Explicit
 ' 추가기능 버전. 산출 메타 시트와 로그 시트에 함께 기록해 결과 파일의 생성 기준을 추적한다.
 Public Const REPORT_AUTOMATION_VERSION As String = "0.1.0"
 
-' 단순 분포표(좁은 표)와 배너 교차표를 구분하는 열 수 기준값.
-Private Const SIMPLE_TABLE_MAX_COL As Long = 6
-
-' 단순 분포표에서 % 열 위치를 헤더에서 못 찾을 때 쓰는 기본 열 번호.
-Private Const DEFAULT_PCT_COL As Long = 5
-
-' 분석문 본문에 포함하는 상위 항목 수 (1위 제외 보조 문장용).
-Private Const NARRATIVE_TOP_ITEMS As Long = 4
-
-' 수치 요약 문자열에 포함하는 상위 항목 수.
-Private Const SUMMARY_TOP_ITEMS As Long = 5
-
-' 차트 데이터 시트에서 "포함" 기본값으로 처리하는 최대 항목 순위.
-Private Const CHART_INCLUDE_TOP_N As Long = 8
-
-' tableRec 배열 인덱스 상수.
-Private Const IDX_TABLE_KEY  As Long = 0
-Private Const IDX_TABLE_NO   As Long = 1
-Private Const IDX_TITLE      As Long = 2
-Private Const IDX_BASIS      As Long = 3
-Private Const IDX_BASE_LABEL As Long = 4
-Private Const IDX_START_ROW  As Long = 5
-Private Const IDX_END_ROW    As Long = 6
-Private Const IDX_LAST_COL   As Long = 7
-Private Const IDX_TABLE_TYPE As Long = 8
-Private Const IDX_WARNING    As Long = 9
-
 ' UserForm에서 전달한 1회성 실행 옵션. 설정 시트를 생성한 뒤 이 값으로 덮어쓴다.
 Private mHasOptionOverrides As Boolean
 Private mOverrideBannerSetting As String
@@ -626,115 +599,6 @@ Private Function ReportAutomation_TableWarning(ByVal ws As Worksheet, ByVal star
     End If
     ReportAutomation_TableWarning = warningText
 End Function
-
-' ============================================================
-' 함수명 : ReportAutomation_AddOutputSheet
-' 설  명 : 산출 시트를 통합문서 맨 뒤에 추가하고 중복 없는 이름을 부여한다.
-' ============================================================
-Private Function ReportAutomation_AddOutputSheet(ByVal wb As Workbook, ByVal baseName As String) As Worksheet
-    Set ReportAutomation_AddOutputSheet = wb.Worksheets.Add(After:=wb.Worksheets(wb.Worksheets.Count))
-    ReportAutomation_AddOutputSheet.Name = ReportAutomation_UniqueSheetName(wb, baseName)
-End Function
-
-' ============================================================
-' 함수명 : ReportAutomation_GetSettingHint
-' 설  명 : 설정 항목별 입력 예시 문자열을 반환한다.
-' ============================================================
-Private Function ReportAutomation_GetSettingHint(ByVal labelText As String) As String
-    Select Case labelText
-        Case "추출 배너 목록":        ReportAutomation_GetSettingHint = "전체 / 전체,성별 / 전체,성별,연령대"
-        Case "제목 제거 접두어":      ReportAutomation_GetSettingHint = "쉼표 구분 (예: 사업체 특성별,응답자 특성별)"
-        Case "문체 프로필":           ReportAutomation_GetSettingHint = "공공조사 보고서형 / 학술보고서형"
-        Case "수치 표기":             ReportAutomation_GetSettingHint = "소수점 1자리 / 정수 / 소수점 2자리"
-        Case "QA 실행 여부":          ReportAutomation_GetSettingHint = "수치 QA / 문체 QA / 표 서식 QA / 사용 안 함"
-        Case "LLM 문장 고도화":       ReportAutomation_GetSettingHint = "사용 안 함 / 사용"
-        Case "LLM 제공자":            ReportAutomation_GetSettingHint = "사용 안 함 / OpenAI / Claude"
-        Case "LLM API 키 입력 방식":  ReportAutomation_GetSettingHint = "실행 시 입력 / 환경변수 / 설정파일"
-        Case "N 표기 여부":           ReportAutomation_GetSettingHint = "가중 사례수와 실제 사례수 보존 / 가중 사례수만"
-        Case "비교 기준":             ReportAutomation_GetSettingHint = "전체 대비 / 배너 간 비교"
-    End Select
-End Function
-
-' ============================================================
-' 프로시저 : ReportAutomation_WriteSettingsSheet
-' 설  명  : 보고서 생성 기준과 후속 자동화 옵션을 설정 시트에 기록한다.
-' 용  도  : 사용자가 문체/수치 표기/LLM 사용 여부를 나중에 편집할 수 있게 한다.
-' ============================================================
-Private Sub ReportAutomation_WriteSettingsSheet(ByVal ws As Worksheet, ByVal wb As Workbook, ByVal dataWs As Worksheet, ByVal priorSettingsWs As Worksheet)
-    ws.Range("A1").Value = "보고서 자동화 설정"
-    ws.Range("A1").Font.Bold = True
-    ws.Range("A1").Font.Size = 14
-    ws.Range("C1").Value = "입력 예시"
-
-    ' 현재 단계에서는 기본값을 먼저 깔아두고, 후속 UI에서 사용자가 수정하는 구조를 염두에 둔다.
-    Dim labels As Variant, values As Variant
-    labels = Array("프로젝트ID", "프로젝트명", "보고서명", "프로젝트 유형", "산출물 유형", _
-                   "문체 프로필", "보고서 작성 프로필", "수치 표기", "N 표기 여부", "비교 기준", "QA 실행 여부", _
-                   "출처 관리 여부", "수정 이력 관리 여부", "LLM 문장 고도화", "LLM 제공자", _
-                   "LLM API 키 입력 방식", "LLM 모델명", "원본 통합문서", "원본 집계표 시트", _
-                   "추출 배너 목록", "제목 제거 접두어")
-    values = Array("PRJ_" & Format(Now, "yyyymmdd_hhnn"), "", "", "데이터분석", "Excel 산출 시트", _
-                   "공공조사 보고서형", "인식도/만족도 조사형", "소수점 1자리", "가중 사례수와 실제 사례수 보존", _
-                   "전체 대비", "수치 QA / 문체 QA / 표 서식 QA", "사용 안 함", "사용", _
-                   "사용 안 함", "사용 안 함", "실행 시 입력", "", wb.Name, dataWs.Name, _
-                   "전체", "")
-
-    Dim i As Long
-    For i = LBound(labels) To UBound(labels)
-        ws.Cells(i + 3, 1).Value = labels(i)
-        If labels(i) = "원본 통합문서" Then
-            ws.Cells(i + 3, 2).Value = wb.Name
-        ElseIf labels(i) = "원본 집계표 시트" Then
-            ws.Cells(i + 3, 2).Value = dataWs.Name
-        Else
-            ws.Cells(i + 3, 2).Value = ReportAutomation_SettingValue(CStr(labels(i)), values(i), priorSettingsWs)
-        End If
-        Dim settingHint As String
-        settingHint = ReportAutomation_GetSettingHint(CStr(labels(i)))
-        If Len(settingHint) > 0 Then
-            ws.Cells(i + 3, 3).Value = settingHint
-            ws.Cells(i + 3, 3).Font.Color = RGB(89, 89, 89)
-            ws.Cells(i + 3, 3).Font.Italic = True
-        End If
-    Next i
-
-    ws.Columns("A:C").AutoFit
-    ws.Range("A3:A" & UBound(labels) + 3).Font.Bold = True
-    ReportAutomation_StyleHeader ws.Range("A1:C1")
-End Sub
-
-' ============================================================
-' 프로시저 : ReportAutomation_WriteTableList
-' 설  명  : 탐지된 표 목록과 원본 범위를 한 행당 한 표로 기록한다.
-' 용  도  : 사용자가 보고서에 사용할 표를 선택/제외하고, 원본 위치를 추적한다.
-' ============================================================
-Private Sub ReportAutomation_WriteTableList(ByVal ws As Worksheet, ByVal tables As Collection, ByVal dataWs As Worksheet)
-    ws.Range("A1:L1").Value = Array("선택", "table_key", "table_no", "title", "basis", "base_label", _
-                                    "source_sheet", "source_range", "table_type", "row_count", "col_count", "warning")
-    ReportAutomation_StyleHeader ws.Range("A1:L1")
-    ws.Columns(3).NumberFormat = "@"
-
-    Dim i As Long, rec As Variant
-    For i = 1 To tables.Count
-        rec = tables(i)
-        ' 기본값은 전체 표 사용(Y). 사용자는 이 열을 N으로 바꿔 후속 생성 대상에서 제외할 수 있다.
-        ws.Cells(i + 1, 1).Value = "Y"
-        ws.Cells(i + 1, 2).Value = rec(IDX_TABLE_KEY)
-        ws.Cells(i + 1, 3).Value = rec(IDX_TABLE_NO)
-        ws.Cells(i + 1, 4).Value = rec(IDX_TITLE)
-        ws.Cells(i + 1, 5).Value = rec(IDX_BASIS)
-        ws.Cells(i + 1, 6).Value = rec(IDX_BASE_LABEL)
-        ws.Cells(i + 1, 7).Value = dataWs.Name
-        ws.Cells(i + 1, 8).Value = dataWs.Range(dataWs.Cells(CLng(rec(IDX_START_ROW)), 1), dataWs.Cells(CLng(rec(IDX_END_ROW)), CLng(rec(IDX_LAST_COL)))).Address(False, False)
-        ws.Cells(i + 1, 9).Value = rec(IDX_TABLE_TYPE)
-        ws.Cells(i + 1, 10).Value = CLng(rec(IDX_END_ROW)) - CLng(rec(IDX_START_ROW)) + 1
-        ws.Cells(i + 1, 11).Value = CLng(rec(IDX_LAST_COL))
-        ws.Cells(i + 1, 12).Value = rec(IDX_WARNING)
-    Next i
-
-    ws.Columns("A:L").AutoFit
-    ws.Rows(1).AutoFilter
-End Sub
 
 ' ============================================================
 ' 프로시저 : ReportAutomation_WriteNarratives
@@ -1583,13 +1447,6 @@ Private Function ReportAutomation_NormalizeAnalysisTitle(ByVal titleText As Stri
     ReportAutomation_NormalizeAnalysisTitle = text
 End Function
 
-' ============================================================
-' 함수명 : ReportAutomation_CleanText
-' 설  명 : 줄바꿈/비분리 공백/중복 공백을 정리한 단일 줄 텍스트를 반환한다.
-' ============================================================
-' 함수명 : ReportAutomation_IsMultiResponse
-' 설  명 : 제목/기준 문구에 복수응답을 시사하는 표현이 있는지 판정한다.
-' ============================================================
 Private Function ReportAutomation_IsMultiResponse(ByVal titleText As String, ByVal basisText As String) As Boolean
     Dim text As String
     text = titleText & " " & basisText
@@ -1598,16 +1455,6 @@ Private Function ReportAutomation_IsMultiResponse(ByVal titleText As String, ByV
                                         InStr(1, text, "multiple", vbTextCompare) > 0)
 End Function
 
-' ============================================================
-' 함수명 : ReportAutomation_FormatPercent
-' 설  명 : 비율 값을 보고서 기본 표기인 소수점 1자리 퍼센트로 변환한다.
-' ============================================================
-' 함수명 : ReportAutomation_FormatScore
-' 설  명 : 100점 환산 점수를 보고서 문장 표기인 소수점 1자리 점수로 변환한다.
-' ============================================================
-' 함수명 : ReportAutomation_PointKind
-' 설  명 : point 배열의 선택 확장 필드에서 값 유형을 읽는다. 기본값은 percent.
-' ============================================================
 Private Function ReportAutomation_PointKind(ByVal pointRec As Variant) As String
     On Error GoTo Fallback
     If UBound(pointRec) >= 5 Then
@@ -1643,106 +1490,6 @@ Private Function ReportAutomation_FormatPointValue(ByVal pointRec As Variant) As
 End Function
 
 ' ============================================================
-' 함수명 : ReportAutomation_Quoted
-' 설  명 : 응답 항목명을 보고서 문장용 작은따옴표 표기로 감싼다.
-' ============================================================
-' 함수명 : ReportAutomation_TopicParticle
-' 설  명 : 앞 단어 받침 여부에 따라 보조사 "은/는"을 반환한다.
-' ============================================================
-' 함수명 : ReportAutomation_ObjectParticle
-' 설  명 : 앞 단어 받침 여부에 따라 목적격 조사 "을/를"을 반환한다.
-' ============================================================
-' 함수명 : ReportAutomation_SubjectParticle
-' 설  명 : 앞 단어 받침 여부에 따라 주격 조사 "이/가"를 반환한다.
-' ============================================================
-' 함수명 : ReportAutomation_HasBatchim
-' 설  명 : 문자열 마지막 의미 문자에 한글 받침이 있는지 판정한다.
-' 보  조 : 숫자/영문 끝 글자도 자연스러운 조사 선택을 위해 간단히 처리한다.
-' ============================================================
-' 프로시저 : ReportAutomation_WriteSourceSheet
-' 설  명  : 보고서에 사용할 출처 관리용 기본 시트를 생성한다.
-' 현재값  : 원본 집계표를 primary Excel source로 1건 등록한다.
-' ============================================================
-Private Sub ReportAutomation_WriteSourceSheet(ByVal ws As Worksheet)
-    ws.Range("A1:J1").Value = Array("source_id", "title", "author_org", "year", "url", "accessed_at", "source_type", "reliability", "used_section", "note")
-    ReportAutomation_StyleHeader ws.Range("A1:J1")
-    ws.Cells(2, 1).Value = "SRC_0001"
-    ws.Cells(2, 2).Value = "원본 집계표"
-    ws.Cells(2, 7).Value = "Excel"
-    ws.Cells(2, 8).Value = "primary"
-    ws.Columns("A:J").AutoFit
-End Sub
-
-' ============================================================
-' 프로시저 : ReportAutomation_WriteRevisionSheet
-' 설  명  : 사용자의 문장 수정 이력을 기록할 빈 시트 구조를 생성한다.
-' 용  도  : 후속 LLM 재작성/검수 단계에서 before/after를 추적한다.
-' ============================================================
-Private Sub ReportAutomation_WriteRevisionSheet(ByVal ws As Worksheet)
-    ws.Range("A1:G1").Value = Array("revision_id", "target", "user_feedback", "before", "after", "created_at", "applied_status")
-    ReportAutomation_StyleHeader ws.Range("A1:G1")
-    ws.Columns("A:G").AutoFit
-End Sub
-
-' ============================================================
-' 프로시저 : ReportAutomation_WriteMetaSheet
-' 설  명  : 후속 자동화가 참조할 실행 메타데이터를 key/value 형태로 기록한다.
-' 주  의  : 생성 후 xlSheetVeryHidden으로 숨긴다.
-' ============================================================
-Private Sub ReportAutomation_WriteMetaSheet(ByVal ws As Worksheet, ByVal wb As Workbook, ByVal dataWs As Worksheet, ByVal tables As Collection, _
-                                            ByVal wsSettings As Worksheet, ByVal wsList As Worksheet, ByVal wsNarr As Worksheet, _
-                                            ByVal wsChart As Worksheet, ByVal wsInsert As Worksheet)
-    ws.Range("A1:B1").Value = Array("key", "value")
-    ReportAutomation_StyleHeader ws.Range("A1:B1")
-
-    Dim rowNo As Long: rowNo = 2
-    ReportAutomation_WriteMetaKV ws, rowNo, "generated_at", Format(Now, "yyyy-mm-dd hh:nn:ss")
-    ReportAutomation_WriteMetaKV ws, rowNo, "source_workbook", wb.Name
-    ReportAutomation_WriteMetaKV ws, rowNo, "source_sheet", dataWs.Name
-    ReportAutomation_WriteMetaKV ws, rowNo, "table_count", tables.Count
-    ' 산출 시트명은 timestamp가 붙으므로 메타에 정확한 이름을 남겨 후속 스크립트가 찾을 수 있게 한다.
-    ReportAutomation_WriteMetaKV ws, rowNo, "settings_sheet", wsSettings.Name
-    ReportAutomation_WriteMetaKV ws, rowNo, "table_list_sheet", wsList.Name
-    ReportAutomation_WriteMetaKV ws, rowNo, "narrative_sheet", wsNarr.Name
-    ReportAutomation_WriteMetaKV ws, rowNo, "chart_data_sheet", wsChart.Name
-    ReportAutomation_WriteMetaKV ws, rowNo, "insert_table_sheet", wsInsert.Name
-    ReportAutomation_WriteMetaKV ws, rowNo, "style_profile", "formal_korean_research"
-    ReportAutomation_WriteMetaKV ws, rowNo, "number_format", "percent_1_decimal"
-    ReportAutomation_WriteMetaKV ws, rowNo, "hwp_chart_paste_mode", "metafile_preferred"
-    ws.Columns("A:B").AutoFit
-End Sub
-
-' ============================================================
-' 프로시저 : ReportAutomation_WriteMetaKV
-' 설  명  : 메타 시트에 key/value 한 줄을 쓰고 다음 행 번호로 이동한다.
-' ============================================================
-Private Sub ReportAutomation_WriteMetaKV(ByVal ws As Worksheet, ByRef rowNo As Long, ByVal keyText As String, ByVal valueText As Variant)
-    ws.Cells(rowNo, 1).Value = keyText
-    ws.Cells(rowNo, 2).Value = valueText
-    rowNo = rowNo + 1
-End Sub
-
-' ============================================================
-' 프로시저 : ReportAutomation_StyleHeader
-' 설  명  : 산출 시트 헤더 행에 공통 서식을 적용한다.
-' 범  위  : 굵게, 연한 파랑 배경, 기본 테두리
-' ============================================================
-' 함수명 : ReportAutomation_UniqueSheetName
-' 설  명 : Excel의 31자 제한을 지키면서 중복 없는 산출 시트명을 만든다.
-' 방식   : baseName_mmdd_hhnn 형식, 중복 시 뒤에 _2, _3 추가
-' ============================================================
-' 함수명 : ReportAutomation_FindLatestOutputSheet
-' 설  명 : 특정 접두어로 시작하는 산출 시트 중 통합문서에서 가장 뒤에 있는 시트를 찾는다.
-' 용  도 : 이전 실행의 설정 시트를 읽어 사용자가 편집한 옵션을 다음 실행에 승계한다.
-' ============================================================
-' 함수명 : ReportAutomation_SettingValue
-' 설  명 : 이전 설정 시트에서 동일 라벨 값을 찾아 반환하고, 없으면 기본값을 반환한다.
-' 주  의 : 원본 통합문서/시트명처럼 실행마다 달라지는 값은 호출부에서 별도로 고정한다.
-' ============================================================
-' 프로시저 : ReportAutomation_SetSettingValue
-' 설  명  : 설정 시트에서 라벨을 찾아 값을 갱신한다.
-' 용  도  : UserForm에서 입력받은 값을 생성 직후 설정 시트에 반영한다.
-' ============================================================
 ' 프로시저 : ReportAutomation_ClearOptionOverrides
 ' 설  명  : UserForm에서 넘긴 1회성 override 값을 초기화한다.
 ' ============================================================
@@ -1752,35 +1499,6 @@ Private Sub ReportAutomation_ClearOptionOverrides()
     mOverrideTitlePrefixes = ""
 End Sub
 
-' ============================================================
-' 함수명 : ReportAutomation_CellText
-' 설  명 : 셀의 표시 텍스트를 읽되, 병합셀인 경우 병합 영역의 좌상단 값을 반환한다.
-' 용  도 : 배너 교차표의 병합 헤더를 모든 소속 열에서 동일하게 인식한다.
-' ============================================================
-' 함수명 : ReportAutomation_WorksheetExists
-' 설  명 : 통합문서에 특정 이름의 워크시트가 있는지 확인한다.
-' ============================================================
-' 프로시저 : ReportAutomation_BeginOperation
-' 설  명  : 긴 작업 전 Excel 상태를 저장하고 화면갱신/이벤트/계산을 잠시 끈다.
-' 효과    : 대형 집계표 처리 속도 개선 및 중간 이벤트 충돌 방지
-' ============================================================
-' 프로시저 : ReportAutomation_EndOperation
-' 설  명  : BeginOperation에서 바꾼 Excel Application 상태를 원래대로 복원한다.
-' 주  의  : 오류 처리 경로에서도 호출되므로 On Error Resume Next로 최대한 복구한다.
-' ============================================================
-' 프로시저 : ReportAutomation_LogEvent
-' 설  명  : 사용자 통합문서 내부 로그 시트에 실행 결과를 남긴다.
-' 주  의  : 로그 시트는 VeryHidden 처리해 사용자의 보고서 시트 목록을 방해하지 않는다.
-' ============================================================
-' 함수명 : ReportAutomation_ReadBannerSetting
-' 설  명 : 설정 시트의 "추출 배너 목록" 항목을 읽는다.
-' 반환값 : 쉼표 구분 배너 목록 문자열. 항목이 없으면 "전체" 반환.
-' 예  시 : "전체" / "전체,성별" / "전체,성별,연령대"
-' ============================================================
-' 함수명 : ReportAutomation_ReadTitlePrefixes
-' 설  명 : 설정 시트의 "제목 제거 접두어" 항목을 읽어 배열로 반환한다.
-' 반환값 : 쉼표로 분리된 접두어 문자열 배열. 항목 없으면 빈 배열.
-' 사용법 : 설정 시트 B열에 쉼표 구분으로 입력 (예: 사업체 특성별,응답자 특성별)
 ' ============================================================
 ' 함수명 : ReportAutomation_FindBannerGroups
 ' 설  명 : 배너 교차표 헤더 영역을 스캔해 배너 그룹명과 소속 % 열을 매핑한다.
@@ -1853,14 +1571,6 @@ Private Function ReportAutomation_FindBannerGroups(ByVal ws As Worksheet, ByVal 
     Set ReportAutomation_FindBannerGroups = groups
 End Function
 
-' ============================================================
-' 함수명 : ReportAutomation_CollectionToArray
-' 설  명 : Long 값만 들어있는 Collection을 Variant 배열로 변환한다.
-' ============================================================
-' 프로시저 : ReportAutomation_SortArrayDescending
-' 설  명  : Array 안의 Array 레코드를 특정 숫자 인덱스 기준으로 내림차순 정렬한다.
-' 용  도  : 배너별 차트 데이터를 원본 행 순서가 아니라 값이 큰 순서로 기록한다.
-' ============================================================
 ' 프로시저 : ReportAutomation_AppendBannerChartRows
 ' 설  명  : 사용자가 선택한 배너 그룹의 데이터를 차트 시트에 추가 기록한다.
 ' 인  자  : chartRow — 참조 전달(ByRef), 기록 후 다음 빈 행으로 이동한다.
