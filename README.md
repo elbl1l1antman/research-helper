@@ -1,6 +1,6 @@
 # ReportAutomation
 
-Current version: `0.0.13`
+Current version: `0.0.14`
 
 `ReportAutomation`은 엑셀 집계표를 기반으로 조사 보고서 작성용 산출물을 자동 생성하는 런처 기반 프로젝트입니다.
 
@@ -89,6 +89,7 @@ Python 기반 보조 엔진입니다.
 - `hwp_template_probe.py`: HWP/HWPX 보고서틀의 표 구조와 결과표 후보 분석
 - `template_blueprint.py`: HWP/HWPX 보고서틀의 반복 결과 블록 후보 생성
 - `hwp_template_table_recognizer.py`: 사용자 제공 HWP/HWPX 템플릿의 자동화 표 후보 인식
+- `hwp_table_mapping.py`: `report_package.json`의 section/table과 HWP 템플릿 표 후보를 writer 계약으로 연결
 - `template_inspector.py`: HWPX/PPTX 템플릿 placeholder 검사
 - `template_factory.py`: 기본 HWPX/PPTX 템플릿 생성
 - `template_autofix.py`: 원본 보존 방식의 템플릿 자동 보정
@@ -118,6 +119,7 @@ Python 기반 보조 엔진입니다.
 - 템플릿 자동 보정 사본 생성
 - `report_package.json` 생성
 - `preflight_report.json` 생성
+- HWP/HWPX 보고서틀 표 후보 인식 및 `hwp_table_mapping.json` 생성
 - 문서 생성 준비 상태 표시
 - CLI 기반 PPTX 보고서/차트 검토 초본 생성
 - PowerPoint 편집 가능한 차트 객체 생성
@@ -136,7 +138,7 @@ Python 기반 보조 엔진입니다.
 - 런처에서 PPTX 보고서 직접 생성
 - 런처에서 차트 검토 PPTX 직접 생성
 - HWP 바이너리 직접 편집
-- HWPX 템플릿의 반복 결과 블록을 인식해 실제 보고서 표 서식을 복제한 삽입
+- HWPX 템플릿의 반복 결과 블록을 복제해 실제 보고서 표 서식을 보존한 삽입
 - HWPX 템플릿에 차트를 EMF/한글 차트 객체로 자동 삽입
 - PPTX 템플릿 디자인을 보존한 placeholder 기반 정밀 치환
 

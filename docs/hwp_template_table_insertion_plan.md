@@ -269,7 +269,7 @@ Excel 산출 시트
   "status": "ready",
   "summary": {
     "table_count": 121,
-    "result_candidate_count": 10,
+    "result_candidate_count": 11,
     "style_candidate_count": 0,
     "recommended_block_id": "THWPX_009"
   },
@@ -279,7 +279,61 @@ Excel 산출 시트
 }
 ```
 
-### 5.4 `report_package_v2`
+### 5.4 `hwp_table_mapping.py`
+
+1차 구현 완료.
+
+역할:
+
+- `report_package.json`의 section/table과 `hwp_template_table_recognition.json`의 표 후보를 연결
+- 사용자가 선택한 `block_id` 또는 추천 `recommended_block_id`를 writer 계약으로 고정
+- 누락된 section/table, 비어 있는 최종 분석문, 사용할 수 없는 템플릿 상태를 문서 생성 전에 차단
+- 하나의 템플릿 반복 블록을 여러 section에 적용하는 경우 warning으로 표시
+
+출력 핵심:
+
+```json
+{
+  "status": "ready_with_warnings",
+  "selected": {
+    "block_id": "THWPX_009",
+    "selection_source": "recommended_block"
+  },
+  "summary": {
+    "section_count": 2,
+    "mapped_section_count": 2,
+    "package_table_count": 2,
+    "warning_count": 1,
+    "error_count": 0
+  },
+  "section_mappings": [
+    {
+      "table_key": "T001",
+      "template_block": {
+        "block_id": "THWPX_009",
+        "table_index": 9,
+        "table_kind": "modern_n_percent"
+      },
+      "writer_contract": {
+        "mode": "repeat_result_block",
+        "defer_chart": true,
+        "preserve_template_style": true
+      }
+    }
+  ]
+}
+```
+
+CLI:
+
+```powershell
+python -m report_automation_engine.hwp_table_mapping `
+  --package "C:\path\report_package.json" `
+  --recognition "C:\path\hwp_template_table_recognition.json" `
+  --output "C:\path\hwp_table_mapping.json"
+```
+
+### 5.5 `report_package_v2`
 
 현재 package의 `tables[].rows`를 확장한다.
 
@@ -306,7 +360,7 @@ Excel 산출 시트
 }
 ```
 
-### 5.5 `hwp_result_block_writer.py`
+### 5.6 `hwp_result_block_writer.py`
 
 신규 개발 또는 `hwp_com_writer.py` 확장.
 
@@ -438,7 +492,7 @@ HWP 차트는 즉시 직접 삽입하지 않는다.
 
 1. `hwp_template_probe.py`를 개선해 셀 병합/스타일 정보를 추출한다.
 2. `template_blueprint.py`를 추가해 결과표 반복 블록 후보를 만든다.
-3. 제공 템플릿 중 국립암센터 HWPX를 기준으로 `RESULT_BLOCK_001` blueprint를 수동/자동 혼합으로 만든다.
+3. 제공 템플릿 중 국립암센터 HWPX를 기준으로 `RESULT_BLOCK_001` blueprint를 수동/자동 혼합으로 만든다. 1차 구현은 `hwp_template_table_recognizer.py`와 `hwp_table_mapping.py`로 완료했다.
 4. Excel 없이 fake `report_package_v2` 하나를 만들어 실제 HWPX 한 페이지를 생성한다.
 5. 그 결과를 사용자가 열어보고 “표 위치/크기/서식이 맞는지” 확인한다.
 

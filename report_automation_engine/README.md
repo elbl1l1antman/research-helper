@@ -48,6 +48,10 @@
   - 사용자가 제공한 HWP/HWPX 보고서 템플릿에서 자동화에 사용할 표 후보를 인식합니다.
   - 결과표 후보, 스타일 원본 표, 레이아웃용 표를 분리한 사용자/런처용 JSON 리포트를 생성합니다.
 
+- `hwp_table_mapping.py`
+  - `report_package.json`의 section/table과 `hwp_template_table_recognition.json`의 템플릿 표 후보를 연결합니다.
+  - 다음 HWPX writer가 직접 읽을 `hwp_table_mapping.json` 계약을 생성하고, 누락 표/문장/템플릿 후보를 차단합니다.
+
 - `dashboard_package.py`
   - 기관/기업 1행, 지표 여러 열의 가로형 Excel 원자료를 읽어 `dashboard_package.json`과 `dashboard_preflight_report.json`을 생성합니다.
   - Excel 검사 모드에서는 sheet, 열, 예시값, 열 유형, 상위 30행 미리보기를 JSON으로 저장합니다.
@@ -176,6 +180,21 @@ python -m report_automation_engine.hwp_com_writer `
   --template "C:\path\report_template.hwpx" `
   --output "C:\path\report_draft.hwpx" `
   --visible false
+```
+
+사용자 제공 HWP/HWPX 보고서틀에서 반복 결과표 후보를 인식하고 package와 연결하려면 다음 순서로 실행합니다.
+
+```powershell
+python -m report_automation_engine.hwp_template_table_recognizer `
+  --template "C:\path\report_template.hwpx" `
+  --output-dir "C:\path\hwp_template_recognition"
+```
+
+```powershell
+python -m report_automation_engine.hwp_table_mapping `
+  --package "C:\path\report_package.json" `
+  --recognition "C:\path\hwp_template_recognition\hwp_template_table_recognition.json" `
+  --output "C:\path\hwp_table_mapping.json"
 ```
 
 주요 동작:
