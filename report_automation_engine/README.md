@@ -28,6 +28,10 @@
   - 원본 템플릿은 수정하지 않고 출력 경로에 사본을 만든 뒤 `{{BODY}}` 위치에 제목, 분석문, 표, 출처를 삽입합니다.
   - 실패 시 `hwp_writer_report.json`에 실패 단계, COM action, placeholder 상태, 경고를 기록합니다.
 
+- `hwp_com_smoke.py`
+  - 아래한글 COM으로 최소 HWPX 템플릿과 샘플 package/preflight를 만든 뒤 실제 writer를 실행합니다.
+  - 생성된 HWPX 내부 XML에서 본문 텍스트 삽입과 `{{BODY}}` 제거 여부를 확인합니다.
+
 - `dashboard_package.py`
   - 기관/기업 1행, 지표 여러 열의 가로형 Excel 원자료를 읽어 `dashboard_package.json`과 `dashboard_preflight_report.json`을 생성합니다.
   - Excel 검사 모드에서는 sheet, 열, 예시값, 열 유형, 상위 30행 미리보기를 JSON으로 저장합니다.
@@ -166,6 +170,16 @@ python -m report_automation_engine.hwp_com_writer `
 - `{{BODY}}`를 찾지 못하면 생성하지 않고 writer report에 실패 사유를 남깁니다.
 - HWP 표 객체 생성을 우선 시도하고, COM action이 실패하면 탭 구분 텍스트 표로 대체합니다.
 - 차트는 v1에서 직접 삽입하지 않고 `[차트 삽입 필요]` 문구로 표시합니다.
+
+HWPX writer 회귀 확인은 다음 명령으로 실행합니다.
+
+```powershell
+python -m report_automation_engine.hwp_com_smoke `
+  --output-dir "outputs\hwp_com_smoke" `
+  --visible false
+```
+
+성공하면 `minimal_template.hwpx`, `report_package.json`, `preflight_report.json`, `draft_output.hwpx`, `hwp_writer_report.json`, `hwp_com_smoke_report.json`이 생성됩니다. 이 테스트는 Windows, 아래한글, pywin32가 모두 준비된 환경에서만 통과합니다.
 
 기업/기관 대시보드 PPTX는 원자료를 먼저 검사하고, 사용자가 선택한 데이터/매핑 JSON을 기준으로 생성합니다.
 
