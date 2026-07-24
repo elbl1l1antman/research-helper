@@ -158,6 +158,8 @@ namespace ReportAutomationLauncher
         private readonly Button closeButton = new Button();
         private readonly Button openWorkbookButton = new Button();
         private readonly Button openDraftButton = new Button();
+        private readonly Button openHwpOutputButton = new Button();
+        private readonly Button openHwpReportButton = new Button();
         private readonly Button copyDraftButton = new Button();
         private readonly TextBox logText = new TextBox();
         private readonly TextBox resultSummaryText = new TextBox();
@@ -811,6 +813,14 @@ namespace ReportAutomationLauncher
             openDraftButton.Width = 105;
             openDraftButton.Enabled = false;
             openDraftButton.Click += OpenDraftButton_Click;
+            openHwpOutputButton.Text = "HWPX 초본 열기";
+            openHwpOutputButton.Width = 115;
+            openHwpOutputButton.Enabled = false;
+            openHwpOutputButton.Click += OpenHwpOutputButton_Click;
+            openHwpReportButton.Text = "HWPX 리포트 열기";
+            openHwpReportButton.Width = 125;
+            openHwpReportButton.Enabled = false;
+            openHwpReportButton.Click += OpenHwpReportButton_Click;
             copyDraftButton.Text = "초안 복사";
             copyDraftButton.Width = 85;
             copyDraftButton.Enabled = false;
@@ -821,6 +831,8 @@ namespace ReportAutomationLauncher
             draftPreviewStatusLabel.Text = "문장 초안이 생성되면 아래에 표시됩니다.";
             resultButtons.Controls.Add(openWorkbookButton);
             resultButtons.Controls.Add(openDraftButton);
+            resultButtons.Controls.Add(openHwpOutputButton);
+            resultButtons.Controls.Add(openHwpReportButton);
             resultButtons.Controls.Add(copyDraftButton);
             resultButtons.Controls.Add(draftPreviewStatusLabel);
             panel.Controls.Add(resultButtons, 0, 4);
@@ -2045,6 +2057,8 @@ namespace ReportAutomationLauncher
             draftPreviewStatusLabel.Text = "실행 중...";
             openWorkbookButton.Enabled = false;
             openDraftButton.Enabled = false;
+            openHwpOutputButton.Enabled = false;
+            openHwpReportButton.Enabled = false;
             copyDraftButton.Enabled = false;
             Log("실행을 시작합니다.");
 
@@ -2179,6 +2193,12 @@ namespace ReportAutomationLauncher
 
             openDraftButton.Tag = options.LastDraftTextPath;
             openDraftButton.Enabled = !string.IsNullOrWhiteSpace(options.LastDraftTextPath) && File.Exists(options.LastDraftTextPath);
+
+            openHwpOutputButton.Tag = options.LastHwpOutputPath;
+            openHwpOutputButton.Enabled = !string.IsNullOrWhiteSpace(options.LastHwpOutputPath) && File.Exists(options.LastHwpOutputPath);
+
+            openHwpReportButton.Tag = options.LastHwpWriterReportPath;
+            openHwpReportButton.Enabled = !string.IsNullOrWhiteSpace(options.LastHwpWriterReportPath) && File.Exists(options.LastHwpWriterReportPath);
 
             LoadDraftPreview(options.LastDraftTextPath);
         }
@@ -2411,6 +2431,16 @@ namespace ReportAutomationLauncher
         private void OpenDraftButton_Click(object sender, EventArgs e)
         {
             OpenPathFromButton(openDraftButton);
+        }
+
+        private void OpenHwpOutputButton_Click(object sender, EventArgs e)
+        {
+            OpenPathFromButton(openHwpOutputButton);
+        }
+
+        private void OpenHwpReportButton_Click(object sender, EventArgs e)
+        {
+            OpenPathFromButton(openHwpReportButton);
         }
 
         private void CopyDraftButton_Click(object sender, EventArgs e)

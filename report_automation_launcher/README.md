@@ -10,7 +10,7 @@
 
 GUI에서 집계표 Excel 파일과 자동화 추가기능(`.xlam`)을 선택하면 표 목록과 배너 목록을 먼저 확인할 수 있습니다. 이후 실행하면 선택한 통합문서에 보고서 산출 시트를 생성하고, 선택 시 Python 보조 엔진으로 문장 초안 TXT도 함께 생성합니다. 생성된 초안은 결과 탭에서 미리보기, 문장별 수정, QA 경고 확인, 열기, 복사, 검토본 저장을 할 수 있습니다.
 
-현재 알파에서 실제 실행되는 출력은 `Excel 산출 시트`, `문장 초안 TXT`, `report_package.json`, `preflight_report.json`입니다. HWP/HWPX 및 PowerPoint 출력 형식, 템플릿, 차트/삽입표 방식은 GUI에서 먼저 선택하고 사전검증에 반영하며, 실제 문서 생성은 다음 알파 단계에서 활성화합니다.
+현재 알파에서 실제 실행되는 출력은 `Excel 산출 시트`, `문장 초안 TXT`, `report_package.json`, `preflight_report.json`, HWPX 초본입니다. HWPX 초본은 Windows에서 아래한글 COM 객체를 사용할 수 있을 때 생성하며, PowerPoint 보고서 출력은 아직 선택/검증 중심입니다.
 
 ## 기본 동작
 
@@ -24,7 +24,8 @@ GUI에서 집계표 Excel 파일과 자동화 추가기능(`.xlam`)을 선택하
 - API 키 값은 실행 중 옵션으로만 들고 있으며, `*_launcher_config.txt`에는 키 자체가 아니라 입력 여부만 기록합니다.
 - 기본값으로 `문장 초안 TXT(Python)`를 생성합니다. VBA가 만든 `보고서_분석문*` 시트가 있으면 그 내용을 우선 사용하고, 없으면 원본 표 블록을 직접 분석합니다.
 - 실행 후 `report_package.json`과 `preflight_report.json`을 생성해 HWPX/PPTX 문서 생성 전 준비 상태를 `ready`, `ready_with_warnings`, `blocked`로 표시합니다.
-- 실행 완료 후 결과 탭에서 산출 엑셀 열기, 초안 TXT 열기, 초안 미리보기 복사, 문장별 수정, 검토본 저장을 할 수 있습니다.
+- 실행 완료 후 결과 탭에서 산출 엑셀 열기, 초안 TXT 열기, HWPX 초본 열기, HWPX writer report 열기, 초안 미리보기 복사, 문장별 수정, 검토본 저장을 할 수 있습니다.
+- HWPX 보고서 출력은 실행 전 아래한글 COM 환경을 먼저 점검하고, 실패 시 writer report에 실패 단계와 오류를 남깁니다.
 - QA 경고 탭에서는 출처 없음, 제목 없음, 문장 짧음, 수치 없음, 종결 표현 확인 항목을 필터링해 검토할 수 있습니다.
 - 실행 설정은 산출 파일 옆에 `*_launcher_config.txt`로 기록됩니다.
 - `REPORT_AUTOMATION_ADDIN` 환경변수를 지정하면 기본 추가기능 경로로 사용합니다.
@@ -84,6 +85,10 @@ GUI 없이 자동화 호출만 확인할 때 사용할 수 있습니다.
 - `--no-copy`: 원본 파일에 직접 산출
 - `--keep-open`: 완료 후 Excel 창 유지
 - `--no-draft`: Python 문장 초안 TXT 생성 생략
+- `--output-type "HWPX 보고서"`: Excel 산출 후 HWPX 초본 생성
+- `--hwp-template <path>`: HWPX 보고서 템플릿
+- `--hwp-visible`: 아래한글 창 표시 상태로 HWPX 생성
+- `--hwp-keep-open-on-error`: HWPX 생성 실패 시 열린 문서 유지
 
 배너 목록 탐지만 확인할 때는 다음 옵션을 사용할 수 있습니다.
 
