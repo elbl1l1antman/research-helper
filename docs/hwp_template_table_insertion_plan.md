@@ -251,7 +251,35 @@ Excel 산출 시트
 }
 ```
 
-### 5.3 `report_package_v2`
+### 5.3 `hwp_template_table_recognizer.py`
+
+1차 구현 완료.
+
+역할:
+
+- 사용자가 HWP/HWPX 보고서 템플릿을 선택하면 표 후보를 인식
+- 내부적으로 `hwp_template_probe.py`와 `template_blueprint.py`를 실행
+- 결과표 후보, 스타일 원본 표 후보, 레이아웃 표를 분리
+- 런처에서 바로 보여줄 수 있는 `hwp_template_table_recognition.json` 생성
+
+출력 핵심:
+
+```json
+{
+  "status": "ready",
+  "summary": {
+    "table_count": 121,
+    "result_candidate_count": 10,
+    "style_candidate_count": 0,
+    "recommended_block_id": "THWPX_009"
+  },
+  "result_table_candidates": [],
+  "style_table_candidates": [],
+  "layout_tables": []
+}
+```
+
+### 5.4 `report_package_v2`
 
 현재 package의 `tables[].rows`를 확장한다.
 
@@ -278,7 +306,7 @@ Excel 산출 시트
 }
 ```
 
-### 5.4 `hwp_result_block_writer.py`
+### 5.5 `hwp_result_block_writer.py`
 
 신규 개발 또는 `hwp_com_writer.py` 확장.
 
@@ -341,6 +369,7 @@ Excel 산출 시트를 읽으면:
 - HWP/HWPX 변환 및 분석 도구 정식화
 - 표 객체를 레이아웃/목차/캡션/차트/결과표로 분류
 - 반복 결과 블록 후보 blueprint 생성
+- 사용자 제공 템플릿의 표 후보 인식 리포트 생성
 - 셀 병합, 선, 배경, 글꼴, 정렬 추출
 - 분석 결과를 GUI에서 확인 가능한 JSON으로 저장
 

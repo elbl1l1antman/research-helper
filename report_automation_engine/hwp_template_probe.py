@@ -24,7 +24,7 @@ except ImportError:  # pragma: no cover
     from hwp_com_writer import close_hwp, create_hwp_object, now, save_as_hwpx, set_visible, write_json  # type: ignore
 
 
-def probe_templates(paths: List[str | Path], output_dir: str | Path, visible: bool = False) -> Dict[str, Any]:
+def probe_templates(paths: List[str | Path], output_dir: str | Path, visible: bool = False, table_detail_limit: int = 30) -> Dict[str, Any]:
     root = Path(output_dir).resolve()
     root.mkdir(parents=True, exist_ok=True)
     converted_dir = root / "converted_hwpx"
@@ -60,7 +60,7 @@ def probe_templates(paths: List[str | Path], output_dir: str | Path, visible: bo
                 raise FileNotFoundError(str(source_path))
             hwpx_path = ensure_hwpx_copy(source_path, converted_dir, visible, item)
             item["analyzed_path"] = str(hwpx_path)
-            analyze_hwpx(hwpx_path, item)
+            analyze_hwpx(hwpx_path, item, table_detail_limit)
         except Exception as exc:
             item["errors"].append(str(exc))
             report["errors"].append(f"{source_path}: {exc}")
@@ -155,7 +155,7 @@ def convert_hwp_to_hwpx(source_path: Path, target_path: Path, visible: bool) -> 
             time.sleep(1.0)
 
 
-def analyze_hwpx(path: Path, item: Dict[str, Any]) -> None:
+def analyze_hwpx(path: Path, item: Dict[str, Any], table_detail_limit: int = 30) -> None:
     if not zipfile.is_zipfile(path):
         raise ValueError("HWPX zip 패키지가 아닙니다.")
 
@@ -171,9 +171,12 @@ def analyze_hwpx(path: Path, item: Dict[str, Any]) -> None:
 
     item["headings"] = guess_headings(paragraphs)
     item["table_count"] = len(tables)
-    item["tables"] = tables[:30]
-    if len(tables) > 30:
-        item["warnings"].append(f"표 {len(tables)}개 중 앞 30개만 상세 기록했습니다.")
+    if table_detail_limit <= 0:
+        item["tables"] = tables
+    else:
+        item["tables"] = tables[:table_detail_limit]
+        if len(tables) > table_detail_limit:
+            item["warnings"].append(f"표 {len(tables)}개 중 앞 {table_detail_limit}개만 상세 기록했습니다.")
 
 
 def walk_section(node: ET.Element, section_name: str, paragraphs: List[str], tables: List[Dict[str, Any]]) -> None:
@@ -264,10 +267,11 @@ def run_cli(argv: List[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Probe HWP/HWPX report templates.")
     parser.add_argument("--output-dir", required=True)
     parser.add_argument("--visible", action="store_true")
+    parser.add_argument("--table-detail-limit", type=int, default=30, help="상세 기록할 표 개수입니다. 0이면 전체 표를 기록합니다.")
     parser.add_argument("templates", nargs="+")
     args = parser.parse_args(argv)
 
-    report = probe_templates(args.templates, args.output_dir, args.visible)
+    report = probe_templates(args.templates, args.output_dir, args.visible, args.table_detail_limit)
     print(
         json.dumps(
             {
