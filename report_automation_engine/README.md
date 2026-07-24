@@ -40,6 +40,10 @@
   - HWP/HWPX 보고서틀을 분석해 표 객체, 주변 문단, 결과표 후보를 JSON으로 추출합니다.
   - HWP 원본은 수정하지 않고 아래한글 COM으로 HWPX 사본을 만든 뒤 분석합니다.
 
+- `template_blueprint.py`
+  - `hwp_template_probe_report.json`을 읽어 문항별 반복 결과 블록 후보를 점수화합니다.
+  - 표 제목, 분석문, 그림/차트 캡션, Base/단위, 결과표의 반복 구조를 writer용 blueprint로 정규화합니다.
+
 - `dashboard_package.py`
   - 기관/기업 1행, 지표 여러 열의 가로형 Excel 원자료를 읽어 `dashboard_package.json`과 `dashboard_preflight_report.json`을 생성합니다.
   - Excel 검사 모드에서는 sheet, 열, 예시값, 열 유형, 상위 30행 미리보기를 JSON으로 저장합니다.
@@ -209,6 +213,16 @@ python -m report_automation_engine.hwp_template_probe `
 ```
 
 성공하면 `hwp_template_probe_report.json`과 `hwp_template_probe_summary.json`을 기준으로 템플릿 안의 결과표 후보, 목차/표지용 레이아웃 표, 그림/표 캡션 후보를 검토할 수 있습니다.
+
+probe 결과에서 반복 결과 블록 후보를 만들 때는 다음 명령을 사용합니다.
+
+```powershell
+python -m report_automation_engine.template_blueprint `
+  --probe "outputs\hwp_template_probe\hwp_template_probe_report.json" `
+  --output "outputs\hwp_template_probe\template_blueprint.json"
+```
+
+생성된 blueprint는 HWPX writer가 실제 표를 삽입하기 전, 사용자가 어느 보고서틀 블록을 반복 사용할지 선택하는 중간 계약입니다.
 
 기업/기관 대시보드 PPTX는 원자료를 먼저 검사하고, 사용자가 선택한 데이터/매핑 JSON을 기준으로 생성합니다.
 

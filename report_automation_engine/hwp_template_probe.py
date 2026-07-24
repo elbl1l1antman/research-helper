@@ -185,6 +185,7 @@ def walk_section(node: ET.Element, section_name: str, paragraphs: List[str], tab
                 paragraphs.append(text)
         elif local == "tbl":
             table = extract_table(child)
+            table["table_index"] = len(tables) + 1
             table["section"] = section_name
             table["before_text"] = paragraphs[-3:]
             tables.append(table)
