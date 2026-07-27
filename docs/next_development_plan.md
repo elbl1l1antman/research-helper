@@ -1,6 +1,6 @@
 # 다음 개발 계획
 
-작성 기준 버전: `0.0.26`
+작성 기준 버전: `0.0.27`
 
 ## 목표
 
@@ -142,8 +142,8 @@ v1 범위:
 
 ## 다음 실행 순서
 
-1. 아래한글 COM writer의 1개 문항 제한 실행을 실제 사용자 템플릿으로 검증한다.
-2. `hwp_table_style_profile.json`을 HWPX writer 입력으로 연결한다.
+1. HWPX writer의 표 선/배경/셀 여백 적용 범위를 COM action 단위로 확장한다.
+2. 실제 사용자 템플릿에서 인식한 반복 결과 블록과 writer 삽입 위치를 연결한다.
 3. 외부 프로그램 전환을 위해 VBA와 Python 엔진이 같은 package 계약을 생성하는 비교 테스트를 추가한다.
 
 ## 0.0.20 확인 결과
@@ -214,3 +214,21 @@ v1 범위:
   - section_count_selected: 1
   - table_preview_rows 생성 확인
   - chart_deferred 표시 확인
+
+## 0.0.27 확인 결과
+
+- HWP COM writer에 표 스타일 profile 입력 추가
+  - `--table-style-profile`
+  - render plan의 `table_style_profile` 요약 생성
+  - writer report의 `table_style_profile_path`, `table_style_profile`, `table_style_applied` 기록
+- 런처 HWPX 설정에 `HWP 표 스타일` JSON 선택 필드 추가
+- 현재 실제 적용 범위:
+  - 대표 글자 크기 `dominant_font_height`
+  - 국립암센터 템플릿 style profile 기준 900 = 9.0pt 적용 확인
+- 실제 HWPX 생성 검증:
+  - status: `ready`
+  - sections_written: 1
+  - tables_written: 1
+  - text_table_fallbacks: 0
+  - charts_deferred: 1
+  - table_style_applied.dominant_font_pt: 9.0

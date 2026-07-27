@@ -349,6 +349,7 @@ namespace ReportAutomationLauncher
         private readonly ComboBox outputTypeCombo = new ComboBox();
         private readonly TextBox hwpTemplateText = new TextBox();
         private readonly TextBox pptTemplateText = new TextBox();
+        private readonly TextBox hwpTableStyleProfileText = new TextBox();
         private readonly Button inspectTemplateButton = new Button();
         private readonly Button createHwpTemplateButton = new Button();
         private readonly Button createPptTemplateButton = new Button();
@@ -837,7 +838,7 @@ namespace ReportAutomationLauncher
             group.AutoSize = true;
             group.Padding = new Padding(10);
 
-            var grid = CreateGrid(8);
+            var grid = CreateGrid(9);
             group.Controls.Add(grid);
 
             AddLabel(grid, 0, "출력 형식");
@@ -851,6 +852,7 @@ namespace ReportAutomationLauncher
 
             AddPathRow(grid, 1, "HWP/HWPX 템플릿", hwpTemplateText, "찾기", BrowseHwpTemplate);
             AddPathRow(grid, 2, "PPTX 템플릿", pptTemplateText, "찾기", BrowsePptTemplate);
+            AddPathRow(grid, 3, "HWP 표 스타일", hwpTableStyleProfileText, "찾기", BrowseHwpTableStyleProfile);
 
             var templateButtons = new FlowLayoutPanel();
             templateButtons.Dock = DockStyle.Fill;
@@ -879,15 +881,15 @@ namespace ReportAutomationLauncher
             templateButtons.Controls.Add(createChartTemplateButton);
             templateButtons.Controls.Add(autoFixTemplateButton);
             templateButtons.Controls.Add(openTemplateGuideButton);
-            AddLabel(grid, 3, "템플릿 도구");
-            grid.Controls.Add(templateButtons, 1, 3);
+            AddLabel(grid, 4, "템플릿 도구");
+            grid.Controls.Add(templateButtons, 1, 4);
             grid.SetColumnSpan(templateButtons, 2);
 
             templateStatusLabel.Text = "템플릿을 선택하거나 기본 템플릿을 생성하세요.";
             templateStatusLabel.AutoSize = true;
             templateStatusLabel.ForeColor = LauncherUi.ColorMutedText;
             templateStatusLabel.Margin = new Padding(0, 4, 0, 0);
-            grid.Controls.Add(templateStatusLabel, 1, 4);
+            grid.Controls.Add(templateStatusLabel, 1, 5);
             grid.SetColumnSpan(templateStatusLabel, 2);
 
             var hwpOptions = new FlowLayoutPanel();
@@ -908,8 +910,8 @@ namespace ReportAutomationLauncher
             hwpOptions.Controls.Add(hwpKeepOpenOnErrorCheck);
             hwpOptions.Controls.Add(hwpLimitLabel);
             hwpOptions.Controls.Add(hwpMaxSectionsCombo);
-            AddLabel(grid, 5, "HWPX 옵션");
-            grid.Controls.Add(hwpOptions, 1, 5);
+            AddLabel(grid, 6, "HWPX 옵션");
+            grid.Controls.Add(hwpOptions, 1, 6);
             grid.SetColumnSpan(hwpOptions, 2);
 
             var components = new FlowLayoutPanel();
@@ -925,8 +927,8 @@ namespace ReportAutomationLauncher
             components.Controls.Add(tableCheck);
             components.Controls.Add(qaCheck);
             components.Controls.Add(draftTextCheck);
-            AddLabel(grid, 6, "구성요소");
-            grid.Controls.Add(components, 1, 6);
+            AddLabel(grid, 7, "구성요소");
+            grid.Controls.Add(components, 1, 7);
             grid.SetColumnSpan(components, 2);
 
             var note = new Label();
@@ -934,7 +936,7 @@ namespace ReportAutomationLauncher
             note.AutoSize = true;
             note.ForeColor = LauncherUi.ColorMutedText;
             note.Margin = new Padding(0, 4, 0, 0);
-            grid.Controls.Add(note, 1, 7);
+            grid.Controls.Add(note, 1, 8);
             grid.SetColumnSpan(note, 2);
 
             return group;
@@ -1975,6 +1977,11 @@ namespace ReportAutomationLauncher
         private void BrowsePptTemplate(object sender, EventArgs e)
         {
             BrowseTemplate(pptTemplateText, "PowerPoint 템플릿 선택", "PowerPoint files (*.pptx;*.ppt)|*.pptx;*.ppt|All files (*.*)|*.*", "PPTX 템플릿을 선택했습니다. 검사를 실행하세요.");
+        }
+
+        private void BrowseHwpTableStyleProfile(object sender, EventArgs e)
+        {
+            BrowseTemplate(hwpTableStyleProfileText, "HWP 표 스타일 profile 선택", "JSON files (*.json)|*.json|All files (*.*)|*.*", "HWP 표 스타일 profile을 선택했습니다.");
         }
 
         private void BrowseTemplate(TextBox targetTextBox, string title, string filter, string statusMessage)
@@ -3495,6 +3502,7 @@ namespace ReportAutomationLauncher
             options.StyleProfile = styleProfileCombo.SelectedItem == null ? "" : styleProfileCombo.SelectedItem.ToString();
             options.HwpTemplatePath = hwpTemplateText.Text.Trim();
             options.PptTemplatePath = pptTemplateText.Text.Trim();
+            options.HwpTableStyleProfilePath = hwpTableStyleProfileText.Text.Trim();
             options.BannerSetting = bannerText.Text.Trim();
             options.TitlePrefixes = titlePrefixesText.Text.Trim();
             options.DecimalPlaces = SelectedDecimalPlaces();
@@ -3561,6 +3569,7 @@ namespace ReportAutomationLauncher
         public string StyleProfile = "공식 보고서체";
         public string HwpTemplatePath;
         public string PptTemplatePath;
+        public string HwpTableStyleProfilePath;
         public string BannerSetting = "전체";
         public string TitlePrefixes = "";
         public int DecimalPlaces = 1;
@@ -3614,6 +3623,14 @@ namespace ReportAutomationLauncher
             if (!string.IsNullOrWhiteSpace(PptTemplatePath))
             {
                 PptTemplatePath = Path.GetFullPath(PptTemplatePath);
+            }
+            if (!string.IsNullOrWhiteSpace(HwpTableStyleProfilePath))
+            {
+                HwpTableStyleProfilePath = Path.GetFullPath(HwpTableStyleProfilePath);
+                if (!File.Exists(HwpTableStyleProfilePath))
+                {
+                    throw new FileNotFoundException("HWP 표 스타일 profile 파일을 찾을 수 없습니다.", HwpTableStyleProfilePath);
+                }
             }
             if (OutputType.IndexOf("HWP", StringComparison.OrdinalIgnoreCase) >= 0)
             {
@@ -3698,6 +3715,7 @@ namespace ReportAutomationLauncher
             options.StyleProfile = Get(values, "style-profile", "공식 보고서체");
             options.HwpTemplatePath = Get(values, "hwp-template", "");
             options.PptTemplatePath = Get(values, "ppt-template", "");
+            options.HwpTableStyleProfilePath = Get(values, "hwp-table-style-profile", "");
             options.BannerSetting = Get(values, "banner", "전체");
             options.TitlePrefixes = Get(values, "prefixes", "");
             options.DecimalPlaces = GetInt(values, "decimal-places", 1);
@@ -3985,6 +4003,7 @@ namespace ReportAutomationLauncher
                 writer.WriteLine("StyleProfile=" + options.StyleProfile);
                 writer.WriteLine("HwpTemplate=" + options.HwpTemplatePath);
                 writer.WriteLine("PptTemplate=" + options.PptTemplatePath);
+                writer.WriteLine("HwpTableStyleProfile=" + options.HwpTableStyleProfilePath);
                 writer.WriteLine("BannerSetting=" + options.BannerSetting);
                 writer.WriteLine("TitlePrefixes=" + options.TitlePrefixes);
                 writer.WriteLine("DecimalPlaces=" + options.DecimalPlaces);
@@ -4254,6 +4273,7 @@ namespace ReportAutomationLauncher
                                       " --report-output " + Quote(reportPath) +
                                       " --render-plan-output " + Quote(renderPlanPath) +
                                       " --max-sections " + Quote(options.HwpMaxSections.ToString()) +
+                                      OptionalArgument(" --table-style-profile ", options.HwpTableStyleProfilePath) +
                                       (options.HwpKeepOpenOnError ? " --keep-open-on-error" : "");
                 startInfo.UseShellExecute = false;
                 startInfo.CreateNoWindow = true;
@@ -4342,6 +4362,11 @@ namespace ReportAutomationLauncher
         private static string Quote(string value)
         {
             return "\"" + (value ?? "").Replace("\"", "\\\"") + "\"";
+        }
+
+        private static string OptionalArgument(string name, string value)
+        {
+            return string.IsNullOrWhiteSpace(value) ? "" : name + Quote(value);
         }
     }
 

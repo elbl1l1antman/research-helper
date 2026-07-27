@@ -47,6 +47,7 @@ def write_hwp_document(
     max_sections: int | None = None,
     render_plan_path: str | Path | None = None,
     dry_run: bool = False,
+    table_style_profile_path: str | Path | None = None,
 ) -> Path:
     """Write a report draft and always write a companion JSON report."""
 
@@ -57,16 +58,19 @@ def write_hwp_document(
     writer_report = new_report(package_file, preflight_file, template_file, output_file, visible)
     report_file = Path(report_path).resolve() if report_path else output_file.with_name(output_file.stem + "_hwp_writer_report.json")
     render_plan_file = Path(render_plan_path).resolve() if render_plan_path else output_file.with_name(output_file.stem + "_hwp_render_plan.json")
+    table_style_profile_file = Path(table_style_profile_path).resolve() if table_style_profile_path else None
     hwp = None
 
     try:
         package = load_json(package_file)
         preflight = load_json(preflight_file)
         validate_preflight(preflight)
-        render_plan = build_render_plan(package, max_sections)
+        table_style_profile = load_table_style_profile(table_style_profile_file, writer_report)
+        render_plan = build_render_plan(package, max_sections, table_style_profile)
         writer_report["render_plan_path"] = str(render_plan_file)
         writer_report["section_count_total"] = render_plan["section_count_total"]
         writer_report["section_count_selected"] = render_plan["section_count_selected"]
+        writer_report["table_style_profile"] = render_plan["table_style_profile"]
         write_json(render_plan_file, render_plan)
 
         if dry_run:
@@ -93,7 +97,7 @@ def write_hwp_document(
         writer_report["placeholders"]["body_found"] = True
         run_action(hwp, "Delete", writer_report, "template")
 
-        write_body(hwp, package, writer_report, max_sections)
+        write_body(hwp, package, writer_report, max_sections, table_style_profile)
         save_as_hwpx(hwp, output_file, writer_report)
         writer_report["status"] = "ready"
         writer_report["finished_at"] = now()
@@ -280,7 +284,13 @@ def find_placeholder(hwp, text: str) -> bool:
         return False
 
 
-def write_body(hwp, package: Dict[str, Any], report: Dict[str, Any], max_sections: int | None = None) -> None:
+def write_body(
+    hwp,
+    package: Dict[str, Any],
+    report: Dict[str, Any],
+    max_sections: int | None = None,
+    table_style_profile: Dict[str, Any] | None = None,
+) -> None:
     tables_by_key = {str(table.get("table_key", "")): table for table in package.get("tables", [])}
     charts_by_key = group_charts(package.get("charts", []))
     sections = select_sections(package, max_sections)
@@ -299,7 +309,7 @@ def write_body(hwp, package: Dict[str, Any], report: Dict[str, Any], max_section
         if table:
             insert_text(hwp, str(table.get("title") or title), report)
             run_action(hwp, "BreakPara", report, "body")
-            if not insert_hwp_table(hwp, table_rows_for_hwp(table), report):
+            if not insert_hwp_table(hwp, table_rows_for_hwp(table), report, table_style_profile):
                 insert_text_table(hwp, table_rows_for_hwp(table), report)
             run_action(hwp, "BreakPara", report, "body")
         else:
@@ -323,7 +333,11 @@ def select_sections(package: Dict[str, Any], max_sections: int | None = None) ->
     return sections
 
 
-def build_render_plan(package: Dict[str, Any], max_sections: int | None = None) -> Dict[str, Any]:
+def build_render_plan(
+    package: Dict[str, Any],
+    max_sections: int | None = None,
+    table_style_profile: Dict[str, Any] | None = None,
+) -> Dict[str, Any]:
     """Create a COM-independent preview of what the HWP writer will insert."""
 
     tables_by_key = {str(table.get("table_key", "")): table for table in package.get("tables", [])}
@@ -365,11 +379,17 @@ def build_render_plan(package: Dict[str, Any], max_sections: int | None = None) 
         "table_count_total": len(package.get("tables", [])),
         "chart_count_total": len(package.get("charts", [])),
         "qa_count_total": len(package.get("qa", [])),
+        "table_style_profile": summarize_table_style_profile(table_style_profile),
         "sections": plan_sections,
     }
 
 
-def insert_hwp_table(hwp, rows: List[List[str]], report: Dict[str, Any]) -> bool:
+def insert_hwp_table(
+    hwp,
+    rows: List[List[str]],
+    report: Dict[str, Any],
+    table_style_profile: Dict[str, Any] | None = None,
+) -> bool:
     """Try to create a real HWP table. Fall back to text table when COM differs."""
 
     if not rows:
@@ -377,6 +397,7 @@ def insert_hwp_table(hwp, rows: List[List[str]], report: Dict[str, Any]) -> bool
     report["stage"] = "table"
     report["action"] = "TableCreate"
     try:
+        apply_table_style_before_create(hwp, table_style_profile, report)
         params = hwp.HParameterSet.HTableCreation
         hwp.HAction.GetDefault("TableCreate", params.HSet)
         params.Rows = len(rows)
@@ -402,6 +423,88 @@ def insert_hwp_table(hwp, rows: List[List[str]], report: Dict[str, Any]) -> bool
     except Exception as exc:
         report["warnings"].append(f"HWP 표 객체 생성 실패, 텍스트 표로 대체합니다: {exc}")
         return False
+
+
+def load_table_style_profile(path: Path | None, report: Dict[str, Any]) -> Dict[str, Any] | None:
+    if path is None:
+        return None
+    if not path.exists():
+        raise HwpWriterError("validate", "table_style_profile", f"표 스타일 profile 파일을 찾을 수 없습니다: {path}")
+    profile = load_json(path)
+    status = str(profile.get("status", ""))
+    if status and status != "ready":
+        report["warnings"].append(f"표 스타일 profile 상태가 ready가 아닙니다: {status}")
+    report["table_style_profile_path"] = str(path)
+    return profile
+
+
+def summarize_table_style_profile(profile: Dict[str, Any] | None) -> Dict[str, Any]:
+    if not profile:
+        return {"loaded": False}
+    table_style = profile.get("table_style", {})
+    font_height = dominant_font_height(profile)
+    return {
+        "loaded": True,
+        "status": profile.get("status", ""),
+        "source": profile.get("style_source", {}),
+        "dominant_font_height": font_height,
+        "dominant_font_pt": height_to_points(font_height),
+        "fill_color_counts": table_style.get("fill_color_counts", {}),
+        "common_cell_border_fill_ids": table_style.get("common_cell_border_fill_ids", {}),
+        "cell_spacing": table_style.get("cell_spacing", ""),
+        "repeat_header": table_style.get("repeat_header", ""),
+        "supported_apply": ["dominant_font_height"],
+        "deferred_apply": ["cell_border", "cell_fill", "cell_margin", "repeat_header"],
+    }
+
+
+def dominant_font_height(profile: Dict[str, Any] | None) -> int | None:
+    if not profile:
+        return None
+    table_style = profile.get("table_style", {})
+    counts = table_style.get("font_height_counts", {})
+    best_height = None
+    best_count = -1
+    for raw_height, raw_count in counts.items():
+        try:
+            height = int(raw_height)
+            count = int(raw_count)
+        except (TypeError, ValueError):
+            continue
+        if count > best_count:
+            best_height = height
+            best_count = count
+    if best_height:
+        return best_height
+    for char_pr in table_style.get("common_char_prs", {}).values():
+        try:
+            return int(char_pr.get("height"))
+        except (AttributeError, TypeError, ValueError):
+            continue
+    return None
+
+
+def height_to_points(height: int | None) -> float | None:
+    if not height:
+        return None
+    return round(float(height) / 100.0, 1)
+
+
+def apply_table_style_before_create(hwp, profile: Dict[str, Any] | None, report: Dict[str, Any]) -> None:
+    font_height = dominant_font_height(profile)
+    if not font_height:
+        return
+    report["stage"] = "style"
+    report["action"] = "CharShape"
+    try:
+        params = hwp.HParameterSet.HCharShape
+        hwp.HAction.GetDefault("CharShape", params.HSet)
+        params.Height = int(font_height)
+        hwp.HAction.Execute("CharShape", params.HSet)
+        report["table_style_applied"]["dominant_font_height"] = int(font_height)
+        report["table_style_applied"]["dominant_font_pt"] = height_to_points(font_height)
+    except Exception as exc:
+        report["warnings"].append(f"표 글자 크기 profile 적용 실패: {exc}")
 
 
 def insert_text_table(hwp, rows: List[List[str]], report: Dict[str, Any]) -> None:
@@ -535,6 +638,9 @@ def new_report(package_file: Path, preflight_file: Path, template_file: Path, ou
         "template_path": str(template_file),
         "output_path": str(output_file),
         "render_plan_path": "",
+        "table_style_profile_path": "",
+        "table_style_profile": {"loaded": False},
+        "table_style_applied": {},
         "visible": visible,
         "template_copied": False,
         "document_opened": False,
@@ -581,6 +687,7 @@ def run_cli(argv: List[str] | None = None) -> int:
     parser.add_argument("--max-sections", type=int, default=0)
     parser.add_argument("--render-plan-output")
     parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument("--table-style-profile")
     parser.add_argument("--check-environment", action="store_true")
     args = parser.parse_args(argv)
 
@@ -611,6 +718,7 @@ def run_cli(argv: List[str] | None = None) -> int:
             args.max_sections if args.max_sections > 0 else None,
             args.render_plan_output,
             args.dry_run,
+            args.table_style_profile,
         )
         print(str(output))
         return 0
