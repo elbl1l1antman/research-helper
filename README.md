@@ -1,6 +1,6 @@
 # ReportAutomation
 
-Current version: `0.0.24`
+Current version: `0.0.25`
 
 `ReportAutomation`은 엑셀 집계표를 기반으로 조사 보고서 작성용 산출물을 자동 생성하는 런처 기반 프로젝트입니다.
 
@@ -33,6 +33,7 @@ Excel 집계표
 - 기업/기관 대시보드 PPT용 원자료 Excel 선택, sheet/기관/열 선택, KPI/차트 슬롯 매핑
 - 기업/기관 대시보드 PPT용 디자인 프리셋과 폰트 선택
 - 토큰 기반 WinForms UI 스타일 적용
+- 정보 카드형 헤더, owner-draw 탭, 문서형 그룹 패널 스타일 적용
 - `report_package.json`, `preflight_report.json` 생성 결과 표시
 
 주요 문서:

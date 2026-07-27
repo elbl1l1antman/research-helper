@@ -116,6 +116,7 @@ namespace ReportAutomationLauncher
         public static readonly Color ColorBackground = Color.FromArgb(246, 248, 251);
         public static readonly Color ColorSurface = Color.White;
         public static readonly Color ColorSurfaceAlt = Color.FromArgb(240, 244, 248);
+        public static readonly Color ColorSurfaceStrong = Color.FromArgb(232, 239, 247);
         public static readonly Color ColorBorder = Color.FromArgb(211, 219, 230);
         public static readonly Color ColorText = Color.FromArgb(31, 41, 55);
         public static readonly Color ColorMutedText = Color.FromArgb(89, 99, 112);
@@ -208,20 +209,8 @@ namespace ReportAutomationLauncher
             button.ForeColor = normalFore;
             button.FlatAppearance.BorderColor = border;
             button.FlatAppearance.BorderSize = 1;
-            button.MouseEnter += delegate
-            {
-                if (button.Enabled)
-                {
-                    button.BackColor = hoverBack;
-                }
-            };
-            button.MouseLeave += delegate
-            {
-                if (button.Enabled)
-                {
-                    button.BackColor = normalBack;
-                }
-            };
+            button.FlatAppearance.MouseOverBackColor = hoverBack;
+            button.FlatAppearance.MouseDownBackColor = kind == LauncherButtonKind.Primary ? ColorPrimaryHover : ColorSurfaceStrong;
         }
 
         public static void StyleStatusLabel(Label label, bool isReady)
@@ -242,9 +231,12 @@ namespace ReportAutomationLauncher
 
             if (control is GroupBox)
             {
-                control.BackColor = ColorBackground;
+                GroupBox groupBox = (GroupBox)control;
+                groupBox.BackColor = ColorBackground;
+                groupBox.Padding = new Padding(SpaceLg, SpaceXl + SpaceSm, SpaceLg, SpaceLg);
                 control.ForeColor = ColorText;
                 control.Font = SectionFont();
+                groupBox.Paint += PaintGroupBox;
                 return;
             }
 
@@ -255,6 +247,7 @@ namespace ReportAutomationLauncher
                 textBox.BackColor = textBox.ReadOnly ? Color.FromArgb(250, 252, 255) : ColorSurface;
                 textBox.ForeColor = ColorText;
                 textBox.Font = BaseFont();
+                textBox.MinimumSize = new Size(0, ControlHeight);
                 return;
             }
 
@@ -265,6 +258,7 @@ namespace ReportAutomationLauncher
                 comboBox.BackColor = ColorSurface;
                 comboBox.ForeColor = ColorText;
                 comboBox.Font = BaseFont();
+                comboBox.MinimumSize = new Size(0, ControlHeight);
                 return;
             }
 
@@ -275,6 +269,7 @@ namespace ReportAutomationLauncher
                 listView.BackColor = ColorSurface;
                 listView.ForeColor = ColorText;
                 listView.GridLines = false;
+                listView.HideSelection = false;
                 listView.Font = BaseFont();
                 return;
             }
@@ -316,6 +311,34 @@ namespace ReportAutomationLauncher
                     label.Font = BaseFont();
                 }
             }
+        }
+
+        private static void PaintGroupBox(object sender, PaintEventArgs e)
+        {
+            GroupBox groupBox = (GroupBox)sender;
+            e.Graphics.Clear(ColorBackground);
+
+            Rectangle border = new Rectangle(0, 12, groupBox.Width - 1, groupBox.Height - 13);
+            using (Pen borderPen = new Pen(ColorBorder))
+            using (Pen accentPen = new Pen(ColorPrimary, 2))
+            {
+                e.Graphics.DrawRectangle(borderPen, border);
+                e.Graphics.DrawLine(accentPen, SpaceLg, 12, SpaceLg + 42, 12);
+            }
+
+            Size textSize = TextRenderer.MeasureText(groupBox.Text, groupBox.Font);
+            Rectangle textRect = new Rectangle(SpaceMd, 0, textSize.Width + SpaceMd, textSize.Height + 4);
+            using (SolidBrush backBrush = new SolidBrush(ColorBackground))
+            {
+                e.Graphics.FillRectangle(backBrush, textRect);
+            }
+            TextRenderer.DrawText(
+                e.Graphics,
+                groupBox.Text,
+                groupBox.Font,
+                textRect,
+                ColorText,
+                TextFormatFlags.Left | TextFormatFlags.VerticalCenter);
         }
     }
 
@@ -438,30 +461,15 @@ namespace ReportAutomationLauncher
             root.Dock = DockStyle.Fill;
             root.Padding = new Padding(LauncherUi.SpaceXl);
             root.ColumnCount = 1;
-            root.RowCount = 5;
-            root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+            root.RowCount = 4;
             root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
             root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
             root.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
             root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
             Controls.Add(root);
 
-            var title = new Label();
-            title.Text = "보고서 자동화 Alpha";
-            title.Font = LauncherUi.TitleFont();
-            title.AutoSize = true;
-            title.ForeColor = LauncherUi.ColorText;
-            title.Margin = new Padding(0, 0, 0, LauncherUi.SpaceXs);
-            root.Controls.Add(title, 0, 0);
-
-            var subtitle = new Label();
-            subtitle.Text = "집계표를 등록하고 표/배너를 확인한 뒤 Excel 산출 시트와 HWPX 초본 또는 대시보드 PPT를 생성합니다.";
-            subtitle.AutoSize = true;
-            subtitle.ForeColor = LauncherUi.ColorMutedText;
-            subtitle.Margin = new Padding(0, 0, 0, LauncherUi.SpaceMd);
-            root.Controls.Add(subtitle, 0, 1);
-
-            root.Controls.Add(BuildWorkflowSummaryStrip(), 0, 2);
+            root.Controls.Add(BuildHeaderPanel(), 0, 0);
+            root.Controls.Add(BuildWorkflowSummaryStrip(), 0, 1);
 
             workflowTabs.Dock = DockStyle.Fill;
             workflowTabs.DrawMode = TabDrawMode.OwnerDrawFixed;
@@ -474,7 +482,7 @@ namespace ReportAutomationLauncher
             workflowTabs.TabPages.Add(CreateStepPage("4 실행/결과", BuildRunGroup()));
             workflowTabs.TabPages.Add(CreateStepPage("대시보드 PPT", BuildDashboardPage()));
             workflowTabs.SelectedIndexChanged += delegate { UpdateWorkflowStatus(); };
-            root.Controls.Add(workflowTabs, 0, 3);
+            root.Controls.Add(workflowTabs, 0, 2);
 
             var buttons = new FlowLayoutPanel();
             buttons.FlowDirection = FlowDirection.RightToLeft;
@@ -488,7 +496,7 @@ namespace ReportAutomationLauncher
             closeButton.Click += delegate { Close(); };
             buttons.Controls.Add(closeButton);
             buttons.Controls.Add(runButton);
-            root.Controls.Add(buttons, 0, 4);
+            root.Controls.Add(buttons, 0, 3);
 
             workbookPathText.TextChanged += delegate { UpdateWorkflowStatus(); };
             addinPathText.TextChanged += delegate { UpdateWorkflowStatus(); };
@@ -536,13 +544,52 @@ namespace ReportAutomationLauncher
             return page;
         }
 
+        private Control BuildHeaderPanel()
+        {
+            var panel = new TableLayoutPanel();
+            panel.Dock = DockStyle.Top;
+            panel.AutoSize = true;
+            panel.BackColor = LauncherUi.ColorSurface;
+            panel.Padding = new Padding(LauncherUi.SpaceLg);
+            panel.Margin = new Padding(0, 0, 0, LauncherUi.SpaceMd);
+            panel.ColumnCount = 2;
+            panel.RowCount = 2;
+            panel.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 8));
+            panel.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+            panel.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+            panel.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+
+            var accent = new Panel();
+            accent.BackColor = LauncherUi.ColorPrimary;
+            accent.Dock = DockStyle.Fill;
+            accent.Margin = new Padding(0, 0, LauncherUi.SpaceMd, 0);
+            panel.Controls.Add(accent, 0, 0);
+            panel.SetRowSpan(accent, 2);
+
+            var title = new Label();
+            title.Text = "보고서 자동화 Alpha";
+            title.Font = LauncherUi.TitleFont();
+            title.AutoSize = true;
+            title.ForeColor = LauncherUi.ColorText;
+            title.Margin = new Padding(0, 0, 0, LauncherUi.SpaceXs);
+            panel.Controls.Add(title, 1, 0);
+
+            var subtitle = new Label();
+            subtitle.Text = "Excel 집계표 확인, 분석 배너 선택, 문장 검토, HWPX/PPTX 초본 생성을 한 곳에서 관리합니다.";
+            subtitle.AutoSize = true;
+            subtitle.ForeColor = LauncherUi.ColorMutedText;
+            subtitle.Margin = new Padding(0);
+            panel.Controls.Add(subtitle, 1, 1);
+            return panel;
+        }
+
         private void WorkflowTabs_DrawItem(object sender, DrawItemEventArgs e)
         {
             TabPage page = workflowTabs.TabPages[e.Index];
             bool selected = e.Index == workflowTabs.SelectedIndex;
             Rectangle bounds = e.Bounds;
-            Color backColor = selected ? LauncherUi.ColorPrimary : LauncherUi.ColorSurfaceAlt;
-            Color foreColor = selected ? Color.White : LauncherUi.ColorMutedText;
+            Color backColor = selected ? LauncherUi.ColorSurface : LauncherUi.ColorSurfaceAlt;
+            Color foreColor = selected ? LauncherUi.ColorPrimary : LauncherUi.ColorMutedText;
 
             using (SolidBrush backBrush = new SolidBrush(backColor))
             using (SolidBrush textBrush = new SolidBrush(foreColor))
@@ -551,6 +598,13 @@ namespace ReportAutomationLauncher
                 format.Alignment = StringAlignment.Center;
                 format.LineAlignment = StringAlignment.Center;
                 e.Graphics.FillRectangle(backBrush, bounds);
+                if (selected)
+                {
+                    using (Pen accent = new Pen(LauncherUi.ColorPrimary, 3))
+                    {
+                        e.Graphics.DrawLine(accent, bounds.Left + 12, bounds.Bottom - 3, bounds.Right - 12, bounds.Bottom - 3);
+                    }
+                }
                 e.Graphics.DrawString(page.Text, LauncherUi.SectionFont(), textBrush, bounds, format);
             }
         }
@@ -580,10 +634,10 @@ namespace ReportAutomationLauncher
             label.Text = title + ": 대기";
             label.Dock = DockStyle.Fill;
             label.AutoSize = false;
-            label.Height = 28;
+            label.Height = 34;
             label.TextAlign = ContentAlignment.MiddleLeft;
-            label.Padding = new Padding(8, 0, 8, 0);
-            label.Margin = new Padding(0, 0, 8, 0);
+            label.Padding = new Padding(LauncherUi.SpaceMd, 0, LauncherUi.SpaceMd, 0);
+            label.Margin = new Padding(0, 0, LauncherUi.SpaceSm, 0);
             label.BorderStyle = BorderStyle.FixedSingle;
             label.BackColor = LauncherUi.ColorSurface;
             label.ForeColor = LauncherUi.ColorMutedText;
@@ -1607,11 +1661,13 @@ namespace ReportAutomationLauncher
             var grid = new TableLayoutPanel();
             grid.Dock = DockStyle.Fill;
             grid.AutoSize = true;
+            grid.Margin = new Padding(0);
+            grid.Padding = new Padding(LauncherUi.SpaceXs, LauncherUi.SpaceXs, LauncherUi.SpaceXs, 0);
             grid.ColumnCount = 3;
             grid.RowCount = rows;
-            grid.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 130));
+            grid.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 148));
             grid.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
-            grid.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 80));
+            grid.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 96));
             for (int i = 0; i < rows; i++)
             {
                 grid.RowStyles.Add(new RowStyle(SizeType.AutoSize));
@@ -1625,7 +1681,9 @@ namespace ReportAutomationLauncher
             label.Text = text;
             label.TextAlign = ContentAlignment.MiddleLeft;
             label.Dock = DockStyle.Fill;
-            label.Margin = new Padding(0, 5, 8, 5);
+            label.Font = LauncherUi.SectionFont();
+            label.ForeColor = LauncherUi.ColorMutedText;
+            label.Margin = new Padding(0, LauncherUi.SpaceSm, LauncherUi.SpaceMd, LauncherUi.SpaceSm);
             grid.Controls.Add(label, 0, row);
         }
 
@@ -1633,13 +1691,13 @@ namespace ReportAutomationLauncher
         {
             AddLabel(grid, row, label);
             textBox.Dock = DockStyle.Fill;
-            textBox.Margin = new Padding(0, 4, 8, 4);
+            textBox.Margin = new Padding(0, LauncherUi.SpaceXs, LauncherUi.SpaceSm, LauncherUi.SpaceXs);
             grid.Controls.Add(textBox, 1, row);
 
             var button = new Button();
             button.Text = buttonText;
             button.Dock = DockStyle.Fill;
-            button.Margin = new Padding(0, 3, 0, 3);
+            button.Margin = new Padding(0, LauncherUi.SpaceXs, 0, LauncherUi.SpaceXs);
             button.Click += handler;
             grid.Controls.Add(button, 2, row);
         }

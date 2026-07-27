@@ -45,9 +45,10 @@
 ## 현재 적용 범위
 
 - 메인 폼 배경/크기/기본 글꼴
-- 상단 제목/설명문
+- 정보 카드형 상단 헤더
 - 워크플로우 단계 상태 라벨
 - 탭 헤더 owner-draw 스타일
+- 문서형 그룹 패널 owner-draw 스타일
 - 버튼 3종 스타일
 - TextBox, ComboBox, ListView, CheckedListBox 기본 스타일
 - 준비 체크리스트 상태색
