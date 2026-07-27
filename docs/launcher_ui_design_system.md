@@ -30,16 +30,19 @@
 
 - 버튼: `LauncherButtonKind.Primary`, `Secondary`, `Ghost`
 - 상태 라벨: `LauncherUi.StyleStatusLabel`
+- 목록 행: `LauncherUi.StyleListItem`
 - 폼 전체 스타일: `LauncherUi.ApplyToForm`
 - 하위 컨트롤 일괄 적용: `LauncherUi.ApplyTree`
 
 ## 화면 규칙
 
 - 새 버튼은 직접 색상을 지정하지 않고 `LauncherUi.StyleButton`을 사용한다.
+- 버튼은 disabled 상태에서도 배경/글자색이 명확히 구분되어야 한다.
 - 새 상태 문구는 성공/경고/오류 의미에 맞는 semantic 색상을 사용한다.
 - 새 입력 컨트롤은 `ApplyTree` 적용 범위 안에 두고, 개별 색상 지정은 피한다.
 - 새 탭은 기존 `CreateStepPage`를 사용한다.
 - 표와 목록은 `ListView` 또는 `CheckedListBox`를 우선 사용하고 배경은 흰색으로 유지한다.
+- 긴 목록은 줄무늬 행을 적용해 스캔성을 확보한다.
 - 설명 문구는 `ColorMutedText`를 사용한다.
 
 ## 현재 적용 범위
@@ -50,7 +53,10 @@
 - 탭 헤더 owner-draw 스타일
 - 문서형 그룹 패널 owner-draw 스타일
 - 버튼 3종 스타일
+- disabled 버튼 스타일
+- command bar형 버튼 묶음
 - TextBox, ComboBox, ListView, CheckedListBox 기본 스타일
+- 주요 ListView 줄무늬 행
 - 준비 체크리스트 상태색
 
 ## 다음 개선 대상

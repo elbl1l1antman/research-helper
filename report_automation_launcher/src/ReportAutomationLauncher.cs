@@ -127,6 +127,9 @@ namespace ReportAutomationLauncher
         public static readonly Color ColorWarning = Color.FromArgb(166, 94, 12);
         public static readonly Color ColorWarningSurface = Color.FromArgb(255, 246, 226);
         public static readonly Color ColorDanger = Color.FromArgb(175, 48, 48);
+        public static readonly Color ColorDisabledSurface = Color.FromArgb(232, 236, 241);
+        public static readonly Color ColorDisabledText = Color.FromArgb(133, 143, 156);
+        public static readonly Color ColorRowAlt = Color.FromArgb(249, 251, 253);
 
         public const int SpaceXs = 4;
         public const int SpaceSm = 8;
@@ -211,6 +214,28 @@ namespace ReportAutomationLauncher
             button.FlatAppearance.BorderSize = 1;
             button.FlatAppearance.MouseOverBackColor = hoverBack;
             button.FlatAppearance.MouseDownBackColor = kind == LauncherButtonKind.Primary ? ColorPrimaryHover : ColorSurfaceStrong;
+            if (string.IsNullOrWhiteSpace(button.AccessibleName))
+            {
+                button.AccessibleName = button.Text;
+            }
+
+            EventHandler enabledHandler = delegate
+            {
+                if (button.Enabled)
+                {
+                    button.BackColor = normalBack;
+                    button.ForeColor = normalFore;
+                    button.FlatAppearance.BorderColor = border;
+                }
+                else
+                {
+                    button.BackColor = ColorDisabledSurface;
+                    button.ForeColor = ColorDisabledText;
+                    button.FlatAppearance.BorderColor = ColorBorder;
+                }
+            };
+            button.EnabledChanged += enabledHandler;
+            enabledHandler(button, EventArgs.Empty);
         }
 
         public static void StyleStatusLabel(Label label, bool isReady)
@@ -218,6 +243,12 @@ namespace ReportAutomationLauncher
             label.ForeColor = isReady ? ColorSuccess : ColorWarning;
             label.BackColor = isReady ? ColorSuccessSurface : ColorWarningSurface;
             label.BorderStyle = BorderStyle.FixedSingle;
+        }
+
+        public static void StyleListItem(ListViewItem item, int index)
+        {
+            item.UseItemStyleForSubItems = true;
+            item.BackColor = index % 2 == 0 ? ColorSurface : ColorRowAlt;
         }
 
         private static void ApplyControl(Control control)
@@ -299,6 +330,26 @@ namespace ReportAutomationLauncher
                 {
                     StyleButton(button, LauncherButtonKind.Secondary);
                 }
+                return;
+            }
+
+            if (control is CheckBox)
+            {
+                CheckBox checkBox = (CheckBox)control;
+                checkBox.ForeColor = ColorText;
+                checkBox.Font = BaseFont();
+                checkBox.Margin = new Padding(0, SpaceSm, SpaceLg, SpaceXs);
+                return;
+            }
+
+            if (control is FlowLayoutPanel)
+            {
+                FlowLayoutPanel flow = (FlowLayoutPanel)control;
+                if (flow.BackColor == SystemColors.Control || flow.BackColor == Color.Empty)
+                {
+                    flow.BackColor = ColorBackground;
+                }
+                flow.WrapContents = true;
                 return;
             }
 
@@ -490,6 +541,9 @@ namespace ReportAutomationLauncher
             buttons.FlowDirection = FlowDirection.RightToLeft;
             buttons.Dock = DockStyle.Fill;
             buttons.AutoSize = true;
+            buttons.BackColor = LauncherUi.ColorSurface;
+            buttons.Padding = new Padding(LauncherUi.SpaceMd);
+            buttons.Margin = new Padding(0, LauncherUi.SpaceMd, 0, 0);
             runButton.Text = "실행";
             runButton.Width = 104;
             runButton.Click += RunButton_Click;
@@ -1117,7 +1171,9 @@ namespace ReportAutomationLauncher
             var resultButtons = new FlowLayoutPanel();
             resultButtons.Dock = DockStyle.Fill;
             resultButtons.AutoSize = true;
-            resultButtons.Margin = new Padding(0, 4, 0, 4);
+            resultButtons.BackColor = LauncherUi.ColorSurfaceAlt;
+            resultButtons.Padding = new Padding(LauncherUi.SpaceSm);
+            resultButtons.Margin = new Padding(0, LauncherUi.SpaceSm, 0, LauncherUi.SpaceSm);
             openWorkbookButton.Text = "산출 엑셀 열기";
             openWorkbookButton.Width = 110;
             openWorkbookButton.Enabled = false;
@@ -1410,6 +1466,8 @@ namespace ReportAutomationLauncher
             var panel = new FlowLayoutPanel();
             panel.Dock = DockStyle.Fill;
             panel.AutoSize = true;
+            panel.BackColor = LauncherUi.ColorSurfaceAlt;
+            panel.Padding = new Padding(LauncherUi.SpaceSm);
             var outputLabel = new Label();
             outputLabel.Text = "출력";
             outputLabel.AutoSize = true;
@@ -1820,6 +1878,7 @@ namespace ReportAutomationLauncher
                     item.SubItems.Add(table.Title);
                     item.SubItems.Add(table.SheetName);
                     item.SubItems.Add(table.Row.ToString());
+                    LauncherUi.StyleListItem(item, index);
                     tablePreviewList.Items.Add(item);
                     index++;
                 }
@@ -2371,6 +2430,7 @@ namespace ReportAutomationLauncher
                 return;
             }
 
+            runButton.Text = "실행 중...";
             runButton.Enabled = false;
             closeButton.Enabled = false;
             workflowTabs.SelectedIndex = 3;
@@ -2420,6 +2480,7 @@ namespace ReportAutomationLauncher
                 {
                     BeginInvoke(new Action(delegate()
                     {
+                        runButton.Text = "실행";
                         runButton.Enabled = true;
                         closeButton.Enabled = true;
                     }));
@@ -2632,6 +2693,7 @@ namespace ReportAutomationLauncher
                     item.SubItems.Add(sentence.Text);
                     item.SubItems.Add(sentence.Source);
                     item.Tag = sentence;
+                    LauncherUi.StyleListItem(item, sentence.Index);
                     sentenceReviewList.Items.Add(item);
                 }
             }
@@ -2735,6 +2797,7 @@ namespace ReportAutomationLauncher
                     item.SubItems.Add(issue.Sentence.Title);
                     item.SubItems.Add(issue.Message + " / " + issue.Sentence.Text);
                     item.Tag = issue;
+                    LauncherUi.StyleListItem(item, index);
                     qaIssueList.Items.Add(item);
                     index++;
                 }
@@ -2916,6 +2979,7 @@ namespace ReportAutomationLauncher
                 item.SubItems.Add(column.InferredType);
                 item.SubItems.Add(column.Sample);
                 item.SubItems.Add(column.MissingCount.ToString());
+                LauncherUi.StyleListItem(item, dashboardColumnPreviewList.Items.Count + 1);
                 dashboardColumnPreviewList.Items.Add(item);
                 dashboardEntityColumnCombo.Items.Add(column.Name);
                 dashboardColumnList.Items.Add(column.Name, true);

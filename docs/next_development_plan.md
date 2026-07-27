@@ -1,6 +1,6 @@
 # 다음 개발 계획
 
-작성 기준 버전: `0.0.27`
+작성 기준 버전: `0.0.28`
 
 ## 목표
 
@@ -232,3 +232,12 @@ v1 범위:
   - text_table_fallbacks: 0
   - charts_deferred: 1
   - table_style_applied.dominant_font_pt: 9.0
+
+## 0.0.28 확인 결과
+
+- 런처 UI styling 보강
+  - disabled 버튼 색상/테두리 상태 적용
+  - 실행 중 버튼 텍스트를 `실행 중...`으로 표시
+  - 하단 실행 버튼 영역과 대시보드 명령 영역을 command bar 형태로 정리
+  - 표 목록, 문장 리뷰, QA, 대시보드 열 미리보기에 줄무늬 행 적용
+- 런처 빌드 통과
