@@ -104,6 +104,221 @@ namespace ReportAutomationLauncher
         }
     }
 
+    internal enum LauncherButtonKind
+    {
+        Primary,
+        Secondary,
+        Ghost
+    }
+
+    internal static class LauncherUi
+    {
+        public static readonly Color ColorBackground = Color.FromArgb(246, 248, 251);
+        public static readonly Color ColorSurface = Color.White;
+        public static readonly Color ColorSurfaceAlt = Color.FromArgb(240, 244, 248);
+        public static readonly Color ColorBorder = Color.FromArgb(211, 219, 230);
+        public static readonly Color ColorText = Color.FromArgb(31, 41, 55);
+        public static readonly Color ColorMutedText = Color.FromArgb(89, 99, 112);
+        public static readonly Color ColorPrimary = Color.FromArgb(39, 101, 173);
+        public static readonly Color ColorPrimaryHover = Color.FromArgb(28, 83, 145);
+        public static readonly Color ColorSuccess = Color.FromArgb(20, 112, 74);
+        public static readonly Color ColorSuccessSurface = Color.FromArgb(226, 246, 236);
+        public static readonly Color ColorWarning = Color.FromArgb(166, 94, 12);
+        public static readonly Color ColorWarningSurface = Color.FromArgb(255, 246, 226);
+        public static readonly Color ColorDanger = Color.FromArgb(175, 48, 48);
+
+        public const int SpaceXs = 4;
+        public const int SpaceSm = 8;
+        public const int SpaceMd = 12;
+        public const int SpaceLg = 16;
+        public const int SpaceXl = 20;
+        public const int ControlHeight = 32;
+
+        public static Font BaseFont()
+        {
+            return new Font("맑은 고딕", 9F, FontStyle.Regular);
+        }
+
+        public static Font TitleFont()
+        {
+            return new Font("맑은 고딕", 16F, FontStyle.Bold);
+        }
+
+        public static Font SectionFont()
+        {
+            return new Font("맑은 고딕", 9.5F, FontStyle.Bold);
+        }
+
+        public static Font SmallFont()
+        {
+            return new Font("맑은 고딕", 8.5F, FontStyle.Regular);
+        }
+
+        public static void ApplyToForm(Form form)
+        {
+            form.BackColor = ColorBackground;
+            form.ForeColor = ColorText;
+            form.Font = BaseFont();
+        }
+
+        public static void ApplyTree(Control root)
+        {
+            ApplyControl(root);
+            foreach (Control child in root.Controls)
+            {
+                ApplyTree(child);
+            }
+        }
+
+        public static void StyleButton(Button button, LauncherButtonKind kind)
+        {
+            button.Height = ControlHeight;
+            button.FlatStyle = FlatStyle.Flat;
+            button.UseVisualStyleBackColor = false;
+            button.Font = SectionFont();
+            button.Padding = new Padding(SpaceMd, 0, SpaceMd, 0);
+
+            Color normalBack;
+            Color normalFore;
+            Color border;
+            Color hoverBack;
+            if (kind == LauncherButtonKind.Primary)
+            {
+                normalBack = ColorPrimary;
+                normalFore = Color.White;
+                border = ColorPrimary;
+                hoverBack = ColorPrimaryHover;
+            }
+            else if (kind == LauncherButtonKind.Secondary)
+            {
+                normalBack = ColorSurface;
+                normalFore = ColorPrimary;
+                border = Color.FromArgb(160, 184, 213);
+                hoverBack = Color.FromArgb(231, 240, 250);
+            }
+            else
+            {
+                normalBack = ColorSurfaceAlt;
+                normalFore = ColorText;
+                border = ColorBorder;
+                hoverBack = Color.FromArgb(229, 235, 243);
+            }
+
+            button.BackColor = normalBack;
+            button.ForeColor = normalFore;
+            button.FlatAppearance.BorderColor = border;
+            button.FlatAppearance.BorderSize = 1;
+            button.MouseEnter += delegate
+            {
+                if (button.Enabled)
+                {
+                    button.BackColor = hoverBack;
+                }
+            };
+            button.MouseLeave += delegate
+            {
+                if (button.Enabled)
+                {
+                    button.BackColor = normalBack;
+                }
+            };
+        }
+
+        public static void StyleStatusLabel(Label label, bool isReady)
+        {
+            label.ForeColor = isReady ? ColorSuccess : ColorWarning;
+            label.BackColor = isReady ? ColorSuccessSurface : ColorWarningSurface;
+            label.BorderStyle = BorderStyle.FixedSingle;
+        }
+
+        private static void ApplyControl(Control control)
+        {
+            if (control is TabPage)
+            {
+                control.BackColor = ColorBackground;
+                control.ForeColor = ColorText;
+                return;
+            }
+
+            if (control is GroupBox)
+            {
+                control.BackColor = ColorBackground;
+                control.ForeColor = ColorText;
+                control.Font = SectionFont();
+                return;
+            }
+
+            if (control is TextBox)
+            {
+                TextBox textBox = (TextBox)control;
+                textBox.BorderStyle = BorderStyle.FixedSingle;
+                textBox.BackColor = textBox.ReadOnly ? Color.FromArgb(250, 252, 255) : ColorSurface;
+                textBox.ForeColor = ColorText;
+                textBox.Font = BaseFont();
+                return;
+            }
+
+            if (control is ComboBox)
+            {
+                ComboBox comboBox = (ComboBox)control;
+                comboBox.FlatStyle = FlatStyle.Flat;
+                comboBox.BackColor = ColorSurface;
+                comboBox.ForeColor = ColorText;
+                comboBox.Font = BaseFont();
+                return;
+            }
+
+            if (control is ListView)
+            {
+                ListView listView = (ListView)control;
+                listView.BorderStyle = BorderStyle.FixedSingle;
+                listView.BackColor = ColorSurface;
+                listView.ForeColor = ColorText;
+                listView.GridLines = false;
+                listView.Font = BaseFont();
+                return;
+            }
+
+            if (control is CheckedListBox)
+            {
+                CheckedListBox checkedListBox = (CheckedListBox)control;
+                checkedListBox.BorderStyle = BorderStyle.FixedSingle;
+                checkedListBox.BackColor = ColorSurface;
+                checkedListBox.ForeColor = ColorText;
+                checkedListBox.Font = BaseFont();
+                return;
+            }
+
+            if (control is Button)
+            {
+                Button button = (Button)control;
+                if (button.Text == "실행" || button.Text.IndexOf("생성", StringComparison.OrdinalIgnoreCase) >= 0)
+                {
+                    StyleButton(button, LauncherButtonKind.Primary);
+                }
+                else if (button.Text == "닫기")
+                {
+                    StyleButton(button, LauncherButtonKind.Ghost);
+                }
+                else
+                {
+                    StyleButton(button, LauncherButtonKind.Secondary);
+                }
+                return;
+            }
+
+            if (control is Label)
+            {
+                Label label = (Label)control;
+                label.ForeColor = label.ForeColor == Color.Empty || label.ForeColor == Color.DimGray ? ColorMutedText : label.ForeColor;
+                if (label.Font == null || label.Font.Style == FontStyle.Regular)
+                {
+                    label.Font = BaseFont();
+                }
+            }
+        }
+    }
+
     internal sealed class MainForm : Form
     {
         private readonly TextBox workbookPathText = new TextBox();
@@ -214,14 +429,14 @@ namespace ReportAutomationLauncher
         public MainForm()
         {
             Text = "보고서 자동화 Alpha";
-            MinimumSize = new Size(860, 680);
-            Size = new Size(980, 760);
+            MinimumSize = new Size(980, 720);
+            Size = new Size(1120, 820);
             StartPosition = FormStartPosition.CenterScreen;
-            Font = new Font("맑은 고딕", 9F);
+            LauncherUi.ApplyToForm(this);
 
             var root = new TableLayoutPanel();
             root.Dock = DockStyle.Fill;
-            root.Padding = new Padding(12);
+            root.Padding = new Padding(LauncherUi.SpaceXl);
             root.ColumnCount = 1;
             root.RowCount = 5;
             root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
@@ -233,21 +448,26 @@ namespace ReportAutomationLauncher
 
             var title = new Label();
             title.Text = "보고서 자동화 Alpha";
-            title.Font = new Font(Font.FontFamily, 13F, FontStyle.Bold);
+            title.Font = LauncherUi.TitleFont();
             title.AutoSize = true;
-            title.Margin = new Padding(0, 0, 0, 2);
+            title.ForeColor = LauncherUi.ColorText;
+            title.Margin = new Padding(0, 0, 0, LauncherUi.SpaceXs);
             root.Controls.Add(title, 0, 0);
 
             var subtitle = new Label();
             subtitle.Text = "집계표를 등록하고 표/배너를 확인한 뒤 Excel 산출 시트와 HWPX 초본 또는 대시보드 PPT를 생성합니다.";
             subtitle.AutoSize = true;
-            subtitle.ForeColor = Color.DimGray;
-            subtitle.Margin = new Padding(0, 0, 0, 10);
+            subtitle.ForeColor = LauncherUi.ColorMutedText;
+            subtitle.Margin = new Padding(0, 0, 0, LauncherUi.SpaceMd);
             root.Controls.Add(subtitle, 0, 1);
 
             root.Controls.Add(BuildWorkflowSummaryStrip(), 0, 2);
 
             workflowTabs.Dock = DockStyle.Fill;
+            workflowTabs.DrawMode = TabDrawMode.OwnerDrawFixed;
+            workflowTabs.SizeMode = TabSizeMode.Fixed;
+            workflowTabs.ItemSize = new Size(148, 34);
+            workflowTabs.DrawItem += WorkflowTabs_DrawItem;
             workflowTabs.TabPages.Add(CreateStepPage("1 파일 등록", BuildFileGroup()));
             workflowTabs.TabPages.Add(CreateStepPage("2 데이터 확인", BuildDataReviewGroup()));
             workflowTabs.TabPages.Add(CreateStepPage("3 작성 규칙", BuildRulesPage()));
@@ -261,10 +481,10 @@ namespace ReportAutomationLauncher
             buttons.Dock = DockStyle.Fill;
             buttons.AutoSize = true;
             runButton.Text = "실행";
-            runButton.Width = 90;
+            runButton.Width = 104;
             runButton.Click += RunButton_Click;
             closeButton.Text = "닫기";
-            closeButton.Width = 90;
+            closeButton.Width = 96;
             closeButton.Click += delegate { Close(); };
             buttons.Controls.Add(closeButton);
             buttons.Controls.Add(runButton);
@@ -298,6 +518,9 @@ namespace ReportAutomationLauncher
             draftTextCheck.Checked = true;
             copyWorkbookCheck.Checked = true;
             keepExcelOpenCheck.Checked = true;
+            LauncherUi.ApplyTree(this);
+            LauncherUi.StyleButton(runButton, LauncherButtonKind.Primary);
+            LauncherUi.StyleButton(closeButton, LauncherButtonKind.Ghost);
             UpdateWorkflowStatus();
             UpdateReadinessChecklist();
         }
@@ -305,10 +528,31 @@ namespace ReportAutomationLauncher
         private static TabPage CreateStepPage(string title, Control content)
         {
             var page = new TabPage(title);
-            page.Padding = new Padding(10);
+            page.Padding = new Padding(LauncherUi.SpaceMd);
+            page.BackColor = LauncherUi.ColorBackground;
+            page.ForeColor = LauncherUi.ColorText;
             content.Dock = DockStyle.Fill;
             page.Controls.Add(content);
             return page;
+        }
+
+        private void WorkflowTabs_DrawItem(object sender, DrawItemEventArgs e)
+        {
+            TabPage page = workflowTabs.TabPages[e.Index];
+            bool selected = e.Index == workflowTabs.SelectedIndex;
+            Rectangle bounds = e.Bounds;
+            Color backColor = selected ? LauncherUi.ColorPrimary : LauncherUi.ColorSurfaceAlt;
+            Color foreColor = selected ? Color.White : LauncherUi.ColorMutedText;
+
+            using (SolidBrush backBrush = new SolidBrush(backColor))
+            using (SolidBrush textBrush = new SolidBrush(foreColor))
+            using (StringFormat format = new StringFormat())
+            {
+                format.Alignment = StringAlignment.Center;
+                format.LineAlignment = StringAlignment.Center;
+                e.Graphics.FillRectangle(backBrush, bounds);
+                e.Graphics.DrawString(page.Text, LauncherUi.SectionFont(), textBrush, bounds, format);
+            }
         }
 
         private Control BuildWorkflowSummaryStrip()
@@ -341,8 +585,8 @@ namespace ReportAutomationLauncher
             label.Padding = new Padding(8, 0, 8, 0);
             label.Margin = new Padding(0, 0, 8, 0);
             label.BorderStyle = BorderStyle.FixedSingle;
-            label.BackColor = Color.White;
-            label.ForeColor = Color.DimGray;
+            label.BackColor = LauncherUi.ColorSurface;
+            label.ForeColor = LauncherUi.ColorMutedText;
             return label;
         }
 
@@ -363,8 +607,7 @@ namespace ReportAutomationLauncher
         private void SetStepStatus(Label label, string title, string value, bool isReady)
         {
             label.Text = title + ": " + value;
-            label.ForeColor = isReady ? Color.FromArgb(20, 95, 55) : Color.DimGray;
-            label.BackColor = isReady ? Color.FromArgb(236, 248, 241) : Color.White;
+            LauncherUi.StyleStatusLabel(label, isReady);
         }
 
         private void UpdateReadinessChecklist()
@@ -403,7 +646,8 @@ namespace ReportAutomationLauncher
             var item = new ListViewItem(name);
             item.SubItems.Add(ready ? "완료" : "확인 필요");
             item.SubItems.Add(detail);
-            item.ForeColor = ready ? Color.FromArgb(20, 95, 55) : Color.FromArgb(150, 80, 20);
+            item.ForeColor = ready ? LauncherUi.ColorSuccess : LauncherUi.ColorWarning;
+            item.BackColor = ready ? LauncherUi.ColorSuccessSurface : LauncherUi.ColorWarningSurface;
             readinessList.Items.Add(item);
         }
 
@@ -521,7 +765,7 @@ namespace ReportAutomationLauncher
             var note = new Label();
             note.Text = "선택한 파일은 직접 수정하지 않고, 기본값으로 복사본에 산출 시트를 생성합니다.";
             note.AutoSize = true;
-            note.ForeColor = Color.DimGray;
+            note.ForeColor = LauncherUi.ColorMutedText;
             note.Margin = new Padding(130, 4, 0, 0);
             grid.Controls.Add(note, 1, 2);
             grid.SetColumnSpan(note, 2);
@@ -585,7 +829,7 @@ namespace ReportAutomationLauncher
 
             templateStatusLabel.Text = "템플릿을 선택하거나 기본 템플릿을 생성하세요.";
             templateStatusLabel.AutoSize = true;
-            templateStatusLabel.ForeColor = Color.DimGray;
+            templateStatusLabel.ForeColor = LauncherUi.ColorMutedText;
             templateStatusLabel.Margin = new Padding(0, 4, 0, 0);
             grid.Controls.Add(templateStatusLabel, 1, 4);
             grid.SetColumnSpan(templateStatusLabel, 2);
@@ -621,7 +865,7 @@ namespace ReportAutomationLauncher
             var note = new Label();
             note.Text = "HWPX 보고서는 Excel 산출과 preflight 생성 후 아래한글 COM으로 새 HWPX 초본을 저장합니다. PPTX 보고서 직접 생성은 다음 단계입니다.";
             note.AutoSize = true;
-            note.ForeColor = Color.DimGray;
+            note.ForeColor = LauncherUi.ColorMutedText;
             note.Margin = new Padding(0, 4, 0, 0);
             grid.Controls.Add(note, 1, 7);
             grid.SetColumnSpan(note, 2);
@@ -641,7 +885,7 @@ namespace ReportAutomationLauncher
 
             dataStatusLabel.Text = "집계표 파일을 선택하면 표 목록과 배너 목록을 자동으로 확인합니다.";
             dataStatusLabel.AutoSize = true;
-            dataStatusLabel.ForeColor = Color.DimGray;
+            dataStatusLabel.ForeColor = LauncherUi.ColorMutedText;
             dataStatusLabel.Margin = new Padding(0, 0, 0, 8);
             panel.Controls.Add(dataStatusLabel, 0, 0);
 
@@ -659,7 +903,7 @@ namespace ReportAutomationLauncher
             var note = new Label();
             note.Text = "표 제목이 누락되거나 전체행(■전체■)이 없는 표는 산출 후 QA 시트에서 추가 확인합니다.";
             note.AutoSize = true;
-            note.ForeColor = Color.DimGray;
+            note.ForeColor = LauncherUi.ColorMutedText;
             note.Margin = new Padding(0, 8, 0, 0);
             panel.Controls.Add(note, 0, 2);
             return panel;
@@ -683,7 +927,7 @@ namespace ReportAutomationLauncher
             var note = new Label();
             note.Text = "현재 선택값은 실행 설정 파일과 Excel의 보고서_설정 시트에 남습니다. 아직 미구현된 출력도 설정 계약으로 먼저 저장합니다.";
             note.AutoSize = true;
-            note.ForeColor = Color.DimGray;
+            note.ForeColor = LauncherUi.ColorMutedText;
             note.Margin = new Padding(0, 10, 0, 0);
             panel.Controls.Add(note, 0, 3);
             return panel;
@@ -773,7 +1017,7 @@ namespace ReportAutomationLauncher
             var guide = new Label();
             guide.Text = "실행 후 로그, 완료 요약, 문장 초안 미리보기를 확인합니다. 오류가 나면 이 로그를 기준으로 원본 표 구조나 Excel 신뢰 설정을 점검합니다.";
             guide.AutoSize = true;
-            guide.ForeColor = Color.DimGray;
+            guide.ForeColor = LauncherUi.ColorMutedText;
             guide.Margin = new Padding(0, 0, 0, 8);
             panel.Controls.Add(guide, 0, 0);
 
@@ -826,7 +1070,7 @@ namespace ReportAutomationLauncher
             copyDraftButton.Enabled = false;
             copyDraftButton.Click += CopyDraftButton_Click;
             draftPreviewStatusLabel.AutoSize = true;
-            draftPreviewStatusLabel.ForeColor = Color.DimGray;
+            draftPreviewStatusLabel.ForeColor = LauncherUi.ColorMutedText;
             draftPreviewStatusLabel.Margin = new Padding(10, 7, 0, 0);
             draftPreviewStatusLabel.Text = "문장 초안이 생성되면 아래에 표시됩니다.";
             resultButtons.Controls.Add(openWorkbookButton);
@@ -913,7 +1157,7 @@ namespace ReportAutomationLauncher
             var note = new Label();
             note.Text = "템플릿을 지정하면 첫 슬라이드의 RA_DASH_* 위치와 폰트를 유지하고 데이터만 교체합니다.";
             note.AutoSize = true;
-            note.ForeColor = Color.DimGray;
+            note.ForeColor = LauncherUi.ColorMutedText;
             grid.Controls.Add(note, 1, 3);
             grid.SetColumnSpan(note, 2);
             return group;
@@ -1316,7 +1560,7 @@ namespace ReportAutomationLauncher
             deleteBannerButton.Width = 80;
             deleteBannerButton.Click += delegate { DeleteSelectedBanners(); };
             bannerStatusLabel.AutoSize = true;
-            bannerStatusLabel.ForeColor = Color.DimGray;
+            bannerStatusLabel.ForeColor = LauncherUi.ColorMutedText;
             bannerStatusLabel.Margin = new Padding(10, 8, 0, 0);
             bannerButtons.Controls.Add(reloadBannerButton);
             bannerButtons.Controls.Add(recommendedBannerButton);
@@ -1350,7 +1594,7 @@ namespace ReportAutomationLauncher
             var note = new Label();
             note.Text = "알파 기본값은 인식도/만족도 조사형, 공식 보고서체, 소수점 한 자리입니다.";
             note.AutoSize = true;
-            note.ForeColor = Color.DimGray;
+            note.ForeColor = LauncherUi.ColorMutedText;
             note.Margin = new Padding(0, 4, 0, 0);
             grid.Controls.Add(note, 1, 7);
             grid.SetColumnSpan(note, 2);
@@ -1680,7 +1924,7 @@ namespace ReportAutomationLauncher
         {
             lastTemplateStatus = "미검사";
             templateStatusLabel.Text = message;
-            templateStatusLabel.ForeColor = Color.DimGray;
+            templateStatusLabel.ForeColor = LauncherUi.ColorMutedText;
             UpdateWorkflowStatus();
         }
 
@@ -1706,7 +1950,7 @@ namespace ReportAutomationLauncher
             {
                 lastTemplateStatus = "검사 실패";
                 templateStatusLabel.Text = "템플릿 검사 실패: " + ex.Message;
-                templateStatusLabel.ForeColor = Color.FromArgb(160, 40, 40);
+                templateStatusLabel.ForeColor = LauncherUi.ColorDanger;
                 UpdateWorkflowStatus();
                 MessageBox.Show(this, ex.Message, "템플릿 검사 실패", MessageBoxButtons.OK, MessageBoxIcon.Warning);
             }
@@ -1881,7 +2125,7 @@ namespace ReportAutomationLauncher
             templateStatusLabel.Text = "상태: " + status + " / 유형: " + detectedType +
                                        " / 발견: " + EmptyToDash(found) +
                                        " / 누락 필수: " + EmptyToDash(missingRequired);
-            templateStatusLabel.ForeColor = IsTemplateStatusUsable() ? Color.FromArgb(20, 95, 55) : Color.FromArgb(150, 80, 20);
+            templateStatusLabel.ForeColor = IsTemplateStatusUsable() ? LauncherUi.ColorSuccess : LauncherUi.ColorWarning;
             UpdateWorkflowStatus();
 
             Log("템플릿 검사: " + status + " (" + detectedType + ")");
