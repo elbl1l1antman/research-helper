@@ -336,3 +336,27 @@ v1 범위:
 1. 별도 환경 진단 명령에서 dispatch mode별 결과를 하나의 `hwp_environment_report.json`으로 비교 저장한다.
 2. 런처에 HWP COM 환경 진단 전용 버튼을 추가한다.
 3. COM dispatch 단계가 장시간 지연될 때 Python 프로세스를 분리 실행하고 timeout 후 종료하는 보호 실행기를 검토한다.
+
+## 0.0.33 확인 결과
+
+- 런처 HWPX 옵션 영역에 `COM diag` 버튼 추가
+- 버튼 실행 시 dispatch mode별 환경 진단 수행
+  - `ensure_dispatch`
+  - `dispatch`
+  - `dispatch_ex`
+- 각 mode는 별도 Python 프로세스로 실행
+  - mode별 timeout: 15초
+  - timeout 발생 시 해당 프로세스를 종료하고 다음 mode 계속 진행
+- 통합 진단 리포트 생성
+  - `hwp_environment_report_YYYYMMDD_HHMMSS.json`
+  - mode별 개별 writer report도 함께 저장
+  - dispatch mode, status, stage/action, current ProgID, last COM step 기록
+- 런처 실행 결과 영역에 통합 진단 요약 표시
+- 검증 결과
+  - 런처 빌드 통과
+
+## 다음 개발 우선순위
+
+1. HWP 환경 진단 결과를 런처에서 표 형태로 보여주는 전용 패널을 추가한다.
+2. dispatch mode별 성공/지연 기록을 다음 HWPX 생성 기본값 추천에 활용한다.
+3. COM dispatch 단계 지연 원인 후보를 사용자에게 안내하는 troubleshooting 문서를 추가한다.

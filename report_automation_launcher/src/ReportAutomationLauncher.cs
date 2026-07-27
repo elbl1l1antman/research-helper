@@ -412,6 +412,7 @@ namespace ReportAutomationLauncher
         private readonly CheckBox hwpKeepOpenOnErrorCheck = new CheckBox();
         private readonly ComboBox hwpMaxSectionsCombo = new ComboBox();
         private readonly ComboBox hwpDispatchModeCombo = new ComboBox();
+        private readonly Button hwpEnvironmentCheckButton = new Button();
         private readonly TextBox bannerText = new TextBox();
         private readonly CheckedListBox bannerList = new CheckedListBox();
         private readonly TabControl workflowTabs = new TabControl();
@@ -971,12 +972,16 @@ namespace ReportAutomationLauncher
             hwpDispatchModeCombo.Items.Add("ensure_dispatch");
             hwpDispatchModeCombo.Items.Add("dispatch");
             hwpDispatchModeCombo.Items.Add("dispatch_ex");
+            hwpEnvironmentCheckButton.Text = "COM diag";
+            hwpEnvironmentCheckButton.Width = 85;
+            hwpEnvironmentCheckButton.Click += HwpEnvironmentCheckButton_Click;
             hwpOptions.Controls.Add(hwpVisibleCheck);
             hwpOptions.Controls.Add(hwpKeepOpenOnErrorCheck);
             hwpOptions.Controls.Add(hwpLimitLabel);
             hwpOptions.Controls.Add(hwpMaxSectionsCombo);
             hwpOptions.Controls.Add(hwpDispatchLabel);
             hwpOptions.Controls.Add(hwpDispatchModeCombo);
+            hwpOptions.Controls.Add(hwpEnvironmentCheckButton);
             AddLabel(grid, 6, "HWPX 옵션");
             grid.Controls.Add(hwpOptions, 1, 6);
             grid.SetColumnSpan(hwpOptions, 2);
@@ -3684,6 +3689,68 @@ namespace ReportAutomationLauncher
             return options;
         }
 
+        private void HwpEnvironmentCheckButton_Click(object sender, EventArgs e)
+        {
+            hwpEnvironmentCheckButton.Enabled = false;
+            string reportPath = Path.Combine(ResolveHwpDiagnosticOutputDirectory(), "hwp_environment_report_" + DateTime.Now.ToString("yyyyMMdd_HHmmss") + ".json");
+            var options = new LauncherOptions();
+            options.HwpVisible = hwpVisibleCheck.Checked;
+            options.HwpDispatchMode = SelectedHwpDispatchMode();
+            resultSummaryText.Text = "HWP COM environment diagnostics running..." + Environment.NewLine + reportPath;
+            Log("HWP COM environment diagnostics started.");
+
+            var thread = new Thread(delegate()
+            {
+                try
+                {
+                    string summary = EngineRunner.TryRunHwpEnvironmentDiagnostics(options, reportPath, Log);
+                    BeginInvoke(new Action(delegate()
+                    {
+                        resultSummaryText.Text = summary;
+                        openHwpReportButton.Tag = reportPath;
+                        openHwpReportButton.Enabled = File.Exists(reportPath);
+                    }));
+                }
+                catch (Exception ex)
+                {
+                    Log("HWP COM diagnostics failed: " + ex.Message);
+                    BeginInvoke(new Action(delegate()
+                    {
+                        resultSummaryText.Text = "HWP COM diagnostics failed." + Environment.NewLine + ex.Message;
+                    }));
+                }
+                finally
+                {
+                    BeginInvoke(new Action(delegate()
+                    {
+                        hwpEnvironmentCheckButton.Enabled = true;
+                    }));
+                }
+            });
+            thread.IsBackground = true;
+            thread.Start();
+        }
+
+        private string ResolveHwpDiagnosticOutputDirectory()
+        {
+            string workbookPath = workbookPathText.Text.Trim();
+            if (!string.IsNullOrWhiteSpace(workbookPath))
+            {
+                try
+                {
+                    string directory = Path.GetDirectoryName(Path.GetFullPath(workbookPath));
+                    if (!string.IsNullOrWhiteSpace(directory) && Directory.Exists(directory))
+                    {
+                        return directory;
+                    }
+                }
+                catch
+                {
+                }
+            }
+            return Directory.Exists(Environment.CurrentDirectory) ? Environment.CurrentDirectory : AppDomain.CurrentDomain.BaseDirectory;
+        }
+
         private string SelectedHwpDispatchMode()
         {
             return hwpDispatchModeCombo.SelectedItem == null ? "ensure_dispatch" : hwpDispatchModeCombo.SelectedItem.ToString();
@@ -4499,6 +4566,252 @@ namespace ReportAutomationLauncher
             {
                 log("HWPX 생성 실패: " + ex.Message);
             }
+        }
+
+        public static string TryRunHwpEnvironmentDiagnostics(LauncherOptions options, string outputReportPath, Action<string> log)
+        {
+            string pythonPath = PathResolver.ResolvePythonPath();
+            string toolPath = PathResolver.ResolveEngineToolPath("hwp_com_writer.py");
+            if (string.IsNullOrWhiteSpace(pythonPath) || !File.Exists(pythonPath) || string.IsNullOrWhiteSpace(toolPath) || !File.Exists(toolPath))
+            {
+                throw new FileNotFoundException("HWPX writer tool or Python runtime was not found.");
+            }
+
+            string outputDirectory = Path.GetDirectoryName(outputReportPath);
+            if (!string.IsNullOrWhiteSpace(outputDirectory))
+            {
+                Directory.CreateDirectory(outputDirectory);
+            }
+            else
+            {
+                outputDirectory = Environment.CurrentDirectory;
+            }
+
+            var results = new List<Dictionary<string, object>>();
+            foreach (string mode in OrderedDispatchModes(options.HwpDispatchMode))
+            {
+                log("HWP COM diagnostics mode: " + mode);
+                string modeReportPath = Path.Combine(outputDirectory, Path.GetFileNameWithoutExtension(outputReportPath) + "_" + mode + ".json");
+                results.Add(RunHwpEnvironmentMode(pythonPath, toolPath, modeReportPath, options.HwpVisible, mode));
+            }
+
+            string status = "blocked";
+            foreach (Dictionary<string, object> result in results)
+            {
+                if (GetString(result, "status") == "ready")
+                {
+                    status = "ready";
+                    break;
+                }
+            }
+
+            var report = new Dictionary<string, object>();
+            report["schema_version"] = "1.0";
+            report["status"] = status;
+            report["created_at"] = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss");
+            report["preferred_dispatch_mode"] = options.HwpDispatchMode;
+            report["timeout_ms"] = 15000;
+            report["results"] = results;
+
+            var serializer = new JavaScriptSerializer();
+            serializer.MaxJsonLength = int.MaxValue;
+            File.WriteAllText(outputReportPath, serializer.Serialize(report), System.Text.Encoding.UTF8);
+            log("HWP COM environment diagnostics saved: " + outputReportPath);
+            return BuildHwpEnvironmentDiagnosticsSummary(outputReportPath, results);
+        }
+
+        private static List<string> OrderedDispatchModes(string preferred)
+        {
+            var modes = new List<string>();
+            string normalized = string.IsNullOrWhiteSpace(preferred) ? "ensure_dispatch" : preferred.Trim().ToLowerInvariant().Replace("-", "_");
+            AddModeOnce(modes, normalized);
+            AddModeOnce(modes, "ensure_dispatch");
+            AddModeOnce(modes, "dispatch");
+            AddModeOnce(modes, "dispatch_ex");
+            return modes;
+        }
+
+        private static void AddModeOnce(List<string> modes, string mode)
+        {
+            if ((mode == "ensure_dispatch" || mode == "dispatch" || mode == "dispatch_ex") && !modes.Contains(mode))
+            {
+                modes.Add(mode);
+            }
+        }
+
+        private static Dictionary<string, object> RunHwpEnvironmentMode(string pythonPath, string toolPath, string reportPath, bool visible, string mode)
+        {
+            var result = new Dictionary<string, object>();
+            result["dispatch_mode"] = mode;
+            result["report_path"] = reportPath;
+            result["status"] = "started";
+
+            var startInfo = new ProcessStartInfo();
+            startInfo.FileName = pythonPath;
+            startInfo.Arguments = Quote(toolPath) +
+                                  " --check-environment" +
+                                  " --visible " + Quote(visible ? "true" : "false") +
+                                  " --dispatch-mode " + Quote(mode) +
+                                  " --report-output " + Quote(reportPath);
+            startInfo.UseShellExecute = false;
+            startInfo.CreateNoWindow = true;
+            startInfo.RedirectStandardOutput = true;
+            startInfo.RedirectStandardError = true;
+            startInfo.StandardOutputEncoding = System.Text.Encoding.UTF8;
+            startInfo.StandardErrorEncoding = System.Text.Encoding.UTF8;
+            HashSet<int> hwpBefore = SnapshotProcessIds("Hwp");
+
+            using (Process process = Process.Start(startInfo))
+            {
+                if (!process.WaitForExit(15000))
+                {
+                    try { process.Kill(); } catch { }
+                    result["killed_hwp_processes"] = KillNewProcesses("Hwp", hwpBefore);
+                    result["status"] = "timeout";
+                    result["timed_out"] = true;
+                    MergeHwpEnvironmentModeSummary(result, reportPath);
+                    return result;
+                }
+                string stdout = process.StandardOutput.ReadToEnd();
+                string stderr = process.StandardError.ReadToEnd();
+                result["exit_code"] = process.ExitCode;
+                result["stdout"] = stdout.Trim();
+                result["stderr"] = stderr.Trim();
+                MergeHwpEnvironmentModeSummary(result, reportPath);
+                if (GetString(result, "status") == "started")
+                {
+                    result["status"] = process.ExitCode == 0 ? "ready" : "failed";
+                }
+                return result;
+            }
+        }
+
+        private static HashSet<int> SnapshotProcessIds(string processName)
+        {
+            var ids = new HashSet<int>();
+            try
+            {
+                foreach (Process process in Process.GetProcessesByName(processName))
+                {
+                    ids.Add(process.Id);
+                }
+            }
+            catch
+            {
+            }
+            return ids;
+        }
+
+        private static int KillNewProcesses(string processName, HashSet<int> before)
+        {
+            int killed = 0;
+            try
+            {
+                foreach (Process process in Process.GetProcessesByName(processName))
+                {
+                    if (!before.Contains(process.Id))
+                    {
+                        try
+                        {
+                            process.Kill();
+                            killed++;
+                        }
+                        catch
+                        {
+                        }
+                    }
+                }
+            }
+            catch
+            {
+            }
+            return killed;
+        }
+
+        private static void MergeHwpEnvironmentModeSummary(Dictionary<string, object> result, string reportPath)
+        {
+            if (!File.Exists(reportPath))
+            {
+                return;
+            }
+            try
+            {
+                var serializer = new JavaScriptSerializer();
+                serializer.MaxJsonLength = int.MaxValue;
+                var report = serializer.DeserializeObject(File.ReadAllText(reportPath, System.Text.Encoding.UTF8)) as Dictionary<string, object>;
+                if (report == null)
+                {
+                    return;
+                }
+                result["writer_status"] = GetString(report, "status");
+                result["stage"] = GetString(report, "stage");
+                result["action"] = GetString(report, "action");
+                Dictionary<string, object> com = GetObject(report, "com");
+                if (com != null)
+                {
+                    result["current_prog_id"] = GetString(com, "current_prog_id");
+                    result["prog_id"] = GetString(com, "prog_id");
+                    result["last_step"] = LastEnvironmentStepSummary(com);
+                    if (GetString(result, "status") == "started" && GetString(report, "status") == "ready")
+                    {
+                        result["status"] = "ready";
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                result["parse_error"] = ex.Message;
+            }
+        }
+
+        private static string LastEnvironmentStepSummary(Dictionary<string, object> com)
+        {
+            object stepsValue;
+            if (!com.TryGetValue("steps", out stepsValue))
+            {
+                return "";
+            }
+            object[] steps = stepsValue as object[];
+            if (steps == null || steps.Length == 0)
+            {
+                return "";
+            }
+            Dictionary<string, object> last = steps[steps.Length - 1] as Dictionary<string, object>;
+            if (last == null)
+            {
+                return "";
+            }
+            return GetString(last, "name") + ":" + GetString(last, "status");
+        }
+
+        private static Dictionary<string, object> GetObject(Dictionary<string, object> values, string key)
+        {
+            object value;
+            return values.TryGetValue(key, out value) ? value as Dictionary<string, object> : null;
+        }
+
+        private static string GetString(Dictionary<string, object> values, string key)
+        {
+            object value;
+            return values.TryGetValue(key, out value) && value != null ? Convert.ToString(value) : "";
+        }
+
+        private static string BuildHwpEnvironmentDiagnosticsSummary(string outputReportPath, List<Dictionary<string, object>> results)
+        {
+            var lines = new List<string>();
+            lines.Add("HWP COM environment diagnostics");
+            lines.Add("Report: " + outputReportPath);
+            lines.Add("");
+            foreach (Dictionary<string, object> result in results)
+            {
+                lines.Add(GetString(result, "dispatch_mode") +
+                          ": status=" + GetString(result, "status") +
+                          " / stage=" + GetString(result, "stage") +
+                          " / action=" + GetString(result, "action") +
+                          " / progId=" + GetString(result, "current_prog_id") +
+                          " / lastStep=" + GetString(result, "last_step"));
+            }
+            return string.Join(Environment.NewLine, lines.ToArray());
         }
 
         private static bool RunHwpEnvironmentCheck(string pythonPath, string toolPath, string reportPath, LauncherOptions options, Action<string> log)
