@@ -1,6 +1,6 @@
 # ReportAutomation
 
-Current version: `0.0.28`
+Current version: `0.0.29`
 
 `ReportAutomation`은 엑셀 집계표를 기반으로 조사 보고서 작성용 산출물을 자동 생성하는 런처 기반 프로젝트입니다.
 
@@ -35,7 +35,7 @@ Excel 집계표
 - 토큰 기반 WinForms UI 스타일 적용
 - 정보 카드형 헤더, owner-draw 탭, 문서형 그룹 패널 스타일 적용
 - HWPX writer render plan 생성과 문항 수 제한 실행
-- HWP 표 스타일 profile 연결과 대표 글자 크기 적용
+- HWP 표 스타일 profile 연결, 대표 글자 크기 적용, 선/배경/여백 적용 계획 기록
 - disabled 버튼, command bar, 줄무늬 목록 행 등 런처 UI styling 보강
 - `report_package.json`, `preflight_report.json` 생성 결과 표시
 
@@ -152,6 +152,8 @@ Python 기반 보조 엔진입니다.
   - `hwp_render_plan.json`으로 실제 삽입 전 문항/표/차트 대체 계획 확인
   - 알파 검증용으로 1개/3개/전체 문항 수 제한 가능
   - `hwp_table_style_profile.json`을 선택하면 대표 표 글자 크기를 HWP 표 생성 전에 적용
+  - 표 스타일 profile에서 헤더 배경색, 주요 선 스타일, 셀 여백을 정규화해 `table_style_apply_plan`으로 기록
+  - HWP COM 호출 전후 checkpoint report를 저장해 멈춤 위치를 추적
   - `{{BODY}}` 위치에 제목, 분석문, 표, 출처를 반복 삽입
 
 ## 아직 개발 중인 기능
@@ -316,10 +318,12 @@ python -m report_automation_engine.hwp_com_writer `
   --preflight "C:\path\preflight_report.json" `
   --template "C:\path\report_template.hwpx" `
   --output "C:\path\report_draft.hwpx" `
+  --table-style-profile "C:\path\hwp_table_style_profile.json" `
   --visible false
 ```
 
 HWPX writer는 아래한글 COM을 사용하므로 Windows와 아래한글 설치가 필요합니다. 실패 시 출력 파일 옆 또는 `--report-output` 경로에 `hwp_writer_report.json`을 남깁니다.
+실사용 환경에서 COM 종료가 지연되면 `writer_report.json`의 `stage`와 `action`으로 멈춘 지점을 확인합니다.
 
 아래한글 COM 환경만 먼저 확인할 수도 있습니다.
 

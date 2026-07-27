@@ -48,6 +48,7 @@ def write_hwp_document(
     render_plan_path: str | Path | None = None,
     dry_run: bool = False,
     table_style_profile_path: str | Path | None = None,
+    keep_open_after_save: bool = False,
 ) -> Path:
     """Write a report draft and always write a companion JSON report."""
 
@@ -56,6 +57,7 @@ def write_hwp_document(
     template_file = Path(template_path).resolve()
     output_file = Path(output_path).resolve()
     writer_report = new_report(package_file, preflight_file, template_file, output_file, visible)
+    writer_report["keep_open_after_save"] = keep_open_after_save
     report_file = Path(report_path).resolve() if report_path else output_file.with_name(output_file.stem + "_hwp_writer_report.json")
     render_plan_file = Path(render_plan_path).resolve() if render_plan_path else output_file.with_name(output_file.stem + "_hwp_render_plan.json")
     table_style_profile_file = Path(table_style_profile_path).resolve() if table_style_profile_path else None
@@ -71,12 +73,15 @@ def write_hwp_document(
         writer_report["section_count_total"] = render_plan["section_count_total"]
         writer_report["section_count_selected"] = render_plan["section_count_selected"]
         writer_report["table_style_profile"] = render_plan["table_style_profile"]
+        writer_report["table_style_apply_plan"] = render_plan["table_style_apply_plan"]
         write_json(render_plan_file, render_plan)
+        write_json(report_file, writer_report)
 
         if dry_run:
             writer_report["status"] = "ready"
             writer_report["dry_run"] = True
             writer_report["finished_at"] = now()
+            write_json(report_file, writer_report)
             return render_plan_file
 
         validate_files(template_file, output_file)
@@ -86,21 +91,30 @@ def write_hwp_document(
             raise HwpWriterError("validate", "output", "원본 템플릿과 출력 경로가 같습니다. 원본 보호를 위해 중단합니다.")
         shutil.copy2(template_file, output_file)
         writer_report["template_copied"] = True
+        write_json(report_file, writer_report)
 
+        writer_report["stage"] = "com"
+        writer_report["action"] = "create_hwp_object"
+        write_json(report_file, writer_report)
         hwp = create_hwp_object(writer_report)
         set_visible(hwp, visible, writer_report)
+        write_json(report_file, writer_report)
         open_document(hwp, output_file, writer_report)
+        write_json(report_file, writer_report)
 
         replace_header_placeholders(hwp, package, writer_report)
         if not find_placeholder(hwp, BODY_PLACEHOLDER):
             raise HwpWriterError("template", "find_body", "{{BODY}} placeholder를 문서 본문에서 찾지 못했습니다.")
         writer_report["placeholders"]["body_found"] = True
         run_action(hwp, "Delete", writer_report, "template")
+        write_json(report_file, writer_report)
 
         write_body(hwp, package, writer_report, max_sections, table_style_profile)
+        write_json(report_file, writer_report)
         save_as_hwpx(hwp, output_file, writer_report)
         writer_report["status"] = "ready"
         writer_report["finished_at"] = now()
+        write_json(report_file, writer_report)
         return output_file
     except HwpWriterError as exc:
         writer_report["status"] = "failed"
@@ -117,9 +131,14 @@ def write_hwp_document(
         writer_report["finished_at"] = now()
         raise
     finally:
-        if hwp is not None and not (keep_open_on_error and writer_report["status"] == "failed"):
-            close_hwp(hwp, writer_report)
         write_json(report_file, writer_report)
+        if hwp is not None and should_close_hwp(writer_report, keep_open_on_error, keep_open_after_save):
+            close_hwp(hwp, writer_report)
+            write_json(report_file, writer_report)
+        elif hwp is not None:
+            writer_report["com"]["closed"] = False
+            writer_report["warnings"].append("HWP COM document was intentionally left open.")
+            write_json(report_file, writer_report)
 
 
 def check_environment(report_path: str | Path | None = None, visible: bool = False) -> Dict[str, Any]:
@@ -380,6 +399,7 @@ def build_render_plan(
         "chart_count_total": len(package.get("charts", [])),
         "qa_count_total": len(package.get("qa", [])),
         "table_style_profile": summarize_table_style_profile(table_style_profile),
+        "table_style_apply_plan": build_table_style_apply_plan(table_style_profile),
         "sections": plan_sections,
     }
 
@@ -443,12 +463,16 @@ def summarize_table_style_profile(profile: Dict[str, Any] | None) -> Dict[str, A
         return {"loaded": False}
     table_style = profile.get("table_style", {})
     font_height = dominant_font_height(profile)
+    apply_plan = build_table_style_apply_plan(profile)
     return {
         "loaded": True,
         "status": profile.get("status", ""),
         "source": profile.get("style_source", {}),
         "dominant_font_height": font_height,
         "dominant_font_pt": height_to_points(font_height),
+        "header_fill_color": apply_plan.get("header_fill_color", ""),
+        "dominant_border": apply_plan.get("dominant_border", {}),
+        "cell_margin_summary": apply_plan.get("cell_margin_summary", {}),
         "fill_color_counts": table_style.get("fill_color_counts", {}),
         "common_cell_border_fill_ids": table_style.get("common_cell_border_fill_ids", {}),
         "cell_spacing": table_style.get("cell_spacing", ""),
@@ -456,6 +480,161 @@ def summarize_table_style_profile(profile: Dict[str, Any] | None) -> Dict[str, A
         "supported_apply": ["dominant_font_height"],
         "deferred_apply": ["cell_border", "cell_fill", "cell_margin", "repeat_header"],
     }
+
+
+def build_table_style_apply_plan(profile: Dict[str, Any] | None) -> Dict[str, Any]:
+    """Normalize a recognized HWPX table style into writer-sized steps."""
+
+    if not profile:
+        return {"loaded": False, "steps": []}
+
+    font_height = dominant_font_height(profile)
+    font_pt = height_to_points(font_height)
+    header_fill = dominant_fill_color(profile)
+    border = dominant_border_summary(profile)
+    margin = cell_margin_summary(profile)
+    steps: List[Dict[str, Any]] = []
+
+    if font_height:
+        steps.append(
+            {
+                "name": "dominant_font_height",
+                "status": "supported",
+                "action": "CharShape",
+                "value": font_height,
+                "point": font_pt,
+            }
+        )
+    if header_fill:
+        steps.append(
+            {
+                "name": "header_fill",
+                "status": "planned",
+                "action": "CellBorderFill",
+                "value": header_fill,
+            }
+        )
+    if border:
+        steps.append(
+            {
+                "name": "cell_border",
+                "status": "planned",
+                "action": "CellBorderFill",
+                "value": border,
+            }
+        )
+    if margin:
+        steps.append(
+            {
+                "name": "cell_margin",
+                "status": "planned",
+                "action": "TablePropertyDialog",
+                "value": margin,
+            }
+        )
+
+    return {
+        "loaded": True,
+        "source": profile.get("style_source", {}),
+        "dominant_font_height": font_height,
+        "dominant_font_pt": font_pt,
+        "header_fill_color": header_fill,
+        "dominant_border": border,
+        "cell_margin_summary": margin,
+        "supported_apply": ["dominant_font_height"],
+        "planned_apply": [step["name"] for step in steps if step.get("status") == "planned"],
+        "steps": steps,
+    }
+
+
+def dominant_fill_color(profile: Dict[str, Any]) -> str:
+    table_style = profile.get("table_style", {})
+    counts = table_style.get("fill_color_counts", {})
+    fill = highest_count_key(counts, skip_values={"", "none", "NONE"})
+    if fill:
+        return fill
+    scanned: Dict[str, int] = {}
+    for border_fill in table_style.get("common_cell_border_fills", {}).values():
+        color = str(border_fill.get("fill_color") or "")
+        if color and color.lower() != "none":
+            scanned[color] = scanned.get(color, 0) + 1
+    return highest_count_key(scanned, skip_values={"", "none", "NONE"})
+
+
+def dominant_border_summary(profile: Dict[str, Any]) -> Dict[str, Any]:
+    table_style = profile.get("table_style", {})
+    border_fills = table_style.get("common_cell_border_fills", {})
+    id_counts = table_style.get("common_cell_border_fill_ids", {})
+    side_counts: Dict[str, Dict[str, int]] = {}
+    side_values: Dict[str, Dict[str, Dict[str, str]]] = {}
+
+    for border_fill_id, border_fill in border_fills.items():
+        weight = safe_int(id_counts.get(str(border_fill_id)), 1)
+        borders = border_fill.get("borders", {})
+        for side, border in borders.items():
+            border_type = str(border.get("type") or "")
+            width = str(border.get("width") or "")
+            color = str(border.get("color") or "")
+            if not border_type or border_type.upper() == "NONE":
+                continue
+            key = "|".join([border_type, width, color])
+            side_counts.setdefault(side, {})
+            side_values.setdefault(side, {})
+            side_counts[side][key] = side_counts[side].get(key, 0) + weight
+            side_values[side][key] = {"type": border_type, "width": width, "color": color}
+
+    summary: Dict[str, Any] = {}
+    for side, counts in side_counts.items():
+        key = highest_count_key(counts)
+        if key:
+            summary[side] = {**side_values[side][key], "weight": counts[key]}
+    return summary
+
+
+def cell_margin_summary(profile: Dict[str, Any]) -> Dict[str, Any]:
+    table_style = profile.get("table_style", {})
+    margins = table_style.get("sample_cell_margins", [])
+    if not isinstance(margins, list) or not margins:
+        return {}
+    keys = sorted({key for margin in margins if isinstance(margin, dict) for key in margin.keys()})
+    summary: Dict[str, Any] = {"sample_count": len(margins), "keys": keys}
+    common: Dict[str, Any] = {}
+    for key in keys:
+        counts: Dict[str, int] = {}
+        for margin in margins:
+            if not isinstance(margin, dict):
+                continue
+            value = str(margin.get(key, ""))
+            if value:
+                counts[value] = counts.get(value, 0) + 1
+        selected = highest_count_key(counts)
+        if selected:
+            common[key] = selected
+    if common:
+        summary["common"] = common
+    return summary
+
+
+def highest_count_key(counts: Dict[str, Any], skip_values: set[str] | None = None) -> str:
+    skip = {value.lower() for value in (skip_values or set())}
+    best_key = ""
+    best_count = -1
+    for raw_key, raw_count in counts.items():
+        key = str(raw_key)
+        if key.lower() in skip:
+            continue
+        count = safe_int(raw_count, 0)
+        if count > best_count:
+            best_key = key
+            best_count = count
+    return best_key
+
+
+def safe_int(value: Any, default: int = 0) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
 
 
 def dominant_font_height(profile: Dict[str, Any] | None) -> int | None:
@@ -491,7 +670,10 @@ def height_to_points(height: int | None) -> float | None:
 
 
 def apply_table_style_before_create(hwp, profile: Dict[str, Any] | None, report: Dict[str, Any]) -> None:
-    font_height = dominant_font_height(profile)
+    apply_plan = build_table_style_apply_plan(profile)
+    if apply_plan.get("loaded"):
+        report["table_style_applied"]["apply_plan"] = apply_plan
+    font_height = apply_plan.get("dominant_font_height")
     if not font_height:
         return
     report["stage"] = "style"
@@ -505,6 +687,14 @@ def apply_table_style_before_create(hwp, profile: Dict[str, Any] | None, report:
         report["table_style_applied"]["dominant_font_pt"] = height_to_points(font_height)
     except Exception as exc:
         report["warnings"].append(f"표 글자 크기 profile 적용 실패: {exc}")
+
+
+def should_close_hwp(report: Dict[str, Any], keep_open_on_error: bool, keep_open_after_save: bool) -> bool:
+    if keep_open_after_save and report.get("status") == "ready":
+        return False
+    if keep_open_on_error and report.get("status") == "failed":
+        return False
+    return True
 
 
 def insert_text_table(hwp, rows: List[List[str]], report: Dict[str, Any]) -> None:
@@ -627,6 +817,7 @@ def new_report(package_file: Path, preflight_file: Path, template_file: Path, ou
         "schema_version": "1.0",
         "status": "started",
         "dry_run": False,
+        "keep_open_after_save": False,
         "stage": "",
         "action": "",
         "started_at": now(),
@@ -640,6 +831,7 @@ def new_report(package_file: Path, preflight_file: Path, template_file: Path, ou
         "render_plan_path": "",
         "table_style_profile_path": "",
         "table_style_profile": {"loaded": False},
+        "table_style_apply_plan": {"loaded": False, "steps": []},
         "table_style_applied": {},
         "visible": visible,
         "template_copied": False,
@@ -688,6 +880,7 @@ def run_cli(argv: List[str] | None = None) -> int:
     parser.add_argument("--render-plan-output")
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--table-style-profile")
+    parser.add_argument("--keep-open-after-save", action="store_true")
     parser.add_argument("--check-environment", action="store_true")
     args = parser.parse_args(argv)
 
@@ -719,6 +912,7 @@ def run_cli(argv: List[str] | None = None) -> int:
             args.render_plan_output,
             args.dry_run,
             args.table_style_profile,
+            args.keep_open_after_save,
         )
         print(str(output))
         return 0

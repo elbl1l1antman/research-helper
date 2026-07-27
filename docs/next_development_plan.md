@@ -241,3 +241,27 @@ v1 범위:
   - 하단 실행 버튼 영역과 대시보드 명령 영역을 command bar 형태로 정리
   - 표 목록, 문장 리뷰, QA, 대시보드 열 미리보기에 줄무늬 행 적용
 - 런처 빌드 통과
+
+## 0.0.29 확인 결과
+
+- HWP COM writer의 표 스타일 profile 처리 보강
+  - `table_style_apply_plan` 생성
+  - 대표 글자 크기, 헤더 배경색, 주요 셀 선 스타일, 셀 여백 요약을 정규화
+  - 현재 적용 가능한 항목과 다음 COM action 구현 대상 분리
+    - supported: `dominant_font_height`
+    - planned: `header_fill`, `cell_border`, `cell_margin`
+- HWP COM writer checkpoint report 저장 보강
+  - render plan 생성 직후 writer report 저장
+  - 템플릿 복사, COM 객체 생성 진입, 문서 열기, 본문 작성, 저장 단계별 report 갱신
+  - COM이 멈춰도 마지막 `stage`/`action`으로 위치 추적 가능
+- 검증 결과
+  - `py_compile` 통과
+  - dry-run 통과
+  - style profile 기준 `header_fill_color: #E7E7E7`, 주요 border, cell margin 요약 확인
+  - 실제 COM 호출은 현재 PC에서 `create_hwp_object` 단계 지연 확인
+
+## 다음 개발 우선순위
+
+1. HWP COM 환경 진단을 `create_hwp_object`, 보안 모듈 등록, 파일 열기 단계로 분리한다.
+2. HWP COM 호출이 일정 시간 이상 멈출 때 사용자가 원인을 볼 수 있도록 런처에 checkpoint report 표시를 추가한다.
+3. `CellBorderFill`, `TablePropertyDialog` action을 작은 샘플 문서에서 별도 검증한 뒤 표 배경/선/셀 여백 실제 적용으로 확장한다.
