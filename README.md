@@ -1,6 +1,6 @@
 # ReportAutomation
 
-Current version: `0.0.31`
+Current version: `0.0.32`
 
 `ReportAutomation`은 엑셀 집계표를 기반으로 조사 보고서 작성용 산출물을 자동 생성하는 런처 기반 프로젝트입니다.
 
@@ -156,6 +156,7 @@ Python 기반 보조 엔진입니다.
   - HWP COM 호출 전후 checkpoint report를 저장해 멈춤 위치를 추적
   - COM 생성/ProgID dispatch/보안 모듈 등록/파일 열기/저장 단계별 진단 기록
   - HWP COM dispatch mode 선택: `ensure_dispatch`, `dispatch`, `dispatch_ex`
+  - 런처에서 HWP COM dispatch mode 선택 및 마지막 COM step 요약 표시
   - `{{BODY}}` 위치에 제목, 분석문, 표, 출처를 반복 삽입
 
 ## 아직 개발 중인 기능

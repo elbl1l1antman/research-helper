@@ -313,3 +313,26 @@ v1 범위:
 2. 런처 실행 결과 영역에 마지막 COM step과 dispatch mode를 표시한다.
 3. 별도 환경 진단 명령에서 dispatch mode별 결과를 하나의 `hwp_environment_report.json`으로 비교 저장한다.
 4. COM dispatch 단계가 장시간 지연될 때 Python 프로세스를 분리 실행하고 timeout 후 종료하는 보호 실행기를 검토한다.
+
+## 0.0.32 확인 결과
+
+- 런처 HWPX 옵션 영역에 dispatch mode 선택 UI 추가
+  - `ensure_dispatch`
+  - `dispatch`
+  - `dispatch_ex`
+- 런처에서 HWPX writer 실행 및 COM 환경 점검 시 `--dispatch-mode` 전달
+- 런처 실행 결과 요약에 `writer_report.json`의 HWP COM 상태 표시
+  - status
+  - dispatch mode
+  - current ProgID
+  - stage/action
+  - last COM step
+- launcher config에 `HwpDispatchMode` 기록
+- 검증 결과
+  - 런처 빌드 통과
+
+## 다음 개발 우선순위
+
+1. 별도 환경 진단 명령에서 dispatch mode별 결과를 하나의 `hwp_environment_report.json`으로 비교 저장한다.
+2. 런처에 HWP COM 환경 진단 전용 버튼을 추가한다.
+3. COM dispatch 단계가 장시간 지연될 때 Python 프로세스를 분리 실행하고 timeout 후 종료하는 보호 실행기를 검토한다.

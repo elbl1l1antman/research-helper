@@ -411,6 +411,7 @@ namespace ReportAutomationLauncher
         private readonly CheckBox hwpVisibleCheck = new CheckBox();
         private readonly CheckBox hwpKeepOpenOnErrorCheck = new CheckBox();
         private readonly ComboBox hwpMaxSectionsCombo = new ComboBox();
+        private readonly ComboBox hwpDispatchModeCombo = new ComboBox();
         private readonly TextBox bannerText = new TextBox();
         private readonly CheckedListBox bannerList = new CheckedListBox();
         private readonly TabControl workflowTabs = new TabControl();
@@ -572,6 +573,7 @@ namespace ReportAutomationLauncher
             llmProviderCombo.SelectedIndex = 0;
             llmModelText.Text = "gpt-4.1-mini";
             hwpMaxSectionsCombo.SelectedIndex = 0;
+            hwpDispatchModeCombo.SelectedIndex = 0;
             dashboardOutputModeCombo.SelectedIndex = 0;
             dashboardPageSizeCombo.SelectedIndex = 0;
             dashboardDesignCombo.SelectedIndex = 0;
@@ -960,10 +962,21 @@ namespace ReportAutomationLauncher
             hwpMaxSectionsCombo.Items.Add("1개 검증");
             hwpMaxSectionsCombo.Items.Add("3개 검증");
             hwpMaxSectionsCombo.Items.Add("전체");
+            var hwpDispatchLabel = new Label();
+            hwpDispatchLabel.Text = "dispatch";
+            hwpDispatchLabel.AutoSize = true;
+            hwpDispatchLabel.Margin = new Padding(12, 7, 6, 0);
+            hwpDispatchModeCombo.DropDownStyle = ComboBoxStyle.DropDownList;
+            hwpDispatchModeCombo.Width = 135;
+            hwpDispatchModeCombo.Items.Add("ensure_dispatch");
+            hwpDispatchModeCombo.Items.Add("dispatch");
+            hwpDispatchModeCombo.Items.Add("dispatch_ex");
             hwpOptions.Controls.Add(hwpVisibleCheck);
             hwpOptions.Controls.Add(hwpKeepOpenOnErrorCheck);
             hwpOptions.Controls.Add(hwpLimitLabel);
             hwpOptions.Controls.Add(hwpMaxSectionsCombo);
+            hwpOptions.Controls.Add(hwpDispatchLabel);
+            hwpOptions.Controls.Add(hwpDispatchModeCombo);
             AddLabel(grid, 6, "HWPX 옵션");
             grid.Controls.Add(hwpOptions, 1, 6);
             grid.SetColumnSpan(hwpOptions, 2);
@@ -2537,6 +2550,7 @@ namespace ReportAutomationLauncher
             if (!string.IsNullOrWhiteSpace(options.LastHwpWriterReportPath))
             {
                 lines.Add("HWPX writer report: " + options.LastHwpWriterReportPath);
+                lines.Add(BuildHwpWriterReportSummary(options.LastHwpWriterReportPath));
             }
             lines.Add("");
             lines.Add("Excel에서 보고서_분석문, 보고서_차트데이터, 보고서_삽입표, 보고서_QA 시트를 확인하세요.");
@@ -2556,6 +2570,85 @@ namespace ReportAutomationLauncher
                    " / 삽입표 " + EmptyToDash(ReadJsonPrimitiveValue(json, "table_count")) +
                    " / 경고 " + EmptyToDash(ReadJsonPrimitiveValue(json, "qa_warning_count")) +
                    " / 오류 " + EmptyToDash(ReadJsonPrimitiveValue(json, "qa_error_count"));
+        }
+
+        private static string BuildHwpWriterReportSummary(string path)
+        {
+            if (string.IsNullOrWhiteSpace(path) || !File.Exists(path))
+            {
+                return "HWP COM: report 없음";
+            }
+            try
+            {
+                var serializer = new JavaScriptSerializer();
+                serializer.MaxJsonLength = int.MaxValue;
+                var root = serializer.DeserializeObject(File.ReadAllText(path, System.Text.Encoding.UTF8)) as Dictionary<string, object>;
+                if (root == null)
+                {
+                    return "HWP COM: report 파싱 실패";
+                }
+
+                string status = JsonString(root, "status");
+                string stage = JsonString(root, "stage");
+                string action = JsonString(root, "action");
+                string dispatchMode = "";
+                string progId = "";
+                string lastStep = "";
+
+                Dictionary<string, object> com = JsonObject(root, "com");
+                if (com != null)
+                {
+                    dispatchMode = JsonString(com, "dispatch_mode");
+                    progId = JsonString(com, "current_prog_id");
+                    lastStep = LastComStepSummary(com);
+                }
+
+                return "HWP COM: status=" + EmptyToDash(status) +
+                       " / dispatch=" + EmptyToDash(dispatchMode) +
+                       " / progId=" + EmptyToDash(progId) +
+                       " / stage=" + EmptyToDash(stage) +
+                       " / action=" + EmptyToDash(action) +
+                       " / lastStep=" + EmptyToDash(lastStep);
+            }
+            catch (Exception ex)
+            {
+                return "HWP COM: report 파싱 실패 - " + ex.Message;
+            }
+        }
+
+        private static string LastComStepSummary(Dictionary<string, object> com)
+        {
+            object stepsValue;
+            if (!com.TryGetValue("steps", out stepsValue))
+            {
+                return "";
+            }
+            object[] steps = stepsValue as object[];
+            if (steps == null || steps.Length == 0)
+            {
+                return "";
+            }
+            Dictionary<string, object> last = steps[steps.Length - 1] as Dictionary<string, object>;
+            if (last == null)
+            {
+                return "";
+            }
+            string name = JsonString(last, "name");
+            string status = JsonString(last, "status");
+            string mode = JsonString(last, "dispatch_mode");
+            return string.IsNullOrWhiteSpace(mode) ? name + ":" + status : name + ":" + status + ":" + mode;
+        }
+
+        private static Dictionary<string, object> JsonObject(Dictionary<string, object> values, string key)
+        {
+            object value;
+            return values.TryGetValue(key, out value) ? value as Dictionary<string, object> : null;
+        }
+
+        private static string JsonString(Dictionary<string, object> values, string key)
+        {
+            object value;
+            return values.TryGetValue(key, out value) && value != null ? Convert.ToString(value) : "";
         }
 
         private static string BuildComponentSummary(LauncherOptions options)
@@ -3586,8 +3679,14 @@ namespace ReportAutomationLauncher
             options.HwpVisible = hwpVisibleCheck.Checked;
             options.HwpKeepOpenOnError = hwpKeepOpenOnErrorCheck.Checked;
             options.HwpMaxSections = SelectedHwpMaxSections();
+            options.HwpDispatchMode = SelectedHwpDispatchMode();
             options.Validate();
             return options;
+        }
+
+        private string SelectedHwpDispatchMode()
+        {
+            return hwpDispatchModeCombo.SelectedItem == null ? "ensure_dispatch" : hwpDispatchModeCombo.SelectedItem.ToString();
         }
 
         private int SelectedHwpMaxSections()
@@ -3653,6 +3752,7 @@ namespace ReportAutomationLauncher
         public bool HwpVisible;
         public bool HwpKeepOpenOnError;
         public int HwpMaxSections = 1;
+        public string HwpDispatchMode = "ensure_dispatch";
         public string LastGeneratedWorkbookPath;
         public string LastDraftTextPath;
         public string LastReportPackagePath;
@@ -3747,6 +3847,7 @@ namespace ReportAutomationLauncher
             {
                 LlmModel = "gpt-4.1-mini";
             }
+            HwpDispatchMode = NormalizeHwpDispatchMode(HwpDispatchMode);
         }
 
         public static LauncherOptions FromArgs(string[] args)
@@ -3794,8 +3895,19 @@ namespace ReportAutomationLauncher
             options.HwpVisible = flags.Contains("hwp-visible");
             options.HwpKeepOpenOnError = flags.Contains("hwp-keep-open-on-error");
             options.HwpMaxSections = GetInt(values, "hwp-max-sections", 1);
+            options.HwpDispatchMode = Get(values, "hwp-dispatch-mode", "ensure_dispatch");
             options.Validate();
             return options;
+        }
+
+        private static string NormalizeHwpDispatchMode(string value)
+        {
+            string mode = string.IsNullOrWhiteSpace(value) ? "ensure_dispatch" : value.Trim().ToLowerInvariant().Replace("-", "_");
+            if (mode == "ensure_dispatch" || mode == "dispatch" || mode == "dispatch_ex")
+            {
+                return mode;
+            }
+            return "ensure_dispatch";
         }
 
         private static string Get(Dictionary<string, string> values, string key, string fallback)
@@ -4074,6 +4186,7 @@ namespace ReportAutomationLauncher
                 writer.WriteLine("ChartOutputMode=" + options.ChartOutputMode);
                 writer.WriteLine("TableInsertMode=" + options.TableInsertMode);
                 writer.WriteLine("HwpMaxSections=" + options.HwpMaxSections);
+                writer.WriteLine("HwpDispatchMode=" + options.HwpDispatchMode);
                 writer.WriteLine("UseLlm=" + options.UseLlm);
                 writer.WriteLine("LlmProvider=" + options.LlmProvider);
                 writer.WriteLine("LlmModel=" + options.LlmModel);
@@ -4334,11 +4447,12 @@ namespace ReportAutomationLauncher
                                       " --template " + Quote(options.HwpTemplatePath) +
                                       " --output " + Quote(outputPath) +
                                       " --visible " + Quote(options.HwpVisible ? "true" : "false") +
-                                      " --report-output " + Quote(reportPath) +
-                                      " --render-plan-output " + Quote(renderPlanPath) +
-                                      " --max-sections " + Quote(options.HwpMaxSections.ToString()) +
-                                      OptionalArgument(" --table-style-profile ", options.HwpTableStyleProfilePath) +
-                                      (options.HwpKeepOpenOnError ? " --keep-open-on-error" : "");
+                                     " --report-output " + Quote(reportPath) +
+                                     " --render-plan-output " + Quote(renderPlanPath) +
+                                     " --max-sections " + Quote(options.HwpMaxSections.ToString()) +
+                                     " --dispatch-mode " + Quote(options.HwpDispatchMode) +
+                                     OptionalArgument(" --table-style-profile ", options.HwpTableStyleProfilePath) +
+                                     (options.HwpKeepOpenOnError ? " --keep-open-on-error" : "");
                 startInfo.UseShellExecute = false;
                 startInfo.CreateNoWindow = true;
                 startInfo.RedirectStandardOutput = true;
@@ -4394,6 +4508,7 @@ namespace ReportAutomationLauncher
             startInfo.Arguments = Quote(toolPath) +
                                   " --check-environment" +
                                   " --visible " + Quote(options.HwpVisible ? "true" : "false") +
+                                  " --dispatch-mode " + Quote(options.HwpDispatchMode) +
                                   " --report-output " + Quote(reportPath);
             startInfo.UseShellExecute = false;
             startInfo.CreateNoWindow = true;
