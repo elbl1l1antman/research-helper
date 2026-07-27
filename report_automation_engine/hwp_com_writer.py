@@ -25,6 +25,7 @@ REPORT_PLACEHOLDERS = {
     "{{QA_SUMMARY}}": "qa_summary",
 }
 TABLE_COLUMNS = ["항목", "비율", "가중 N", "원 N"]
+DISPATCH_MODES = ("ensure_dispatch", "dispatch", "dispatch_ex")
 
 
 class HwpWriterError(RuntimeError):
@@ -49,6 +50,7 @@ def write_hwp_document(
     dry_run: bool = False,
     table_style_profile_path: str | Path | None = None,
     keep_open_after_save: bool = False,
+    dispatch_mode: str = "ensure_dispatch",
 ) -> Path:
     """Write a report draft and always write a companion JSON report."""
 
@@ -58,6 +60,8 @@ def write_hwp_document(
     output_file = Path(output_path).resolve()
     writer_report = new_report(package_file, preflight_file, template_file, output_file, visible)
     writer_report["keep_open_after_save"] = keep_open_after_save
+    dispatch_mode = normalize_dispatch_mode(dispatch_mode)
+    writer_report["com"]["dispatch_mode"] = dispatch_mode
     report_file = Path(report_path).resolve() if report_path else output_file.with_name(output_file.stem + "_hwp_writer_report.json")
     render_plan_file = Path(render_plan_path).resolve() if render_plan_path else output_file.with_name(output_file.stem + "_hwp_render_plan.json")
     table_style_profile_file = Path(table_style_profile_path).resolve() if table_style_profile_path else None
@@ -96,7 +100,7 @@ def write_hwp_document(
         writer_report["stage"] = "com"
         writer_report["action"] = "create_hwp_object"
         write_json(report_file, writer_report)
-        hwp = create_hwp_object(writer_report, report_file)
+        hwp = create_hwp_object(writer_report, report_file, dispatch_mode)
         set_visible(hwp, visible, writer_report, report_file)
         write_json(report_file, writer_report)
         open_document(hwp, output_file, writer_report, report_file)
@@ -141,7 +145,11 @@ def write_hwp_document(
             write_json(report_file, writer_report)
 
 
-def check_environment(report_path: str | Path | None = None, visible: bool = False) -> Dict[str, Any]:
+def check_environment(
+    report_path: str | Path | None = None,
+    visible: bool = False,
+    dispatch_mode: str = "ensure_dispatch",
+) -> Dict[str, Any]:
     """Check whether pywin32 and the local HWP COM object are available."""
 
     report = {
@@ -155,6 +163,7 @@ def check_environment(report_path: str | Path | None = None, visible: bool = Fal
         "python": sys.version,
         "visible": visible,
         "com": {
+            "dispatch_mode": normalize_dispatch_mode(dispatch_mode),
             "prog_id": "",
             "current_prog_id": "",
             "file_path_checker": "",
@@ -167,11 +176,13 @@ def check_environment(report_path: str | Path | None = None, visible: bool = Fal
     }
     hwp = None
     try:
+        dispatch_mode = normalize_dispatch_mode(dispatch_mode)
+        report["com"]["dispatch_mode"] = dispatch_mode
         if platform.system().lower() != "windows":
             raise HwpWriterError("environment", "platform", "아래한글 COM writer는 Windows에서만 실행할 수 있습니다.")
         checkpoint_file = Path(report_path).resolve() if report_path else None
         write_checkpoint(report, checkpoint_file)
-        hwp = create_hwp_object(report, checkpoint_file)
+        hwp = create_hwp_object(report, checkpoint_file, dispatch_mode)
         set_visible(hwp, visible, report, checkpoint_file)
         write_checkpoint(report, checkpoint_file)
         report["status"] = "ready"
@@ -213,7 +224,11 @@ def validate_files(template_file: Path, output_file: Path) -> None:
         raise HwpWriterError("validate", "output", "출력 파일 확장자는 .hwpx 또는 .hwp여야 합니다.")
 
 
-def create_hwp_object(report: Dict[str, Any], checkpoint_path: Path | None = None):
+def create_hwp_object(
+    report: Dict[str, Any],
+    checkpoint_path: Path | None = None,
+    dispatch_mode: str = "ensure_dispatch",
+):
     report["stage"] = "com"
     report["action"] = "create_object"
     record_com_step(report, "import_win32com", "started")
@@ -232,20 +247,37 @@ def create_hwp_object(report: Dict[str, Any], checkpoint_path: Path | None = Non
         try:
             report["stage"] = "com"
             report["action"] = "dispatch"
+            report["com"]["dispatch_mode"] = dispatch_mode
             report["com"]["current_prog_id"] = prog_id
-            record_com_step(report, "dispatch", "started", prog_id=prog_id)
+            record_com_step(report, "dispatch", "started", prog_id=prog_id, dispatch_mode=dispatch_mode)
             write_checkpoint(report, checkpoint_path)
-            hwp = win32com.client.gencache.EnsureDispatch(prog_id)
+            hwp = dispatch_hwp_object(win32com.client, prog_id, dispatch_mode)
             report["com"]["prog_id"] = prog_id
-            record_com_step(report, "dispatch", "ready", prog_id=prog_id)
+            record_com_step(report, "dispatch", "ready", prog_id=prog_id, dispatch_mode=dispatch_mode)
             write_checkpoint(report, checkpoint_path)
             register_file_path_checker(hwp, report, checkpoint_path)
             return hwp
         except Exception as exc:
             last_error = exc
-            record_com_step(report, "dispatch", "failed", str(exc), prog_id=prog_id)
+            record_com_step(report, "dispatch", "failed", str(exc), prog_id=prog_id, dispatch_mode=dispatch_mode)
             write_checkpoint(report, checkpoint_path)
     raise HwpWriterError("com", "create_object", f"아래한글 COM 객체를 생성하지 못했습니다: {last_error}")
+
+
+def dispatch_hwp_object(win32_client, prog_id: str, dispatch_mode: str):
+    if dispatch_mode == "dispatch":
+        return win32_client.Dispatch(prog_id)
+    if dispatch_mode == "dispatch_ex":
+        return win32_client.DispatchEx(prog_id)
+    return win32_client.gencache.EnsureDispatch(prog_id)
+
+
+def normalize_dispatch_mode(value: str | None) -> str:
+    mode = str(value or "ensure_dispatch").strip().lower().replace("-", "_")
+    if mode not in DISPATCH_MODES:
+        allowed = ", ".join(DISPATCH_MODES)
+        raise HwpWriterError("validate", "dispatch_mode", f"지원하지 않는 HWP COM dispatch mode입니다: {value}. 허용값: {allowed}")
+    return mode
 
 
 def register_file_path_checker(hwp, report: Dict[str, Any], checkpoint_path: Path | None = None) -> None:
@@ -917,6 +949,7 @@ def new_report(package_file: Path, preflight_file: Path, template_file: Path, ou
         "charts_deferred": 0,
         "placeholders": {"body_found": False, "replaced": []},
         "com": {
+            "dispatch_mode": "ensure_dispatch",
             "prog_id": "",
             "current_prog_id": "",
             "file_path_checker": "",
@@ -960,12 +993,13 @@ def run_cli(argv: List[str] | None = None) -> int:
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--table-style-profile")
     parser.add_argument("--keep-open-after-save", action="store_true")
+    parser.add_argument("--dispatch-mode", choices=DISPATCH_MODES, default="ensure_dispatch")
     parser.add_argument("--check-environment", action="store_true")
     args = parser.parse_args(argv)
 
     try:
         if args.check_environment:
-            report = check_environment(args.report_output, parse_bool(args.visible))
+            report = check_environment(args.report_output, parse_bool(args.visible), args.dispatch_mode)
             print(json.dumps(report, ensure_ascii=False, indent=2))
             return 0 if report.get("status") == "ready" else 2
 
@@ -992,6 +1026,7 @@ def run_cli(argv: List[str] | None = None) -> int:
             args.dry_run,
             args.table_style_profile,
             args.keep_open_after_save,
+            args.dispatch_mode,
         )
         print(str(output))
         return 0

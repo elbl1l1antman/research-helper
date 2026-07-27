@@ -290,3 +290,26 @@ v1 범위:
 1. 런처 HWP 실행 결과 영역에 `writer_report.json`의 마지막 COM step을 표시한다.
 2. `EnsureDispatch` 지연 회피를 위해 `Dispatch`, `DispatchEx`, `EnsureDispatch`를 선택 가능한 dispatch mode로 분리한다.
 3. dispatch mode별 환경 테스트 결과를 `hwp_environment_report.json`에 기록한다.
+
+## 0.0.31 확인 결과
+
+- HWP COM dispatch mode 선택 옵션 추가
+  - `ensure_dispatch`: 기존 기본값 유지
+  - `dispatch`
+  - `dispatch_ex`
+- 적용 위치
+  - HWPX 문서 생성 CLI: `--dispatch-mode`
+  - COM 환경 진단 CLI: `--check-environment --dispatch-mode`
+  - `writer_report.json`의 `com.dispatch_mode`, `com.steps[].dispatch_mode`
+- 검증 결과
+  - `py_compile` 통과
+  - dry-run 통과
+  - `--dispatch-mode dispatch` 환경 진단 checkpoint 생성 확인
+  - 현재 PC에서는 `dispatch`도 `stage=com`, `action=dispatch`, `current_prog_id=HWPFrame.HwpObject` 단계에서 지연
+
+## 다음 개발 우선순위
+
+1. 런처 HWP 설정 영역에 dispatch mode 선택 UI를 추가한다.
+2. 런처 실행 결과 영역에 마지막 COM step과 dispatch mode를 표시한다.
+3. 별도 환경 진단 명령에서 dispatch mode별 결과를 하나의 `hwp_environment_report.json`으로 비교 저장한다.
+4. COM dispatch 단계가 장시간 지연될 때 Python 프로세스를 분리 실행하고 timeout 후 종료하는 보호 실행기를 검토한다.
