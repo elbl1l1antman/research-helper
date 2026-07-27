@@ -1,6 +1,6 @@
 # ReportAutomation
 
-Current version: `0.0.25`
+Current version: `0.0.26`
 
 `ReportAutomation`은 엑셀 집계표를 기반으로 조사 보고서 작성용 산출물을 자동 생성하는 런처 기반 프로젝트입니다.
 
@@ -34,6 +34,7 @@ Excel 집계표
 - 기업/기관 대시보드 PPT용 디자인 프리셋과 폰트 선택
 - 토큰 기반 WinForms UI 스타일 적용
 - 정보 카드형 헤더, owner-draw 탭, 문서형 그룹 패널 스타일 적용
+- HWPX writer render plan 생성과 문항 수 제한 실행
 - `report_package.json`, `preflight_report.json` 생성 결과 표시
 
 주요 문서:
@@ -146,6 +147,8 @@ Python 기반 보조 엔진입니다.
 - 아래한글 COM 기반 HWPX 초본 생성
   - Windows + 아래한글 설치 + `pywin32` 환경에서 동작
   - 원본 템플릿을 보존하고 출력 경로에 사본 저장
+  - `hwp_render_plan.json`으로 실제 삽입 전 문항/표/차트 대체 계획 확인
+  - 알파 검증용으로 1개/3개/전체 문항 수 제한 가능
   - `{{BODY}}` 위치에 제목, 분석문, 표, 출처를 반복 삽입
 
 ## 아직 개발 중인 기능

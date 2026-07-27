@@ -1,6 +1,6 @@
 # 다음 개발 계획
 
-작성 기준 버전: `0.0.23`
+작성 기준 버전: `0.0.26`
 
 ## 목표
 
@@ -142,7 +142,7 @@ v1 범위:
 
 ## 다음 실행 순서
 
-1. 아래한글 COM writer로 `{{BODY}}` 위치에 표 1개와 분석문 1개를 삽입하는 최소 실사용 테스트를 수행한다.
+1. 아래한글 COM writer의 1개 문항 제한 실행을 실제 사용자 템플릿으로 검증한다.
 2. `hwp_table_style_profile.json`을 HWPX writer 입력으로 연결한다.
 3. 외부 프로그램 전환을 위해 VBA와 Python 엔진이 같은 package 계약을 생성하는 비교 테스트를 추가한다.
 
@@ -197,3 +197,20 @@ v1 범위:
   - 대표 스타일 원본: table_index 9, 44행 x 8열
   - 주요 글자 크기: 9.0pt
   - 주요 배경색: none, #E7E7E7, #F3F3F3
+
+## 0.0.26 확인 결과
+
+- HWP COM writer에 render plan 생성 추가
+  - `--render-plan-output`
+  - `--dry-run`
+  - `--max-sections`
+- 런처 HWPX 옵션에 초본 문항 수 추가
+  - `1개 검증`
+  - `3개 검증`
+  - `전체`
+- 런처 HWPX 생성 시 `_hwp_render_plan.json` 저장
+- dry-run 검증 결과:
+  - status: `ready`
+  - section_count_selected: 1
+  - table_preview_rows 생성 확인
+  - chart_deferred 표시 확인

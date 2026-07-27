@@ -44,6 +44,9 @@ def write_hwp_document(
     visible: bool = False,
     report_path: str | Path | None = None,
     keep_open_on_error: bool = False,
+    max_sections: int | None = None,
+    render_plan_path: str | Path | None = None,
+    dry_run: bool = False,
 ) -> Path:
     """Write a report draft and always write a companion JSON report."""
 
@@ -53,12 +56,26 @@ def write_hwp_document(
     output_file = Path(output_path).resolve()
     writer_report = new_report(package_file, preflight_file, template_file, output_file, visible)
     report_file = Path(report_path).resolve() if report_path else output_file.with_name(output_file.stem + "_hwp_writer_report.json")
+    render_plan_file = Path(render_plan_path).resolve() if render_plan_path else output_file.with_name(output_file.stem + "_hwp_render_plan.json")
     hwp = None
 
     try:
         package = load_json(package_file)
         preflight = load_json(preflight_file)
-        validate_inputs(preflight, template_file, output_file)
+        validate_preflight(preflight)
+        render_plan = build_render_plan(package, max_sections)
+        writer_report["render_plan_path"] = str(render_plan_file)
+        writer_report["section_count_total"] = render_plan["section_count_total"]
+        writer_report["section_count_selected"] = render_plan["section_count_selected"]
+        write_json(render_plan_file, render_plan)
+
+        if dry_run:
+            writer_report["status"] = "ready"
+            writer_report["dry_run"] = True
+            writer_report["finished_at"] = now()
+            return render_plan_file
+
+        validate_files(template_file, output_file)
 
         output_file.parent.mkdir(parents=True, exist_ok=True)
         if template_file.resolve() == output_file.resolve():
@@ -76,7 +93,7 @@ def write_hwp_document(
         writer_report["placeholders"]["body_found"] = True
         run_action(hwp, "Delete", writer_report, "template")
 
-        write_body(hwp, package, writer_report)
+        write_body(hwp, package, writer_report, max_sections)
         save_as_hwpx(hwp, output_file, writer_report)
         writer_report["status"] = "ready"
         writer_report["finished_at"] = now()
@@ -146,11 +163,14 @@ def check_environment(report_path: str | Path | None = None, visible: bool = Fal
             write_json(report_path, report)
 
 
-def validate_inputs(preflight: Dict[str, Any], template_file: Path, output_file: Path) -> None:
-    if platform.system().lower() != "windows":
-        raise HwpWriterError("validate", "platform", "아래한글 COM writer는 Windows에서만 실행할 수 있습니다.")
+def validate_preflight(preflight: Dict[str, Any]) -> None:
     if preflight.get("status") == "blocked":
         raise HwpWriterError("validate", "preflight", "preflight status가 blocked입니다. 오류를 먼저 해결하세요.")
+
+
+def validate_files(template_file: Path, output_file: Path) -> None:
+    if platform.system().lower() != "windows":
+        raise HwpWriterError("validate", "platform", "아래한글 COM writer는 Windows에서만 실행할 수 있습니다.")
     if not template_file.exists():
         raise HwpWriterError("validate", "template", f"템플릿 파일을 찾을 수 없습니다: {template_file}")
     if template_file.suffix.lower() not in {".hwpx", ".hwp"}:
@@ -260,10 +280,10 @@ def find_placeholder(hwp, text: str) -> bool:
         return False
 
 
-def write_body(hwp, package: Dict[str, Any], report: Dict[str, Any]) -> None:
+def write_body(hwp, package: Dict[str, Any], report: Dict[str, Any], max_sections: int | None = None) -> None:
     tables_by_key = {str(table.get("table_key", "")): table for table in package.get("tables", [])}
     charts_by_key = group_charts(package.get("charts", []))
-    sections = package.get("sections", [])
+    sections = select_sections(package, max_sections)
     for index, section in enumerate(sections, start=1):
         key = str(section.get("table_key", ""))
         title = str(section.get("title") or key or f"문항 {index}")
@@ -294,6 +314,59 @@ def write_body(hwp, package: Dict[str, Any], report: Dict[str, Any]) -> None:
         run_action(hwp, "BreakPara", report, "body")
         run_action(hwp, "BreakPara", report, "body")
         report["sections_written"] += 1
+
+
+def select_sections(package: Dict[str, Any], max_sections: int | None = None) -> List[Dict[str, Any]]:
+    sections = list(package.get("sections", []))
+    if max_sections and max_sections > 0:
+        return sections[:max_sections]
+    return sections
+
+
+def build_render_plan(package: Dict[str, Any], max_sections: int | None = None) -> Dict[str, Any]:
+    """Create a COM-independent preview of what the HWP writer will insert."""
+
+    tables_by_key = {str(table.get("table_key", "")): table for table in package.get("tables", [])}
+    charts_by_key = group_charts(package.get("charts", []))
+    all_sections = list(package.get("sections", []))
+    selected_sections = select_sections(package, max_sections)
+    plan_sections: List[Dict[str, Any]] = []
+
+    for index, section in enumerate(selected_sections, start=1):
+        key = str(section.get("table_key", ""))
+        title = str(section.get("title") or key or f"문항 {index}")
+        narrative = str(section.get("narrative_final") or "")
+        table = tables_by_key.get(key)
+        table_rows = table_rows_for_hwp(table) if table else []
+        chart_rows = charts_by_key.get(key, [])
+        plan_sections.append(
+            {
+                "index": index,
+                "table_key": key,
+                "title": title,
+                "narrative": narrative,
+                "narrative_length": len(narrative),
+                "table_title": str(table.get("title") or title) if table else "",
+                "table_row_count": max(len(table_rows) - 1, 0),
+                "table_preview_rows": table_rows[:6],
+                "chart_deferred": bool(chart_rows),
+                "chart_candidate_count": len(chart_rows),
+                "source": key,
+            }
+        )
+
+    return {
+        "schema_version": "1.0",
+        "created_at": now(),
+        "writer": "hwp_com_writer",
+        "max_sections": max_sections if max_sections and max_sections > 0 else None,
+        "section_count_total": len(all_sections),
+        "section_count_selected": len(selected_sections),
+        "table_count_total": len(package.get("tables", [])),
+        "chart_count_total": len(package.get("charts", [])),
+        "qa_count_total": len(package.get("qa", [])),
+        "sections": plan_sections,
+    }
 
 
 def insert_hwp_table(hwp, rows: List[List[str]], report: Dict[str, Any]) -> bool:
@@ -450,6 +523,7 @@ def new_report(package_file: Path, preflight_file: Path, template_file: Path, ou
     return {
         "schema_version": "1.0",
         "status": "started",
+        "dry_run": False,
         "stage": "",
         "action": "",
         "started_at": now(),
@@ -460,10 +534,13 @@ def new_report(package_file: Path, preflight_file: Path, template_file: Path, ou
         "preflight_path": str(preflight_file),
         "template_path": str(template_file),
         "output_path": str(output_file),
+        "render_plan_path": "",
         "visible": visible,
         "template_copied": False,
         "document_opened": False,
         "document_saved": False,
+        "section_count_total": 0,
+        "section_count_selected": 0,
         "sections_written": 0,
         "tables_written": 0,
         "text_table_fallbacks": 0,
@@ -501,6 +578,9 @@ def run_cli(argv: List[str] | None = None) -> int:
     parser.add_argument("--visible", default="false")
     parser.add_argument("--report-output")
     parser.add_argument("--keep-open-on-error", action="store_true")
+    parser.add_argument("--max-sections", type=int, default=0)
+    parser.add_argument("--render-plan-output")
+    parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--check-environment", action="store_true")
     args = parser.parse_args(argv)
 
@@ -528,6 +608,9 @@ def run_cli(argv: List[str] | None = None) -> int:
             parse_bool(args.visible),
             args.report_output,
             args.keep_open_on_error,
+            args.max_sections if args.max_sections > 0 else None,
+            args.render_plan_output,
+            args.dry_run,
         )
         print(str(output))
         return 0

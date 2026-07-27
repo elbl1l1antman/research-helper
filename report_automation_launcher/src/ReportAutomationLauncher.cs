@@ -358,6 +358,7 @@ namespace ReportAutomationLauncher
         private readonly Label templateStatusLabel = new Label();
         private readonly CheckBox hwpVisibleCheck = new CheckBox();
         private readonly CheckBox hwpKeepOpenOnErrorCheck = new CheckBox();
+        private readonly ComboBox hwpMaxSectionsCombo = new ComboBox();
         private readonly TextBox bannerText = new TextBox();
         private readonly CheckedListBox bannerList = new CheckedListBox();
         private readonly TabControl workflowTabs = new TabControl();
@@ -515,6 +516,7 @@ namespace ReportAutomationLauncher
             tableInsertModeCombo.SelectedIndex = 0;
             llmProviderCombo.SelectedIndex = 0;
             llmModelText.Text = "gpt-4.1-mini";
+            hwpMaxSectionsCombo.SelectedIndex = 0;
             dashboardOutputModeCombo.SelectedIndex = 0;
             dashboardPageSizeCombo.SelectedIndex = 0;
             dashboardDesignCombo.SelectedIndex = 0;
@@ -893,8 +895,19 @@ namespace ReportAutomationLauncher
             hwpOptions.AutoSize = true;
             hwpVisibleCheck.Text = "아래한글 창 표시";
             hwpKeepOpenOnErrorCheck.Text = "실패 시 문서 유지";
+            var hwpLimitLabel = new Label();
+            hwpLimitLabel.Text = "초본 문항 수";
+            hwpLimitLabel.AutoSize = true;
+            hwpLimitLabel.Margin = new Padding(12, 7, 6, 0);
+            hwpMaxSectionsCombo.DropDownStyle = ComboBoxStyle.DropDownList;
+            hwpMaxSectionsCombo.Width = 120;
+            hwpMaxSectionsCombo.Items.Add("1개 검증");
+            hwpMaxSectionsCombo.Items.Add("3개 검증");
+            hwpMaxSectionsCombo.Items.Add("전체");
             hwpOptions.Controls.Add(hwpVisibleCheck);
             hwpOptions.Controls.Add(hwpKeepOpenOnErrorCheck);
+            hwpOptions.Controls.Add(hwpLimitLabel);
+            hwpOptions.Controls.Add(hwpMaxSectionsCombo);
             AddLabel(grid, 5, "HWPX 옵션");
             grid.Controls.Add(hwpOptions, 1, 5);
             grid.SetColumnSpan(hwpOptions, 2);
@@ -3500,8 +3513,23 @@ namespace ReportAutomationLauncher
             options.KeepExcelOpen = keepExcelOpenCheck.Checked;
             options.HwpVisible = hwpVisibleCheck.Checked;
             options.HwpKeepOpenOnError = hwpKeepOpenOnErrorCheck.Checked;
+            options.HwpMaxSections = SelectedHwpMaxSections();
             options.Validate();
             return options;
+        }
+
+        private int SelectedHwpMaxSections()
+        {
+            string value = hwpMaxSectionsCombo.SelectedItem == null ? "" : hwpMaxSectionsCombo.SelectedItem.ToString();
+            if (value.StartsWith("3", StringComparison.OrdinalIgnoreCase))
+            {
+                return 3;
+            }
+            if (value.IndexOf("전체", StringComparison.OrdinalIgnoreCase) >= 0)
+            {
+                return 0;
+            }
+            return 1;
         }
 
         private int SelectedDecimalPlaces()
@@ -3551,6 +3579,7 @@ namespace ReportAutomationLauncher
         public bool KeepExcelOpen;
         public bool HwpVisible;
         public bool HwpKeepOpenOnError;
+        public int HwpMaxSections = 1;
         public string LastGeneratedWorkbookPath;
         public string LastDraftTextPath;
         public string LastReportPackagePath;
@@ -3682,6 +3711,7 @@ namespace ReportAutomationLauncher
             options.KeepExcelOpen = flags.Contains("keep-open");
             options.HwpVisible = flags.Contains("hwp-visible");
             options.HwpKeepOpenOnError = flags.Contains("hwp-keep-open-on-error");
+            options.HwpMaxSections = GetInt(values, "hwp-max-sections", 1);
             options.Validate();
             return options;
         }
@@ -3960,6 +3990,7 @@ namespace ReportAutomationLauncher
                 writer.WriteLine("DecimalPlaces=" + options.DecimalPlaces);
                 writer.WriteLine("ChartOutputMode=" + options.ChartOutputMode);
                 writer.WriteLine("TableInsertMode=" + options.TableInsertMode);
+                writer.WriteLine("HwpMaxSections=" + options.HwpMaxSections);
                 writer.WriteLine("UseLlm=" + options.UseLlm);
                 writer.WriteLine("LlmProvider=" + options.LlmProvider);
                 writer.WriteLine("LlmModel=" + options.LlmModel);
@@ -4204,6 +4235,7 @@ namespace ReportAutomationLauncher
                 string stem = Path.GetFileNameWithoutExtension(options.LastGeneratedWorkbookPath);
                 string outputPath = Path.Combine(directory, stem + "_hwp_report_" + DateTime.Now.ToString("yyyyMMdd_HHmmss") + ".hwpx");
                 string reportPath = Path.Combine(directory, stem + "_hwp_writer_report.json");
+                string renderPlanPath = Path.Combine(directory, stem + "_hwp_render_plan.json");
 
                 if (!RunHwpEnvironmentCheck(pythonPath, toolPath, reportPath, options, log))
                 {
@@ -4220,6 +4252,8 @@ namespace ReportAutomationLauncher
                                       " --output " + Quote(outputPath) +
                                       " --visible " + Quote(options.HwpVisible ? "true" : "false") +
                                       " --report-output " + Quote(reportPath) +
+                                      " --render-plan-output " + Quote(renderPlanPath) +
+                                      " --max-sections " + Quote(options.HwpMaxSections.ToString()) +
                                       (options.HwpKeepOpenOnError ? " --keep-open-on-error" : "");
                 startInfo.UseShellExecute = false;
                 startInfo.CreateNoWindow = true;
@@ -4257,6 +4291,10 @@ namespace ReportAutomationLauncher
                 if (!string.IsNullOrWhiteSpace(options.LastHwpWriterReportPath))
                 {
                     log("HWPX writer report 저장: " + options.LastHwpWriterReportPath);
+                }
+                if (File.Exists(renderPlanPath))
+                {
+                    log("HWPX render plan 저장: " + renderPlanPath);
                 }
             }
             catch (Exception ex)

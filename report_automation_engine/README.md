@@ -28,6 +28,7 @@
   - `report_package.json`을 읽어 아래한글 COM으로 HWPX 초본을 생성합니다.
   - 원본 템플릿은 수정하지 않고 출력 경로에 사본을 만든 뒤 `{{BODY}}` 위치에 제목, 분석문, 표, 출처를 삽입합니다.
   - 실패 시 `hwp_writer_report.json`에 실패 단계, COM action, placeholder 상태, 경고를 기록합니다.
+  - `--dry-run`, `--max-sections`, `--render-plan-output`으로 실제 아래한글 실행 전 삽입 계획을 확인할 수 있습니다.
 
 - `hwp_com_smoke.py`
   - 아래한글 COM으로 최소 HWPX 템플릿과 샘플 package/preflight를 만든 뒤 실제 writer를 실행합니다.
@@ -181,6 +182,8 @@ python -m report_automation_engine.hwp_com_writer `
   --preflight "C:\path\preflight_report.json" `
   --template "C:\path\report_template.hwpx" `
   --output "C:\path\report_draft.hwpx" `
+  --render-plan-output "C:\path\hwp_render_plan.json" `
+  --max-sections 1 `
   --visible false
 ```
 
@@ -203,6 +206,8 @@ python -m report_automation_engine.hwp_table_mapping `
 
 - `--check-environment`로 pywin32와 아래한글 COM 객체 생성 가능 여부를 먼저 확인할 수 있습니다.
 - `preflight.status == blocked`이면 아래한글을 열기 전에 중단합니다.
+- `--dry-run`을 사용하면 아래한글을 열지 않고 `hwp_render_plan.json`과 writer report만 생성합니다.
+- `--max-sections 1` 또는 `--max-sections 3`으로 알파 검증용 짧은 초본을 생성할 수 있습니다.
 - 템플릿 사본을 출력 경로에 만든 뒤 사본만 수정합니다.
 - `{{BODY}}`를 찾지 못하면 생성하지 않고 writer report에 실패 사유를 남깁니다.
 - HWP 표 객체 생성을 우선 시도하고, COM action이 실패하면 탭 구분 텍스트 표로 대체합니다.
