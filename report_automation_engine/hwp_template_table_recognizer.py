@@ -38,6 +38,8 @@ def recognize_template_tables(
     probe_report = probe_templates([template], root, visible=visible, table_detail_limit=0)
     probe_path = Path(probe_report.get("report_path") or root / "hwp_template_probe_report.json")
     blueprint_path = root / "template_blueprint.json"
+    style_report_path = root / "hwp_table_style_report.json"
+    style_profile_path = root / "hwp_table_style_profile.json"
     blueprint = build_blueprint(probe_path, blueprint_path)
 
     template_probe = (probe_report.get("templates") or [{}])[0]
@@ -53,6 +55,8 @@ def recognize_template_tables(
     if template.suffix.lower() == ".hwp" and template_probe.get("conversion"):
         warnings.append("HWP 원본은 수정하지 않고 HWPX 사본으로 변환해 분석했습니다.")
     status = determine_status(errors, result_candidates, style_candidates)
+    style_report = build_style_report(template_probe, result_candidates, style_candidates)
+    style_profile = build_style_profile(style_report)
 
     report: Dict[str, Any] = {
         "schema_version": "1.0",
@@ -64,12 +68,15 @@ def recognize_template_tables(
         "conversion": template_probe.get("conversion", ""),
         "probe_report_path": str(probe_path),
         "blueprint_path": str(blueprint_path),
+        "style_report_path": str(style_report_path),
+        "style_profile_path": str(style_profile_path),
         "summary": {
             "table_count": template_probe.get("table_count", 0),
             "result_candidate_count": len(result_candidates),
             "style_candidate_count": len(style_candidates),
             "layout_table_count": len(layout_tables),
             "recommended_block_id": template_blueprint.get("recommended_block_id", ""),
+            "style_profile_status": style_profile.get("status", ""),
         },
         "result_table_candidates": result_candidates,
         "style_table_candidates": style_candidates,
@@ -83,6 +90,8 @@ def recognize_template_tables(
         ],
     }
     report["recognition_report_path"] = str(recognition_path)
+    write_json(style_report_path, style_report)
+    write_json(style_profile_path, style_profile)
     write_json(recognition_path, report)
     return report
 
@@ -143,6 +152,7 @@ def normalize_style_candidates(template_probe: Dict[str, Any], result_candidates
                     "col_count": table.get("col_count", 0),
                     "classification": table.get("classification", ""),
                     "table_kind": table_kind,
+                    "style_summary": table.get("style_summary", {}),
                     "preview": {
                         "before_text": table.get("before_text", [])[-3:],
                         "sample_rows": table.get("sample_rows", [])[:5],
@@ -189,6 +199,88 @@ def normalize_layout_tables(
                 }
             )
     return tables[:40]
+
+
+def build_style_report(
+    template_probe: Dict[str, Any],
+    result_candidates: List[Dict[str, Any]],
+    style_candidates: List[Dict[str, Any]],
+) -> Dict[str, Any]:
+    candidate_indexes = {candidate.get("table_index") for candidate in result_candidates}
+    candidate_indexes.update(candidate.get("table_index") for candidate in style_candidates)
+    tables = []
+    for table in template_probe.get("tables", []):
+        if table.get("table_index") not in candidate_indexes:
+            continue
+        tables.append(
+            {
+                "table_index": table.get("table_index"),
+                "section": table.get("section", ""),
+                "row_count": table.get("row_count", 0),
+                "col_count": table.get("col_count", 0),
+                "classification": table.get("classification", ""),
+                "style_summary": table.get("style_summary", {}),
+                "preview": {
+                    "before_text": table.get("before_text", [])[-3:],
+                    "sample_rows": table.get("sample_rows", [])[:5],
+                },
+            }
+        )
+    return {
+        "schema_version": "1.0",
+        "created_at": now(),
+        "template_path": template_probe.get("source_path", ""),
+        "analyzed_path": template_probe.get("analyzed_path", ""),
+        "table_style_count": len(tables),
+        "tables": tables,
+    }
+
+
+def build_style_profile(style_report: Dict[str, Any]) -> Dict[str, Any]:
+    tables = style_report.get("tables", [])
+    source = first_style_source(tables)
+    if not source:
+        return {
+            "schema_version": "1.0",
+            "status": "needs_manual_style_selection",
+            "created_at": now(),
+            "message": "재사용할 표 스타일 후보가 없습니다.",
+            "style_source": {},
+        }
+    style = source.get("style_summary", {})
+    return {
+        "schema_version": "1.0",
+        "status": "ready",
+        "created_at": now(),
+        "style_source": {
+            "table_index": source.get("table_index"),
+            "section": source.get("section", ""),
+            "row_count": source.get("row_count", 0),
+            "col_count": source.get("col_count", 0),
+            "classification": source.get("classification", ""),
+        },
+        "table_style": {
+            "table_border_fill_id": style.get("table_border_fill_id", ""),
+            "table_border_fill": style.get("table_border_fill", {}),
+            "common_cell_border_fill_ids": style.get("common_cell_border_fill_ids", {}),
+            "common_cell_border_fills": style.get("common_cell_border_fills", {}),
+            "common_char_pr_ids": style.get("common_char_pr_ids", {}),
+            "common_char_prs": style.get("common_char_prs", {}),
+            "font_height_counts": style.get("font_height_counts", {}),
+            "fill_color_counts": style.get("fill_color_counts", {}),
+            "sample_cell_margins": style.get("sample_cell_margins", []),
+            "sample_cell_sizes": style.get("sample_cell_sizes", []),
+            "repeat_header": style.get("repeat_header", ""),
+            "cell_spacing": style.get("cell_spacing", ""),
+        },
+    }
+
+
+def first_style_source(tables: List[Dict[str, Any]]) -> Dict[str, Any] | None:
+    for table in tables:
+        if table.get("classification") in {"survey_result_table", "likely_report_table"}:
+            return table
+    return tables[0] if tables else None
 
 
 def flatten_table(table: Dict[str, Any]) -> str:

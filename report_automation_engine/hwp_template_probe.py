@@ -160,6 +160,7 @@ def analyze_hwpx(path: Path, item: Dict[str, Any], table_detail_limit: int = 30)
         raise ValueError("HWPX zip 패키지가 아닙니다.")
 
     with zipfile.ZipFile(path) as archive:
+        style_defs = read_style_defs(archive)
         section_names = [name for name in archive.namelist() if name.startswith("Contents/section") and name.endswith(".xml")]
         section_names.sort()
         paragraphs: List[str] = []
@@ -167,7 +168,7 @@ def analyze_hwpx(path: Path, item: Dict[str, Any], table_detail_limit: int = 30)
         for section_name in section_names:
             xml = archive.read(section_name)
             root = ET.fromstring(xml)
-            walk_section(root, section_name, paragraphs, tables)
+            walk_section(root, section_name, paragraphs, tables, style_defs)
 
     item["headings"] = guess_headings(paragraphs)
     item["table_count"] = len(tables)
@@ -179,7 +180,62 @@ def analyze_hwpx(path: Path, item: Dict[str, Any], table_detail_limit: int = 30)
             item["warnings"].append(f"표 {len(tables)}개 중 앞 {table_detail_limit}개만 상세 기록했습니다.")
 
 
-def walk_section(node: ET.Element, section_name: str, paragraphs: List[str], tables: List[Dict[str, Any]]) -> None:
+def read_style_defs(archive: zipfile.ZipFile) -> Dict[str, Any]:
+    if "Contents/header.xml" not in archive.namelist():
+        return {"border_fills": {}, "char_prs": {}}
+    root = ET.fromstring(archive.read("Contents/header.xml"))
+    return {
+        "border_fills": extract_border_fills(root),
+        "char_prs": extract_char_prs(root),
+    }
+
+
+def extract_border_fills(root: ET.Element) -> Dict[str, Dict[str, Any]]:
+    result: Dict[str, Dict[str, Any]] = {}
+    for node in root.iter():
+        if local_name(node.tag) != "borderFill":
+            continue
+        border_id = node.attrib.get("id", "")
+        borders = {}
+        fill_color = ""
+        for child in node.iter():
+            local = local_name(child.tag)
+            if local in {"leftBorder", "rightBorder", "topBorder", "bottomBorder"}:
+                borders[local] = {
+                    "type": child.attrib.get("type", ""),
+                    "width": child.attrib.get("width", ""),
+                    "color": child.attrib.get("color", ""),
+                }
+            elif local == "winBrush":
+                fill_color = child.attrib.get("faceColor", "")
+        if border_id:
+            result[border_id] = {"id": border_id, "borders": borders, "fill_color": fill_color}
+    return result
+
+
+def extract_char_prs(root: ET.Element) -> Dict[str, Dict[str, Any]]:
+    result: Dict[str, Dict[str, Any]] = {}
+    for node in root.iter():
+        if local_name(node.tag) != "charPr":
+            continue
+        char_id = node.attrib.get("id", "")
+        font_ref = {}
+        for child in list(node):
+            if local_name(child.tag) == "fontRef":
+                font_ref = dict(child.attrib)
+                break
+        if char_id:
+            result[char_id] = {
+                "id": char_id,
+                "height": node.attrib.get("height", ""),
+                "text_color": node.attrib.get("textColor", ""),
+                "shade_color": node.attrib.get("shadeColor", ""),
+                "font_ref": font_ref,
+            }
+    return result
+
+
+def walk_section(node: ET.Element, section_name: str, paragraphs: List[str], tables: List[Dict[str, Any]], style_defs: Dict[str, Any]) -> None:
     for child in list(node):
         local = local_name(child.tag)
         if local == "p":
@@ -187,20 +243,35 @@ def walk_section(node: ET.Element, section_name: str, paragraphs: List[str], tab
             if text:
                 paragraphs.append(text)
         elif local == "tbl":
-            table = extract_table(child)
+            table = extract_table(child, style_defs)
             table["table_index"] = len(tables) + 1
             table["section"] = section_name
             table["before_text"] = paragraphs[-3:]
             tables.append(table)
-        walk_section(child, section_name, paragraphs, tables)
+        walk_section(child, section_name, paragraphs, tables, style_defs)
 
 
-def extract_table(tbl: ET.Element) -> Dict[str, Any]:
+def extract_table(tbl: ET.Element, style_defs: Dict[str, Any]) -> Dict[str, Any]:
     rows: List[List[str]] = []
+    cell_border_ids = []
+    char_pr_ids = []
+    cell_margins = []
+    cell_sizes = []
     for tr in descendants_by_local_name(tbl, "tr"):
         row: List[str] = []
         for tc in children_by_local_name(tr, "tc"):
             row.append(normalize_text(text_of(tc)))
+            if tc.attrib.get("borderFillIDRef"):
+                cell_border_ids.append(tc.attrib.get("borderFillIDRef", ""))
+            for run in descendants_by_local_name(tc, "run"):
+                if run.attrib.get("charPrIDRef"):
+                    char_pr_ids.append(run.attrib.get("charPrIDRef", ""))
+            margin = first_child_by_local_name(tc, "cellMargin")
+            if margin is not None:
+                cell_margins.append(dict(margin.attrib))
+            size = first_child_by_local_name(tc, "cellSz")
+            if size is not None:
+                cell_sizes.append(dict(size.attrib))
         if row:
             rows.append(row)
     max_cols = max((len(row) for row in rows), default=0)
@@ -209,7 +280,54 @@ def extract_table(tbl: ET.Element) -> Dict[str, Any]:
         "col_count": max_cols,
         "sample_rows": rows[:8],
         "classification": classify_table(rows),
+        "style_summary": table_style_summary(tbl, cell_border_ids, char_pr_ids, cell_margins, cell_sizes, style_defs),
     }
+
+
+def table_style_summary(
+    tbl: ET.Element,
+    cell_border_ids: List[str],
+    char_pr_ids: List[str],
+    cell_margins: List[Dict[str, str]],
+    cell_sizes: List[Dict[str, str]],
+    style_defs: Dict[str, Any],
+) -> Dict[str, Any]:
+    border_fills = style_defs.get("border_fills", {})
+    char_prs = style_defs.get("char_prs", {})
+    table_border_id = tbl.attrib.get("borderFillIDRef", "")
+    char_counts = collections.Counter(char_pr_ids)
+    border_counts = collections.Counter(cell_border_ids)
+    char_ids = [item for item, _ in char_counts.most_common(5)]
+    border_ids = [item for item, _ in border_counts.most_common(5)]
+    heights = collections.Counter(clean_char_height(char_prs.get(char_id, {}).get("height", "")) for char_id in char_pr_ids)
+    fill_colors = collections.Counter(
+        border_fills.get(border_id, {}).get("fill_color", "") or "none" for border_id in cell_border_ids
+    )
+    return {
+        "table_border_fill_id": table_border_id,
+        "table_border_fill": border_fills.get(table_border_id, {}),
+        "common_cell_border_fill_ids": dict(border_counts.most_common(8)),
+        "common_cell_border_fills": {border_id: border_fills.get(border_id, {}) for border_id in border_ids},
+        "common_char_pr_ids": dict(char_counts.most_common(8)),
+        "common_char_prs": {char_id: char_prs.get(char_id, {}) for char_id in char_ids},
+        "font_height_counts": dict(heights.most_common(8)),
+        "fill_color_counts": dict(fill_colors.most_common(8)),
+        "sample_cell_margins": cell_margins[:3],
+        "sample_cell_sizes": cell_sizes[:3],
+        "repeat_header": tbl.attrib.get("repeatHeader", ""),
+        "cell_spacing": tbl.attrib.get("cellSpacing", ""),
+        "row_count_declared": tbl.attrib.get("rowCnt", ""),
+        "col_count_declared": tbl.attrib.get("colCnt", ""),
+    }
+
+
+def clean_char_height(value: str) -> str:
+    if not value:
+        return ""
+    try:
+        return f"{int(value) / 100:.1f}pt"
+    except ValueError:
+        return value
 
 
 def classify_table(rows: List[List[str]]) -> str:
@@ -239,6 +357,13 @@ def descendants_by_local_name(node: ET.Element, name: str) -> List[ET.Element]:
 
 def children_by_local_name(node: ET.Element, name: str) -> List[ET.Element]:
     return [child for child in list(node) if local_name(child.tag) == name]
+
+
+def first_child_by_local_name(node: ET.Element, name: str) -> ET.Element | None:
+    for child in list(node):
+        if local_name(child.tag) == name:
+            return child
+    return None
 
 
 def text_of(node: ET.Element) -> str:

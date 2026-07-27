@@ -48,6 +48,7 @@
 - `hwp_template_table_recognizer.py`
   - 사용자가 제공한 HWP/HWPX 보고서 템플릿에서 자동화에 사용할 표 후보를 인식합니다.
   - 결과표 후보, 스타일 원본 표, 레이아웃용 표를 분리한 사용자/런처용 JSON 리포트를 생성합니다.
+  - `hwp_table_style_report.json`과 `hwp_table_style_profile.json`에 표 선, 셀 배경, 글자 크기, 셀 여백 요약을 저장합니다.
 
 - `hwp_table_mapping.py`
   - `report_package.json`의 section/table과 `hwp_template_table_recognition.json`의 템플릿 표 후보를 연결합니다.

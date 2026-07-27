@@ -1,6 +1,6 @@
 # 다음 개발 계획
 
-작성 기준 버전: `0.0.22`
+작성 기준 버전: `0.0.23`
 
 ## 목표
 
@@ -142,8 +142,8 @@ v1 범위:
 
 ## 다음 실행 순서
 
-1. HWPX 표 스타일 인식기를 먼저 만들고, 실제 제공된 보고서 틀 1개로 표 서식 리포트를 생성한다.
-2. 아래한글 COM writer로 `{{BODY}}` 위치에 표 1개와 분석문 1개를 삽입하는 최소 실사용 테스트를 수행한다.
+1. 아래한글 COM writer로 `{{BODY}}` 위치에 표 1개와 분석문 1개를 삽입하는 최소 실사용 테스트를 수행한다.
+2. `hwp_table_style_profile.json`을 HWPX writer 입력으로 연결한다.
 3. 외부 프로그램 전환을 위해 VBA와 Python 엔진이 같은 package 계약을 생성하는 비교 테스트를 추가한다.
 
 ## 0.0.20 확인 결과
@@ -176,3 +176,24 @@ v1 범위:
   - `base_check_needed`: 82건
   - `no_numeric_points`: 2건
   - `run_summary`: 1건
+
+## 0.0.23 확인 결과
+
+- HWPX 표 스타일 인식 보강
+- `hwp_template_probe.py`가 표별 `style_summary` 추출
+  - table/cell `borderFillIDRef`
+  - cell fill color
+  - charPr/font height
+  - cell margin/size
+  - repeat header/cell spacing
+- `hwp_template_table_recognizer.py`가 추가 파일 생성
+  - `hwp_table_style_report.json`
+  - `hwp_table_style_profile.json`
+- 실제 국립암센터 HWPX 보고서틀 검증 결과
+  - recognition status: `ready`
+  - 전체 표: 121개
+  - 결과표 후보: 11개
+  - style profile: `ready`
+  - 대표 스타일 원본: table_index 9, 44행 x 8열
+  - 주요 글자 크기: 9.0pt
+  - 주요 배경색: none, #E7E7E7, #F3F3F3
