@@ -18,6 +18,7 @@
 - `report_package.py`
   - Excel 산출 시트를 헤더명 기반으로 읽어 `report_package.json`과 `preflight_report.json`을 생성합니다.
   - HWPX/PPTX 문서 생성 전 문장, 표, 차트, QA, 템플릿 상태를 `ready`, `ready_with_warnings`, `blocked`로 검증합니다.
+  - QA warning을 `normal_review_warning`, `improvement_needed`, `info` bucket으로 분류합니다.
 
 - `document_writer.py`
   - `report_package.json`을 읽어 PPTX 초본을 생성합니다.

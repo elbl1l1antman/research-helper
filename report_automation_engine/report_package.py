@@ -60,14 +60,16 @@ def read_rows(wb, sheet_prefix: str) -> List[Dict[str, Any]]:
 
 def read_qa(wb) -> List[Dict[str, Any]]:
     return [
-        {
-            "table_key": clean(row.get("table_key")),
-            "type": clean(row.get("qa_type")),
-            "severity": clean(row.get("severity")) or "warning",
-            "message": clean(row.get("message")),
-            "source_range": clean(row.get("source_range")),
-            "checked_at": clean(row.get("checked_at")),
-        }
+        enrich_qa(
+            {
+                "table_key": clean(row.get("table_key")),
+                "type": clean(row.get("qa_type")),
+                "severity": clean(row.get("severity")) or "warning",
+                "message": clean(row.get("message")),
+                "source_range": clean(row.get("source_range")),
+                "checked_at": clean(row.get("checked_at")),
+            }
+        )
         for row in read_rows(wb, "보고서_QA")
     ]
 
@@ -208,6 +210,8 @@ def build_preflight(package: Dict[str, Any], templates: Iterable[tuple[str, str,
         warnings.append(issue("", "chart", "warning", "차트 후보가 없습니다."))
 
     status = "blocked" if errors else "ready_with_warnings" if warnings else "ready"
+    warning_buckets = count_by(warnings, "review_bucket")
+    warning_categories = count_by(warnings, "category")
     return {
         "schema_version": "1.0",
         "status": status,
@@ -219,6 +223,8 @@ def build_preflight(package: Dict[str, Any], templates: Iterable[tuple[str, str,
             "table_row_count": table_rows,
             "qa_warning_count": len(warnings),
             "qa_error_count": len(errors),
+            "qa_warning_buckets": warning_buckets,
+            "qa_warning_categories": warning_categories,
         },
         "template_reports": template_reports,
         "warnings": warnings,
@@ -227,7 +233,89 @@ def build_preflight(package: Dict[str, Any], templates: Iterable[tuple[str, str,
 
 
 def issue(table_key: str, issue_type: str, severity: str, message: str) -> Dict[str, Any]:
-    return {"table_key": table_key, "type": issue_type, "severity": severity, "message": message}
+    return enrich_qa({"table_key": table_key, "type": issue_type, "severity": severity, "message": message})
+
+
+def enrich_qa(item: Dict[str, Any]) -> Dict[str, Any]:
+    classification = classify_qa(item.get("type"), item.get("severity"), item.get("message"))
+    return {**item, **classification}
+
+
+def classify_qa(issue_type: Any, severity: Any, message: Any) -> Dict[str, str]:
+    issue_type_text = clean(issue_type)
+    severity_text = clean(severity).lower()
+    message_text = clean(message)
+
+    if severity_text == "error":
+        return {
+            "category": "blocking_contract",
+            "review_action": "fix_required",
+            "review_bucket": "improvement_needed",
+            "review_bucket_label": "개선 필요",
+        }
+
+    if issue_type_text == "표 구조 QA" and "BASE" in message_text.upper():
+        return {
+            "category": "base_check_needed",
+            "review_action": "manual_base_review",
+            "review_bucket": "normal_review_warning",
+            "review_bucket_label": "정상 검토 경고",
+        }
+
+    if issue_type_text == "수치 QA":
+        return {
+            "category": "no_numeric_points",
+            "review_action": "parser_or_manual_review",
+            "review_bucket": "improvement_needed",
+            "review_bucket_label": "개선 필요",
+        }
+
+    if not issue_type_text and ("표 처리" in message_text or message_text.startswith("총 ")):
+        return {
+            "category": "run_summary",
+            "review_action": "reference_only",
+            "review_bucket": "info",
+            "review_bucket_label": "정보",
+        }
+
+    if issue_type_text == "sentence":
+        return {
+            "category": "sentence_review",
+            "review_action": "manual_sentence_review",
+            "review_bucket": "normal_review_warning",
+            "review_bucket_label": "정상 검토 경고",
+        }
+
+    if issue_type_text == "template":
+        return {
+            "category": "template_warning",
+            "review_action": "template_review",
+            "review_bucket": "improvement_needed",
+            "review_bucket_label": "개선 필요",
+        }
+
+    if issue_type_text == "chart":
+        return {
+            "category": "chart_candidate_warning",
+            "review_action": "chart_review",
+            "review_bucket": "normal_review_warning",
+            "review_bucket_label": "정상 검토 경고",
+        }
+
+    return {
+        "category": "general_warning",
+        "review_action": "manual_review",
+        "review_bucket": "normal_review_warning",
+        "review_bucket_label": "정상 검토 경고",
+    }
+
+
+def count_by(items: Iterable[Dict[str, Any]], key: str) -> Dict[str, int]:
+    counts: Dict[str, int] = {}
+    for item in items:
+        value = clean(item.get(key)) or "미분류"
+        counts[value] = counts.get(value, 0) + 1
+    return counts
 
 
 def clean(value: Any) -> str:

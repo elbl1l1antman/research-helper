@@ -1,6 +1,6 @@
 # ReportAutomation
 
-Current version: `0.0.21`
+Current version: `0.0.22`
 
 `ReportAutomation`은 엑셀 집계표를 기반으로 조사 보고서 작성용 산출물을 자동 생성하는 런처 기반 프로젝트입니다.
 
@@ -95,7 +95,7 @@ Python 기반 보조 엔진입니다.
 주요 모듈:
 
 - `excel_report_generator.py`: 문장 초안 TXT 생성
-- `report_package.py`: Excel 산출 시트를 중간 JSON 계약으로 변환하고 preflight 수행
+- `report_package.py`: Excel 산출 시트를 중간 JSON 계약으로 변환하고 QA warning 유형 분류와 preflight 수행
 - `document_writer.py`: `report_package.json` 기반 PPTX 초본 생성 시작점
 - `dashboard_package.py`: 기업/기관 가로형 원자료를 대시보드 JSON 계약으로 변환하고 preflight 수행
 - `dashboard_writer.py`: 대시보드 JSON 계약을 세로형 A4/B5 PPTX로 생성

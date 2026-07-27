@@ -1,6 +1,6 @@
 # 다음 개발 계획
 
-작성 기준 버전: `0.0.21`
+작성 기준 버전: `0.0.22`
 
 ## 목표
 
@@ -58,6 +58,7 @@
 - `보고서_삽입표`의 표 행 구조 정규화
 - `보고서_차트데이터`의 숫자/단위/포함 여부 검증
 - `보고서_QA`를 package의 `qa` 배열로 보존
+- QA warning을 정상 검토 경고, 개선 필요, 정보 bucket으로 분류
 - package 생성 실패 시 원인 JSON 저장
 
 검증 항목:
@@ -141,10 +142,9 @@ v1 범위:
 
 ## 다음 실행 순서
 
-1. `report_package.json` 경고 85건의 유형을 분류해, 정상 경고와 개선 필요 경고를 구분한다.
-2. HWPX 표 스타일 인식기를 먼저 만들고, 실제 제공된 보고서 틀 1개로 표 서식 리포트를 생성한다.
-3. 아래한글 COM writer로 `{{BODY}}` 위치에 표 1개와 분석문 1개를 삽입하는 최소 실사용 테스트를 수행한다.
-4. 외부 프로그램 전환을 위해 VBA와 Python 엔진이 같은 package 계약을 생성하는 비교 테스트를 추가한다.
+1. HWPX 표 스타일 인식기를 먼저 만들고, 실제 제공된 보고서 틀 1개로 표 서식 리포트를 생성한다.
+2. 아래한글 COM writer로 `{{BODY}}` 위치에 표 1개와 분석문 1개를 삽입하는 최소 실사용 테스트를 수행한다.
+3. 외부 프로그램 전환을 위해 VBA와 Python 엔진이 같은 package 계약을 생성하는 비교 테스트를 추가한다.
 
 ## 0.0.20 확인 결과
 
@@ -163,3 +163,16 @@ v1 범위:
 - `report_package.json` 생성 통과
 - `preflight_report.json` 상태: `ready_with_warnings`
 - package 요약: sections 84개, tables 82개, charts 437개, QA warning 85건, QA error 0건
+
+## 0.0.22 확인 결과
+
+- `report_package.py` QA warning 분류 필드 추가
+- 각 QA에 `category`, `review_action`, `review_bucket`, `review_bucket_label` 추가
+- `preflight_report.json` summary에 `qa_warning_buckets`, `qa_warning_categories` 추가
+- 실제 Excel 산출물 기준 분류 결과:
+  - `normal_review_warning`: 82건
+  - `improvement_needed`: 2건
+  - `info`: 1건
+  - `base_check_needed`: 82건
+  - `no_numeric_points`: 2건
+  - `run_summary`: 1건
