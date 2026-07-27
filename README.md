@@ -1,6 +1,6 @@
 # ReportAutomation
 
-Current version: `0.0.29`
+Current version: `0.0.30`
 
 `ReportAutomation`은 엑셀 집계표를 기반으로 조사 보고서 작성용 산출물을 자동 생성하는 런처 기반 프로젝트입니다.
 
@@ -154,6 +154,7 @@ Python 기반 보조 엔진입니다.
   - `hwp_table_style_profile.json`을 선택하면 대표 표 글자 크기를 HWP 표 생성 전에 적용
   - 표 스타일 profile에서 헤더 배경색, 주요 선 스타일, 셀 여백을 정규화해 `table_style_apply_plan`으로 기록
   - HWP COM 호출 전후 checkpoint report를 저장해 멈춤 위치를 추적
+  - COM 생성/ProgID dispatch/보안 모듈 등록/파일 열기/저장 단계별 진단 기록
   - `{{BODY}}` 위치에 제목, 분석문, 표, 출처를 반복 삽입
 
 ## 아직 개발 중인 기능
@@ -323,7 +324,7 @@ python -m report_automation_engine.hwp_com_writer `
 ```
 
 HWPX writer는 아래한글 COM을 사용하므로 Windows와 아래한글 설치가 필요합니다. 실패 시 출력 파일 옆 또는 `--report-output` 경로에 `hwp_writer_report.json`을 남깁니다.
-실사용 환경에서 COM 종료가 지연되면 `writer_report.json`의 `stage`와 `action`으로 멈춘 지점을 확인합니다.
+실사용 환경에서 COM 실행이 지연되면 `writer_report.json`의 `stage`, `action`, `com.current_prog_id`, `com.steps`로 멈춘 지점을 확인합니다.
 
 아래한글 COM 환경만 먼저 확인할 수도 있습니다.
 

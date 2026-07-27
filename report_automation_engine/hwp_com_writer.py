@@ -96,10 +96,10 @@ def write_hwp_document(
         writer_report["stage"] = "com"
         writer_report["action"] = "create_hwp_object"
         write_json(report_file, writer_report)
-        hwp = create_hwp_object(writer_report)
-        set_visible(hwp, visible, writer_report)
+        hwp = create_hwp_object(writer_report, report_file)
+        set_visible(hwp, visible, writer_report, report_file)
         write_json(report_file, writer_report)
-        open_document(hwp, output_file, writer_report)
+        open_document(hwp, output_file, writer_report, report_file)
         write_json(report_file, writer_report)
 
         replace_header_placeholders(hwp, package, writer_report)
@@ -111,7 +111,7 @@ def write_hwp_document(
 
         write_body(hwp, package, writer_report, max_sections, table_style_profile)
         write_json(report_file, writer_report)
-        save_as_hwpx(hwp, output_file, writer_report)
+        save_as_hwpx(hwp, output_file, writer_report, report_file)
         writer_report["status"] = "ready"
         writer_report["finished_at"] = now()
         write_json(report_file, writer_report)
@@ -154,7 +154,14 @@ def check_environment(report_path: str | Path | None = None, visible: bool = Fal
         "platform": platform.platform(),
         "python": sys.version,
         "visible": visible,
-        "com": {"prog_id": "", "file_path_checker": "", "visible_applied": None, "closed": False},
+        "com": {
+            "prog_id": "",
+            "current_prog_id": "",
+            "file_path_checker": "",
+            "visible_applied": None,
+            "closed": False,
+            "steps": [],
+        },
         "warnings": [],
         "errors": [],
     }
@@ -162,10 +169,14 @@ def check_environment(report_path: str | Path | None = None, visible: bool = Fal
     try:
         if platform.system().lower() != "windows":
             raise HwpWriterError("environment", "platform", "아래한글 COM writer는 Windows에서만 실행할 수 있습니다.")
-        hwp = create_hwp_object(report)
-        set_visible(hwp, visible, report)
+        checkpoint_file = Path(report_path).resolve() if report_path else None
+        write_checkpoint(report, checkpoint_file)
+        hwp = create_hwp_object(report, checkpoint_file)
+        set_visible(hwp, visible, report, checkpoint_file)
+        write_checkpoint(report, checkpoint_file)
         report["status"] = "ready"
         report["finished_at"] = now()
+        write_checkpoint(report, checkpoint_file)
         return report
     except HwpWriterError as exc:
         report["status"] = "failed"
@@ -202,55 +213,102 @@ def validate_files(template_file: Path, output_file: Path) -> None:
         raise HwpWriterError("validate", "output", "출력 파일 확장자는 .hwpx 또는 .hwp여야 합니다.")
 
 
-def create_hwp_object(report: Dict[str, Any]):
+def create_hwp_object(report: Dict[str, Any], checkpoint_path: Path | None = None):
     report["stage"] = "com"
     report["action"] = "create_object"
+    record_com_step(report, "import_win32com", "started")
+    write_checkpoint(report, checkpoint_path)
     try:
         import win32com.client  # type: ignore
     except Exception as exc:
+        record_com_step(report, "import_win32com", "failed", str(exc))
+        write_checkpoint(report, checkpoint_path)
         raise HwpWriterError("com", "import_win32com", "pywin32(win32com)를 불러오지 못했습니다. pywin32 설치가 필요합니다.") from exc
+    record_com_step(report, "import_win32com", "ready")
+    write_checkpoint(report, checkpoint_path)
 
     last_error = None
     for prog_id in ("HWPFrame.HwpObject", "HwpFrame.HwpObject.2"):
         try:
+            report["stage"] = "com"
+            report["action"] = "dispatch"
+            report["com"]["current_prog_id"] = prog_id
+            record_com_step(report, "dispatch", "started", prog_id=prog_id)
+            write_checkpoint(report, checkpoint_path)
             hwp = win32com.client.gencache.EnsureDispatch(prog_id)
             report["com"]["prog_id"] = prog_id
-            register_file_path_checker(hwp, report)
+            record_com_step(report, "dispatch", "ready", prog_id=prog_id)
+            write_checkpoint(report, checkpoint_path)
+            register_file_path_checker(hwp, report, checkpoint_path)
             return hwp
         except Exception as exc:
             last_error = exc
+            record_com_step(report, "dispatch", "failed", str(exc), prog_id=prog_id)
+            write_checkpoint(report, checkpoint_path)
     raise HwpWriterError("com", "create_object", f"아래한글 COM 객체를 생성하지 못했습니다: {last_error}")
 
 
-def register_file_path_checker(hwp, report: Dict[str, Any]) -> None:
+def register_file_path_checker(hwp, report: Dict[str, Any], checkpoint_path: Path | None = None) -> None:
     # 보안 모듈 등록은 설치 환경별로 실패할 수 있다. 실패해도 Open 단계에서 다시 명확한 오류가 난다.
     for module in ("FilePathCheckerModule", "FilePathCheckDLL"):
         try:
+            report["stage"] = "com"
+            report["action"] = "register_file_path_checker"
+            record_com_step(report, "register_file_path_checker", "started", module=module)
+            write_checkpoint(report, checkpoint_path)
             hwp.RegisterModule("FilePathCheckDLL", module)
             report["com"]["file_path_checker"] = module
+            record_com_step(report, "register_file_path_checker", "ready", module=module)
+            write_checkpoint(report, checkpoint_path)
             return
-        except Exception:
+        except Exception as exc:
+            record_com_step(report, "register_file_path_checker", "failed", str(exc), module=module)
+            write_checkpoint(report, checkpoint_path)
             continue
     report["warnings"].append("아래한글 FilePathCheck 보안 모듈 등록을 확인하지 못했습니다.")
+    write_checkpoint(report, checkpoint_path)
 
 
-def set_visible(hwp, visible: bool, report: Dict[str, Any]) -> None:
+def record_com_step(report: Dict[str, Any], name: str, status: str, detail: str = "", **extra: Any) -> None:
+    step = {"at": now(), "name": name, "status": status}
+    if detail:
+        step["detail"] = detail
+    step.update(extra)
+    report.setdefault("com", {}).setdefault("steps", []).append(step)
+
+
+def write_checkpoint(report: Dict[str, Any], path: Path | None) -> None:
+    if path:
+        write_json(path, report)
+
+
+def set_visible(hwp, visible: bool, report: Dict[str, Any], checkpoint_path: Path | None = None) -> None:
     report["stage"] = "com"
     report["action"] = "set_visible"
+    record_com_step(report, "set_visible", "started", visible=visible)
+    write_checkpoint(report, checkpoint_path)
     try:
         hwp.XHwpWindows.Item(0).Visible = bool(visible)
         report["com"]["visible_applied"] = bool(visible)
+        record_com_step(report, "set_visible", "ready", "XHwpWindows", visible=visible)
+        write_checkpoint(report, checkpoint_path)
     except Exception:
         try:
             hwp.Visible = bool(visible)
             report["com"]["visible_applied"] = bool(visible)
+            record_com_step(report, "set_visible", "ready", "Visible", visible=visible)
+            write_checkpoint(report, checkpoint_path)
         except Exception:
             report["warnings"].append("아래한글 창 표시 옵션을 적용하지 못했습니다.")
+            record_com_step(report, "set_visible", "failed", visible=visible)
+            write_checkpoint(report, checkpoint_path)
 
 
-def open_document(hwp, path: Path, report: Dict[str, Any]) -> None:
+def open_document(hwp, path: Path, report: Dict[str, Any], checkpoint_path: Path | None = None) -> None:
     report["stage"] = "document"
     report["action"] = "open"
+    record_com_step(report, "open_document", "started", path=str(path))
+    write_checkpoint(report, checkpoint_path)
     attempts = [
         lambda: hwp.Open(str(path), "HWPX", "forceopen:true") if path.suffix.lower() == ".hwpx" else hwp.Open(str(path)),
         lambda: hwp.Open(str(path)),
@@ -261,11 +319,17 @@ def open_document(hwp, path: Path, report: Dict[str, Any]) -> None:
             result = attempt()
             if result is False:
                 last_error = "Open returned False"
+                record_com_step(report, "open_document", "failed", str(last_error), path=str(path))
+                write_checkpoint(report, checkpoint_path)
                 continue
             report["document_opened"] = True
+            record_com_step(report, "open_document", "ready", path=str(path))
+            write_checkpoint(report, checkpoint_path)
             return
         except Exception as exc:
             last_error = exc
+            record_com_step(report, "open_document", "failed", str(exc), path=str(path))
+            write_checkpoint(report, checkpoint_path)
     raise HwpWriterError("document", "open", f"템플릿 사본을 아래한글로 열지 못했습니다: {last_error}")
 
 
@@ -743,9 +807,11 @@ def run_action(hwp, action: str, report: Dict[str, Any], stage: str) -> bool:
             return False
 
 
-def save_as_hwpx(hwp, output_file: Path, report: Dict[str, Any]) -> None:
+def save_as_hwpx(hwp, output_file: Path, report: Dict[str, Any], checkpoint_path: Path | None = None) -> None:
     report["stage"] = "document"
     report["action"] = "save_as"
+    record_com_step(report, "save_as", "started", path=str(output_file))
+    write_checkpoint(report, checkpoint_path)
     format_name = "HWPX" if output_file.suffix.lower() == ".hwpx" else "HWP"
     attempts = [
         lambda: hwp.SaveAs(str(output_file), format_name, ""),
@@ -758,12 +824,18 @@ def save_as_hwpx(hwp, output_file: Path, report: Dict[str, Any]) -> None:
             result = attempt()
             if result is False:
                 last_error = "Save returned False"
+                record_com_step(report, "save_as", "failed", str(last_error), path=str(output_file))
+                write_checkpoint(report, checkpoint_path)
                 continue
             if output_file.exists():
                 report["document_saved"] = True
+                record_com_step(report, "save_as", "ready", path=str(output_file))
+                write_checkpoint(report, checkpoint_path)
                 return
         except Exception as exc:
             last_error = exc
+            record_com_step(report, "save_as", "failed", str(exc), path=str(output_file))
+            write_checkpoint(report, checkpoint_path)
     raise HwpWriterError("document", "save_as", f"HWPX 저장 실패: {last_error}")
 
 
@@ -844,7 +916,14 @@ def new_report(package_file: Path, preflight_file: Path, template_file: Path, ou
         "text_table_fallbacks": 0,
         "charts_deferred": 0,
         "placeholders": {"body_found": False, "replaced": []},
-        "com": {"prog_id": "", "file_path_checker": "", "visible_applied": None, "closed": False},
+        "com": {
+            "prog_id": "",
+            "current_prog_id": "",
+            "file_path_checker": "",
+            "visible_applied": None,
+            "closed": False,
+            "steps": [],
+        },
         "warnings": [],
         "errors": [],
     }

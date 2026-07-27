@@ -265,3 +265,28 @@ v1 범위:
 1. HWP COM 환경 진단을 `create_hwp_object`, 보안 모듈 등록, 파일 열기 단계로 분리한다.
 2. HWP COM 호출이 일정 시간 이상 멈출 때 사용자가 원인을 볼 수 있도록 런처에 checkpoint report 표시를 추가한다.
 3. `CellBorderFill`, `TablePropertyDialog` action을 작은 샘플 문서에서 별도 검증한 뒤 표 배경/선/셀 여백 실제 적용으로 확장한다.
+
+## 0.0.30 확인 결과
+
+- HWP COM 환경 진단을 단계별 checkpoint로 세분화
+  - `import_win32com`
+  - `dispatch`
+  - `register_file_path_checker`
+  - `set_visible`
+  - `open_document`
+  - `save_as`
+- `writer_report.json`의 COM 진단 필드 확장
+  - `com.current_prog_id`
+  - `com.steps[]`
+- 실제 COM 호출 지연 시 마지막 단계 확인 가능
+  - 현재 PC 검증 결과: `stage=com`, `action=dispatch`, `current_prog_id=HWPFrame.HwpObject`
+- 검증 결과
+  - `py_compile` 통과
+  - dry-run 통과
+  - 실제 COM 호출 checkpoint report 생성 확인
+
+## 다음 개발 우선순위
+
+1. 런처 HWP 실행 결과 영역에 `writer_report.json`의 마지막 COM step을 표시한다.
+2. `EnsureDispatch` 지연 회피를 위해 `Dispatch`, `DispatchEx`, `EnsureDispatch`를 선택 가능한 dispatch mode로 분리한다.
+3. dispatch mode별 환경 테스트 결과를 `hwp_environment_report.json`에 기록한다.
