@@ -1,6 +1,6 @@
 # 다음 개발 계획
 
-작성 기준 버전: `0.0.20`
+작성 기준 버전: `0.0.21`
 
 ## 목표
 
@@ -19,10 +19,11 @@
 현재 상태:
 
 - `ReportAutomationAddin.bas`: 진입점, Ribbon 콜백, 실행 흐름
+- `ReportAutomationBannerCharts.bas`: 선택 배너 그룹 인식과 배너별 차트 데이터 행 생성
 - `ReportAutomationConstants.bas`: 공통 상수
 - `ReportAutomationTables.bas`: 원본 집계표 표 블록 탐지
 - `ReportAutomationOutputSheets.bas`: 산출 시트 생성
-- `ReportAutomationNarratives.bas`: 핵심 수치 추출, 차트/삽입표/QA 산출
+- `ReportAutomationNarratives.bas`: 분석문, 전체 기준 차트/삽입표, QA 산출 흐름
 - `ReportAutomationNarrativePoints.bas`: 비율/점수형 핵심 수치 추출, 포인트 표시값 포맷
 - `ReportAutomationNarrativeText.bas`: 분석문 문장 조립
 - `ReportAutomationUtils.bas`: 공통 유틸리티
@@ -34,9 +35,6 @@
 - `ReportAutomationNarrativePoints.bas`
   - 점수형/비율형 핵심 수치 추출
   - `ExtractKeyPoints`, `ExtractScorePoints`, `ExtractSimplePoints`, `ExtractWidePoints`
-
-다음 분리 후보:
-
 - `ReportAutomationBannerCharts.bas`
   - 배너 그룹 인식
   - 선택 배너별 차트 데이터 행 생성
@@ -143,15 +141,23 @@ v1 범위:
 
 ## 다음 실행 순서
 
-1. `ReportAutomationNarratives.bas`에서 배너 차트 산출 모듈을 분리한다.
-2. dev add-in 빌드와 실제 Excel 스모크 테스트를 실행한다.
-3. `report_package.json` 경고 85건의 유형을 분류해, 정상 경고와 개선 필요 경고를 구분한다.
-4. HWPX 표 스타일 인식기를 먼저 만들고, 실제 제공된 보고서 틀 1개로 표 서식 리포트를 생성한다.
-5. 아래한글 COM writer로 `{{BODY}}` 위치에 표 1개와 분석문 1개를 삽입하는 최소 실사용 테스트를 수행한다.
+1. `report_package.json` 경고 85건의 유형을 분류해, 정상 경고와 개선 필요 경고를 구분한다.
+2. HWPX 표 스타일 인식기를 먼저 만들고, 실제 제공된 보고서 틀 1개로 표 서식 리포트를 생성한다.
+3. 아래한글 COM writer로 `{{BODY}}` 위치에 표 1개와 분석문 1개를 삽입하는 최소 실사용 테스트를 수행한다.
+4. 외부 프로그램 전환을 위해 VBA와 Python 엔진이 같은 package 계약을 생성하는 비교 테스트를 추가한다.
 
 ## 0.0.20 확인 결과
 
 - VBA `ReportAutomationNarrativePoints.bas` 분리 완료
+- dev add-in 빌드 통과
+- 실제 Excel 집계표 스모크 테스트 통과
+- `report_package.json` 생성 통과
+- `preflight_report.json` 상태: `ready_with_warnings`
+- package 요약: sections 84개, tables 82개, charts 437개, QA warning 85건, QA error 0건
+
+## 0.0.21 확인 결과
+
+- VBA `ReportAutomationBannerCharts.bas` 분리 완료
 - dev add-in 빌드 통과
 - 실제 Excel 집계표 스모크 테스트 통과
 - `report_package.json` 생성 통과

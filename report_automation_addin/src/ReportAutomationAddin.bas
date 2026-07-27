@@ -6,7 +6,7 @@ Attribute VB_Name = "ReportAutomationAddin"
 Option Explicit
 
 ' 추가기능 버전. 산출 메타 시트와 로그 시트에 함께 기록해 결과 파일의 생성 기준을 추적한다.
-Public Const REPORT_AUTOMATION_VERSION As String = "0.0.20"
+Public Const REPORT_AUTOMATION_VERSION As String = "0.0.21"
 
 ' UserForm에서 전달한 1회성 실행 옵션. 설정 시트를 생성한 뒤 이 값으로 덮어쓴다.
 Private mHasOptionOverrides As Boolean

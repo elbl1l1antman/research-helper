@@ -1,6 +1,6 @@
 # ReportAutomation
 
-Current version: `0.0.20`
+Current version: `0.0.21`
 
 `ReportAutomation`은 엑셀 집계표를 기반으로 조사 보고서 작성용 산출물을 자동 생성하는 런처 기반 프로젝트입니다.
 
@@ -50,6 +50,7 @@ VBA 소스는 기능별 표준 모듈로 분리되어 있습니다.
 
 - `ReportAutomationAddin.bas`: 공개 진입점, Ribbon 콜백, 전체 실행 흐름
 - `ReportAutomationConstants.bas`: 공통 상수와 tableRec 인덱스
+- `ReportAutomationBannerCharts.bas`: 선택 배너 그룹 인식과 배너별 차트 데이터 행 생성
 - `ReportAutomationTables.bas`: 원본 집계표 시트 탐색, 표 블록 탐지, 표 제목/범위/유형 파싱
 - `ReportAutomationOutputSheets.bas`: 산출 시트 생성, 설정/표목록/출처/메타 작성
 - `ReportAutomationNarratives.bas`: 분석문, 핵심 포인트, 차트 데이터, 삽입표, QA 산출
