@@ -177,10 +177,13 @@ def group_table_rows(rows: List[Dict[str, Any]], decimal_places: int = 1) -> Lis
 
 def add_contract_qa(package: Dict[str, Any]) -> None:
     seen = set()
+    table_keys = {clean(table.get("table_key")) for table in package["tables"]}
     for section in package["sections"]:
         key = section["table_key"]
         if not key:
             package["qa"].append(issue("", "contract", "error", "section table_key가 비어 있습니다."))
+        elif key not in table_keys:
+            package["qa"].append(issue(key, "contract", "error", "section에 대응되는 삽입표 데이터가 없습니다."))
         if key in seen:
             package["qa"].append(issue(key, "contract", "error", "section table_key가 중복되었습니다."))
         seen.add(key)
