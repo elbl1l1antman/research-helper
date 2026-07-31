@@ -15,6 +15,11 @@ try:
 except ImportError:
     from template_inspector import inspect_template
 
+try:
+    from .report_table_matrix import build_table_matrix
+except ImportError:
+    from report_table_matrix import build_table_matrix
+
 
 def build_report_package(excel_path: str | Path, meta: Dict[str, Any] | None = None) -> Dict[str, Any]:
     path = Path(excel_path)
@@ -22,7 +27,8 @@ def build_report_package(excel_path: str | Path, meta: Dict[str, Any] | None = N
     qa = read_qa(wb)
     sections = read_sections(wb, qa)
     charts = read_rows(wb, "보고서_차트데이터")
-    tables = group_table_rows(read_rows(wb, "보고서_삽입표"))
+    decimal_places = int(str((meta or {}).get("decimal_places", "1") or "1"))
+    tables = group_table_rows(read_rows(wb, "보고서_삽입표"), decimal_places)
     package = {
         "schema_version": "1.0",
         "meta": {
@@ -149,7 +155,7 @@ def normalize_charts(rows: List[Dict[str, Any]], qa: List[Dict[str, Any]]) -> Li
     return charts
 
 
-def group_table_rows(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+def group_table_rows(rows: List[Dict[str, Any]], decimal_places: int = 1) -> List[Dict[str, Any]]:
     grouped: Dict[str, Dict[str, Any]] = {}
     for row in rows:
         table_key = clean(row.get("table_key"))
@@ -166,7 +172,7 @@ def group_table_rows(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
                 "source_cell": clean(row.get("source_cell")),
             }
         )
-    return list(grouped.values())
+    return [build_table_matrix(table, decimal_places) for table in grouped.values()]
 
 
 def add_contract_qa(package: Dict[str, Any]) -> None:
@@ -185,6 +191,10 @@ def add_contract_qa(package: Dict[str, Any]) -> None:
     for table in package["tables"]:
         if not table["rows"]:
             package["qa"].append(issue(table["table_key"], "contract", "error", "삽입표 rows가 비어 있습니다."))
+        for qa_item in table.get("qa", []):
+            package["qa"].append(
+                issue(table["table_key"], "table_matrix", qa_item.get("severity", "warning"), qa_item.get("message", ""))
+            )
 
 
 def build_preflight(package: Dict[str, Any], templates: Iterable[tuple[str, str, str]]) -> Dict[str, Any]:
@@ -212,6 +222,8 @@ def build_preflight(package: Dict[str, Any], templates: Iterable[tuple[str, str,
     status = "blocked" if errors else "ready_with_warnings" if warnings else "ready"
     warning_buckets = count_by(warnings, "review_bucket")
     warning_categories = count_by(warnings, "category")
+    table_matrix_warnings = [q for q in warnings if clean(q.get("type")) == "table_matrix"]
+    table_matrix_errors = [q for q in errors if clean(q.get("type")) == "table_matrix"]
     return {
         "schema_version": "1.0",
         "status": status,
@@ -223,6 +235,8 @@ def build_preflight(package: Dict[str, Any], templates: Iterable[tuple[str, str,
             "table_row_count": table_rows,
             "qa_warning_count": len(warnings),
             "qa_error_count": len(errors),
+            "table_matrix_warning_count": len(table_matrix_warnings),
+            "table_matrix_error_count": len(table_matrix_errors),
             "qa_warning_buckets": warning_buckets,
             "qa_warning_categories": warning_categories,
         },
