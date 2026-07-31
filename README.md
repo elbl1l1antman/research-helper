@@ -339,6 +339,16 @@ python -m report_automation_engine.hwp_com_writer `
   --report-output "C:\path\hwp_writer_report.json"
 ```
 
+HWPX 직접 writer 최소 초본 생성:
+
+```powershell
+python -m report_automation_engine.hwp_direct_writer `
+  --package "C:\path\report_package.json" `
+  --preflight "C:\path\preflight_report.json" `
+  --template "C:\path\template.hwpx" `
+  --output "C:\path\report_draft.hwpx"
+```
+
 Python 의존성 설치 예:
 
 ```powershell
@@ -388,6 +398,8 @@ python -m pip install -r requirements.txt
 `edwardkim/rhwp`는 장기적으로 HWP/HWPX 구조 분석과 대체 writer 후보로 검토합니다. 현재 저장소에는 rhwp 코드를 포함하지 않습니다. 향후 clone, submodule, vendoring, WASM/npm 의존성으로 포함할 경우 MIT 라이선스 고지와 제3자 라이선스 문서를 별도로 추가해야 하며, rhwp의 MIT 권리와 이 프로젝트의 custom license를 분리 표기해야 합니다.
 
 ## 개발 방향
+
+현재 신규 개발 우선순위는 HWPX 표 안정화입니다. PPTX 보고서와 대시보드 PPTX는 기존 기능을 유지하지만, 새 기능 개발은 HWPX 표 계약과 writer 안정화 이후로 둡니다.
 
 현재 안정화 우선순위:
 

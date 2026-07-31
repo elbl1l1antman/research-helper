@@ -20,6 +20,10 @@
   - HWPX/PPTX 문서 생성 전 문장, 표, 차트, QA, 템플릿 상태를 `ready`, `ready_with_warnings`, `blocked`로 검증합니다.
   - QA warning을 `normal_review_warning`, `improvement_needed`, `info` bucket으로 분류합니다.
 
+- `report_table_matrix.py`
+  - `report_package.json`의 삽입표 데이터를 HWPX writer가 사용할 행/열 matrix 계약으로 정규화합니다.
+  - 셀 역할, 표시값, 원본 값, 정렬, style hint, table matrix QA를 함께 생성합니다.
+
 - `document_writer.py`
   - `report_package.json`을 읽어 PPTX 초본을 생성합니다.
   - PowerPoint에서 편집 가능한 차트 객체와 표 객체를 생성합니다.
@@ -30,6 +34,11 @@
   - 실패 시 `hwp_writer_report.json`에 실패 단계, COM action, placeholder 상태, 경고를 기록합니다.
   - `--dry-run`, `--max-sections`, `--render-plan-output`으로 실제 아래한글 실행 전 삽입 계획을 확인할 수 있습니다.
   - `--table-style-profile`로 템플릿에서 인식한 표 서식 profile을 읽고, v1에서는 대표 글자 크기를 우선 적용합니다.
+
+- `hwp_direct_writer.py`
+  - `report_package.json`과 `preflight_report.json`을 읽어 HWPX zip 패키지 내부의 `{{BODY}}` placeholder를 최소 XML payload로 치환합니다.
+  - direct writer v1은 자동 검증을 위한 최소 HWPX package payload를 쓰는 경로입니다.
+  - 시각적 충실도는 table XML validation으로 표 계약이 안정화된 뒤 강화합니다.
 
 - `hwp_com_smoke.py`
   - 아래한글 COM으로 최소 HWPX 템플릿과 샘플 package/preflight를 만든 뒤 실제 writer를 실행합니다.

@@ -357,6 +357,8 @@ v1 범위:
 
 ## 다음 개발 우선순위
 
-1. HWP 환경 진단 결과를 런처에서 표 형태로 보여주는 전용 패널을 추가한다.
-2. dispatch mode별 성공/지연 기록을 다음 HWPX 생성 기본값 추천에 활용한다.
-3. COM dispatch 단계 지연 원인 후보를 사용자에게 안내하는 troubleshooting 문서를 추가한다.
+1. Report Package table matrix v2 계약 안정화
+2. HWPX table preflight 차단/경고 정밀화
+3. HWPX 직접 writer 최소 경로 검증
+4. 실제 사용자 HWPX 템플릿 1장 생성 검수
+5. COM writer는 fallback/진단용으로 정리
