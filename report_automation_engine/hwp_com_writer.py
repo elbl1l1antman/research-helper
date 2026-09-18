@@ -12,6 +12,7 @@ import json
 import platform
 import shutil
 import sys
+import time
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List
@@ -66,6 +67,8 @@ def write_hwp_document(
     render_plan_file = Path(render_plan_path).resolve() if render_plan_path else output_file.with_name(output_file.stem + "_hwp_render_plan.json")
     table_style_profile_file = Path(table_style_profile_path).resolve() if table_style_profile_path else None
     hwp = None
+    excel = None
+    excel_workbook = None
 
     try:
         package = load_json(package_file)
@@ -106,6 +109,8 @@ def write_hwp_document(
         open_document(hwp, output_file, writer_report, report_file)
         write_json(report_file, writer_report)
 
+        excel, excel_workbook = open_excel_clipboard_source(package, package_file, writer_report)
+
         replace_header_placeholders(hwp, package, writer_report)
         if not find_placeholder(hwp, BODY_PLACEHOLDER):
             raise HwpWriterError("template", "find_body", "{{BODY}} placeholder를 문서 본문에서 찾지 못했습니다.")
@@ -113,7 +118,7 @@ def write_hwp_document(
         run_action(hwp, "Delete", writer_report, "template")
         write_json(report_file, writer_report)
 
-        write_body(hwp, package, writer_report, max_sections, table_style_profile)
+        write_body(hwp, package, writer_report, max_sections, table_style_profile, excel_workbook)
         write_json(report_file, writer_report)
         save_as_hwpx(hwp, output_file, writer_report, report_file)
         writer_report["status"] = "ready"
@@ -135,6 +140,7 @@ def write_hwp_document(
         writer_report["finished_at"] = now()
         raise
     finally:
+        close_excel_clipboard_source(excel, excel_workbook, writer_report)
         write_json(report_file, writer_report)
         if hwp is not None and should_close_hwp(writer_report, keep_open_on_error, keep_open_after_save):
             close_hwp(hwp, writer_report)
@@ -405,6 +411,7 @@ def write_body(
     report: Dict[str, Any],
     max_sections: int | None = None,
     table_style_profile: Dict[str, Any] | None = None,
+    excel_workbook=None,
 ) -> None:
     tables_by_key = {str(table.get("table_key", "")): table for table in package.get("tables", [])}
     charts_by_key = group_charts(package.get("charts", []))
@@ -424,8 +431,16 @@ def write_body(
         if table:
             insert_text(hwp, str(table.get("title") or title), report)
             run_action(hwp, "BreakPara", report, "body")
-            if not insert_hwp_table(hwp, table_rows_for_hwp(table), report, table_style_profile):
-                insert_text_table(hwp, table_rows_for_hwp(table), report)
+            inserted = insert_clipboard_table(hwp, excel_workbook, table, report, table_style_profile)
+            if not inserted:
+                if table.get("cell_contract") and table.get("merged_ranges"):
+                    raise HwpWriterError("table", "contract_fallback", f"병합 표 clipboard 삽입에 실패했습니다: {key}")
+                inserted = insert_hwp_table(hwp, table_rows_for_hwp(table), report, table_style_profile)
+                report["table_results"].append(
+                    table_result(table, "contract_fallback", "tbl" if inserted else "", "applied" if inserted else "failed", report.pop("clipboard_failure", ""))
+                )
+            if not inserted:
+                raise HwpWriterError("table", "TableCreate", f"HWP 표 생성에 실패했습니다: {key}")
             run_action(hwp, "BreakPara", report, "body")
         else:
             report["warnings"].append(f"삽입표 데이터 없음: {key}")
@@ -801,6 +816,11 @@ def insert_text_table(hwp, rows: List[List[str]], report: Dict[str, Any]) -> Non
 
 
 def table_rows_for_hwp(table: Dict[str, Any]) -> List[List[str]]:
+    if table.get("matrix"):
+        return [
+            [str(cell.get("display_text") or "") for cell in row]
+            for row in table.get("matrix", [])
+        ]
     rows = [TABLE_COLUMNS]
     for row in table.get("rows", [])[:20]:
         rows.append(
@@ -812,6 +832,180 @@ def table_rows_for_hwp(table: Dict[str, Any]) -> List[List[str]]:
             ]
         )
     return rows
+
+
+def is_hwp_table_control(control: Any) -> bool:
+    if control is None:
+        return False
+    try:
+        return str(control.CtrlID or "").strip().lower() == "tbl"
+    except Exception:
+        return False
+
+
+def control_instance_id(control: Any) -> str:
+    if control is None:
+        return ""
+    try:
+        value = control.GetCtrlInstID()
+        return str(value) if value is not None else ""
+    except Exception:
+        return ""
+
+
+def same_hwp_control(left: Any, right: Any) -> bool:
+    if left is None or right is None:
+        return False
+    left_id = control_instance_id(left)
+    right_id = control_instance_id(right)
+    return left_id == right_id if left_id and right_id else left is right
+
+
+def open_excel_clipboard_source(package: Dict[str, Any], package_file: Path, report: Dict[str, Any]):
+    if not any(table.get("cell_contract") for table in package.get("tables", [])):
+        return None, None
+    source_text = str(package.get("meta", {}).get("source_workbook") or "").strip()
+    if not source_text:
+        report["warnings"].append("clipboard 삽입용 source workbook 경로가 없어 contract fallback을 사용합니다.")
+        return None, None
+    source_path = Path(source_text)
+    if not source_path.is_absolute():
+        source_path = (package_file.parent / source_path).resolve()
+    if not source_path.exists():
+        report["warnings"].append(f"clipboard 삽입용 workbook을 찾지 못했습니다: {source_path}")
+        return None, None
+    try:
+        import win32com.client  # type: ignore
+
+        excel = win32com.client.DispatchEx("Excel.Application")
+        excel.Visible = False
+        excel.DisplayAlerts = False
+        workbook = excel.Workbooks.Open(str(source_path), 0, True)
+        report["excel"] = {"opened": True, "source_workbook": str(source_path), "closed": False}
+        return excel, workbook
+    except Exception as exc:
+        report["warnings"].append(f"Excel clipboard source를 열지 못해 contract fallback을 사용합니다: {exc}")
+        return None, None
+
+
+def close_excel_clipboard_source(excel, workbook, report: Dict[str, Any]) -> None:
+    if workbook is not None:
+        try:
+            workbook.Close(False)
+        except Exception:
+            pass
+    if excel is not None:
+        try:
+            excel.CutCopyMode = False
+            excel.Quit()
+            report.setdefault("excel", {})["closed"] = True
+        except Exception:
+            pass
+
+
+def insert_clipboard_table(hwp, workbook, table: Dict[str, Any], report: Dict[str, Any], profile: Dict[str, Any] | None) -> bool:
+    if workbook is None or not table.get("cell_contract"):
+        report["clipboard_failure"] = "Excel source unavailable" if table.get("cell_contract") else "legacy table contract"
+        return False
+    try:
+        worksheet = workbook.Worksheets(str(table.get("source_sheet") or ""))
+        source_range = worksheet.Range(str(table.get("source_range") or ""))
+        last_error = None
+        for _ in range(3):
+            try:
+                source_range.Copy()
+                last_error = None
+                break
+            except Exception as exc:
+                last_error = exc
+                time.sleep(0.25)
+        if last_error is not None:
+            raise last_error
+
+        previous_control = last_hwp_control(hwp)
+        disable_picture_paste(hwp, report)
+        if not run_action(hwp, "Paste", report, "table"):
+            raise RuntimeError("HWP Paste action returned False")
+        control = last_hwp_control(hwp)
+        if not is_hwp_table_control(control):
+            control = find_hwp_table_control(hwp)
+        if not is_hwp_table_control(control):
+            run_action(hwp, "Undo", report, "table")
+            raise RuntimeError("붙여넣기 결과가 HWP 표 객체가 아닙니다.")
+        if same_hwp_control(previous_control, control):
+            run_action(hwp, "Undo", report, "table")
+            raise RuntimeError("붙여넣기 전후 HWP 컨트롤이 같아 새 표 생성을 확인할 수 없습니다.")
+
+        rows, cols = hwp_table_dimensions(control)
+        expected_rows = int(table.get("row_count") or 0)
+        expected_cols = int(table.get("col_count") or 0)
+        if rows and cols and (rows != expected_rows or cols != expected_cols):
+            run_action(hwp, "Undo", report, "table")
+            raise RuntimeError(f"붙여넣기 표 크기가 다릅니다: {rows}x{cols}, expected {expected_rows}x{expected_cols}")
+
+        apply_table_style_after_paste(hwp, profile, report)
+        report["tables_written"] += 1
+        report["table_results"].append(table_result(table, "clipboard", "tbl", "applied", ""))
+        report.pop("clipboard_failure", None)
+        return True
+    except Exception as exc:
+        report["clipboard_failure"] = str(exc)
+        report["warnings"].append(f"Excel clipboard 표 삽입 실패, contract fallback을 사용합니다: {table.get('table_key')}: {exc}")
+        return False
+
+
+def disable_picture_paste(hwp, report: Dict[str, Any]) -> None:
+    try:
+        properties = hwp.EngineProperties
+        properties.SetItem("PasteObjectAsPicture", 0)
+        hwp.EngineProperties = properties
+    except Exception as exc:
+        report["warnings"].append(f"PasteObjectAsPicture 설정을 적용하지 못했습니다: {exc}")
+
+
+def find_hwp_table_control(hwp):
+    for name in ("CurSelectedCtrl", "ParentCtrl", "LastCtrl"):
+        try:
+            control = getattr(hwp, name)
+        except Exception:
+            continue
+        if is_hwp_table_control(control):
+            return control
+    return None
+
+
+def last_hwp_control(hwp):
+    try:
+        return hwp.LastCtrl
+    except Exception:
+        return None
+
+
+def hwp_table_dimensions(control) -> tuple[int, int]:
+    try:
+        properties = control.Properties
+        return int(properties.Rows), int(properties.Cols)
+    except Exception:
+        return 0, 0
+
+
+def apply_table_style_after_paste(hwp, profile: Dict[str, Any] | None, report: Dict[str, Any]) -> None:
+    run_action(hwp, "TableCellBlock", report, "style")
+    run_action(hwp, "TableCellBlockExtend", report, "style")
+    apply_table_style_before_create(hwp, profile, report)
+    run_action(hwp, "Cancel", report, "style")
+
+
+def table_result(table: Dict[str, Any], insert_mode: str, ctrl_id: str, style_status: str, fallback_reason: str) -> Dict[str, Any]:
+    return {
+        "table_key": str(table.get("table_key") or ""),
+        "insert_mode": insert_mode,
+        "pasted_ctrl_id": ctrl_id,
+        "rows": int(table.get("row_count") or len(table.get("matrix", []))),
+        "cols": int(table.get("col_count") or max((len(row) for row in table.get("matrix", [])), default=0)),
+        "style_status": style_status,
+        "fallback_reason": fallback_reason,
+    }
 
 
 def insert_text(hwp, text: str, report: Dict[str, Any]) -> None:
@@ -947,6 +1141,8 @@ def new_report(package_file: Path, preflight_file: Path, template_file: Path, ou
         "tables_written": 0,
         "text_table_fallbacks": 0,
         "charts_deferred": 0,
+        "table_results": [],
+        "excel": {"opened": False, "source_workbook": "", "closed": False},
         "placeholders": {"body_found": False, "replaced": []},
         "com": {
             "dispatch_mode": "ensure_dispatch",

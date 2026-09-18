@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.Drawing;
 using System.IO;
+using System.Linq;
 using System.Runtime.InteropServices;
 using System.Threading;
 using System.Web.Script.Serialization;
@@ -417,6 +418,8 @@ namespace ReportAutomationLauncher
         private readonly CheckedListBox bannerList = new CheckedListBox();
         private readonly TabControl workflowTabs = new TabControl();
         private readonly ListView tablePreviewList = new ListView();
+        private readonly Button selectTableRangeButton = new Button();
+        private readonly Button clearTableRangeButton = new Button();
         private readonly Label dataStatusLabel = new Label();
         private readonly Label fileStepStatusLabel = new Label();
         private readonly Label dataStepStatusLabel = new Label();
@@ -503,6 +506,7 @@ namespace ReportAutomationLauncher
         private string currentDraftPath = "";
         private DashboardWorkbookInfo currentDashboardInfo;
         private string lastDashboardOutputPath = "";
+        private readonly List<TablePreview> currentTablePreviews = new List<TablePreview>();
 
         public MainForm()
         {
@@ -1019,9 +1023,10 @@ namespace ReportAutomationLauncher
             var panel = new TableLayoutPanel();
             panel.Dock = DockStyle.Fill;
             panel.ColumnCount = 1;
-            panel.RowCount = 3;
+            panel.RowCount = 4;
             panel.RowStyles.Add(new RowStyle(SizeType.AutoSize));
             panel.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+            panel.RowStyles.Add(new RowStyle(SizeType.AutoSize));
             panel.RowStyles.Add(new RowStyle(SizeType.AutoSize));
 
             dataStatusLabel.Text = "집계표 파일을 선택하면 표 목록과 배너 목록을 자동으로 확인합니다.";
@@ -1035,18 +1040,35 @@ namespace ReportAutomationLauncher
             tablePreviewList.FullRowSelect = true;
             tablePreviewList.GridLines = true;
             tablePreviewList.Columns.Add("No", 48);
-            tablePreviewList.Columns.Add("표번호", 90);
-            tablePreviewList.Columns.Add("제목", 520);
-            tablePreviewList.Columns.Add("시트", 130);
-            tablePreviewList.Columns.Add("행", 70);
+            tablePreviewList.Columns.Add("표번호", 80);
+            tablePreviewList.Columns.Add("제목", 330);
+            tablePreviewList.Columns.Add("시트", 110);
+            tablePreviewList.Columns.Add("자동 범위", 110);
+            tablePreviewList.Columns.Add("최종 범위", 160);
+            tablePreviewList.Columns.Add("크기", 70);
+            tablePreviewList.Columns.Add("보정", 60);
+            tablePreviewList.Columns.Add("삽입", 60);
             panel.Controls.Add(tablePreviewList, 0, 1);
 
+            var buttons = new FlowLayoutPanel();
+            buttons.Dock = DockStyle.Fill;
+            buttons.AutoSize = true;
+            selectTableRangeButton.Text = "Excel에서 범위 다시 선택";
+            selectTableRangeButton.AutoSize = true;
+            selectTableRangeButton.Click += delegate { SelectTableRangeInExcel(); };
+            clearTableRangeButton.Text = "자동 범위로 복원";
+            clearTableRangeButton.AutoSize = true;
+            clearTableRangeButton.Click += delegate { ClearSelectedTableRange(); };
+            buttons.Controls.Add(selectTableRangeButton);
+            buttons.Controls.Add(clearTableRangeButton);
+            panel.Controls.Add(buttons, 0, 2);
+
             var note = new Label();
-            note.Text = "표 제목이 누락되거나 전체행(■전체■)이 없는 표는 산출 후 QA 시트에서 추가 확인합니다.";
+            note.Text = "자동 탐지 범위가 다르면 표를 선택한 뒤 Excel에서 범위를 다시 지정하세요. 원본 파일은 저장하지 않습니다.";
             note.AutoSize = true;
             note.ForeColor = LauncherUi.ColorMutedText;
             note.Margin = new Padding(0, 8, 0, 0);
-            panel.Controls.Add(note, 0, 2);
+            panel.Controls.Add(note, 0, 3);
             return panel;
         }
 
@@ -1884,18 +1906,26 @@ namespace ReportAutomationLauncher
 
         private void PopulateTablePreview(List<TablePreview> tables)
         {
+            var snapshot = new List<TablePreview>(tables);
             tablePreviewList.BeginUpdate();
             try
             {
                 tablePreviewList.Items.Clear();
+                currentTablePreviews.Clear();
                 int index = 1;
-                foreach (TablePreview table in tables)
+                foreach (TablePreview table in snapshot)
                 {
+                    currentTablePreviews.Add(table);
                     var item = new ListViewItem(index.ToString());
                     item.SubItems.Add(table.TableNo);
                     item.SubItems.Add(table.Title);
                     item.SubItems.Add(table.SheetName);
-                    item.SubItems.Add(table.Row.ToString());
+                    item.SubItems.Add(table.AutoRange);
+                    item.SubItems.Add(table.FinalRange);
+                    item.SubItems.Add(table.RowCount + "x" + table.ColCount);
+                    item.SubItems.Add(table.IsManual ? "수동" : "자동");
+                    item.SubItems.Add("포함");
+                    item.Tag = table;
                     LauncherUi.StyleListItem(item, index);
                     tablePreviewList.Items.Add(item);
                     index++;
@@ -1904,6 +1934,104 @@ namespace ReportAutomationLauncher
             finally
             {
                 tablePreviewList.EndUpdate();
+            }
+        }
+
+        private void SelectTableRangeInExcel()
+        {
+            if (tablePreviewList.SelectedItems.Count != 1)
+            {
+                MessageBox.Show(this, "범위를 보정할 표 하나를 선택하세요.", "표 범위", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                return;
+            }
+
+            string path = workbookPathText.Text.Trim();
+            if (!File.Exists(path))
+            {
+                MessageBox.Show(this, "집계표 엑셀 파일을 찾을 수 없습니다.", "표 범위", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return;
+            }
+
+            TablePreview table = tablePreviewList.SelectedItems[0].Tag as TablePreview;
+            object excel = null;
+            object workbook = null;
+            object selected = null;
+            try
+            {
+                Type excelType = Type.GetTypeFromProgID("Excel.Application");
+                if (excelType == null)
+                {
+                    throw new InvalidOperationException("Excel.Application COM 개체를 찾을 수 없습니다.");
+                }
+
+                excel = Activator.CreateInstance(excelType);
+                dynamic xl = excel;
+                xl.Visible = true;
+                workbook = xl.Workbooks.Open(path, 0, true);
+                dynamic wb = workbook;
+                wb.Worksheets[table.SheetName].Activate();
+                wb.Worksheets[table.SheetName].Range[table.FinalRange].Select();
+                object missing = Type.Missing;
+                selected = xl.InputBox("삽입할 표 범위를 드래그한 뒤 확인을 누르세요.", "표 범위 선택", missing, missing, missing, missing, missing, 8);
+                if (selected is bool && !(bool)selected)
+                {
+                    return;
+                }
+
+                dynamic range = selected;
+                if (Convert.ToInt32(range.Areas.Count) != 1)
+                {
+                    throw new InvalidOperationException("서로 떨어진 여러 범위는 사용할 수 없습니다. 연속된 표 범위 하나를 선택하세요.");
+                }
+                table.SheetName = Convert.ToString(range.Worksheet.Name);
+                table.FinalRange = Convert.ToString(range.Address(false, false));
+                table.RowCount = Convert.ToInt32(range.Rows.Count);
+                table.ColCount = Convert.ToInt32(range.Columns.Count);
+                table.IsManual = true;
+                PopulateTablePreview(currentTablePreviews);
+                SelectTablePreview(table.TableKey);
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show(this, ex.Message, "표 범위 선택 실패", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            }
+            finally
+            {
+                AutomationRunner.CloseComWorkbookForLauncher(workbook, false);
+                AutomationRunner.QuitComExcelForLauncher(excel);
+                AutomationRunner.ReleaseComForLauncher(selected);
+                AutomationRunner.ReleaseComForLauncher(workbook);
+                AutomationRunner.ReleaseComForLauncher(excel);
+            }
+        }
+
+        private void ClearSelectedTableRange()
+        {
+            if (tablePreviewList.SelectedItems.Count != 1)
+            {
+                return;
+            }
+            TablePreview table = tablePreviewList.SelectedItems[0].Tag as TablePreview;
+            table.SheetName = table.AutoSheetName;
+            table.FinalRange = table.AutoRange;
+            table.RowCount = table.AutoRowCount;
+            table.ColCount = table.AutoColCount;
+            table.IsManual = false;
+            PopulateTablePreview(currentTablePreviews);
+            SelectTablePreview(table.TableKey);
+        }
+
+        private void SelectTablePreview(string tableKey)
+        {
+            foreach (ListViewItem item in tablePreviewList.Items)
+            {
+                TablePreview table = item.Tag as TablePreview;
+                if (table != null && table.TableKey == tableKey)
+                {
+                    item.Selected = true;
+                    item.EnsureVisible();
+                    return;
+                }
             }
         }
 
@@ -3685,6 +3813,10 @@ namespace ReportAutomationLauncher
             options.HwpKeepOpenOnError = hwpKeepOpenOnErrorCheck.Checked;
             options.HwpMaxSections = SelectedHwpMaxSections();
             options.HwpDispatchMode = SelectedHwpDispatchMode();
+            options.TableRangeOverrides = string.Join(Environment.NewLine, currentTablePreviews
+                .Where(table => table.IsManual)
+                .Select(table => table.TableKey + "=" + table.SheetName + "!" + table.FinalRange)
+                .ToArray());
             options.Validate();
             return options;
         }
@@ -3820,6 +3952,7 @@ namespace ReportAutomationLauncher
         public bool HwpKeepOpenOnError;
         public int HwpMaxSections = 1;
         public string HwpDispatchMode = "ensure_dispatch";
+        public string TableRangeOverrides = "";
         public string LastGeneratedWorkbookPath;
         public string LastDraftTextPath;
         public string LastReportPackagePath;
@@ -4172,9 +4305,9 @@ namespace ReportAutomationLauncher
                 dynamic wb = workbook;
                 wb.Activate();
 
-                string macroName = "'" + Path.GetFileName(options.AddinPath).Replace("'", "''") + "'!ReportAutomation_RunWithOptionsSilent";
+                string macroName = "'" + Path.GetFileName(options.AddinPath).Replace("'", "''") + "'!ReportAutomation_RunWithOptionsAndRangesSilent";
                 log("보고서 자동화 매크로를 실행합니다.");
-                xl.Run(macroName, options.BannerSetting, options.TitlePrefixes);
+                xl.Run(macroName, options.BannerSetting, options.TitlePrefixes, options.TableRangeOverrides);
 
                 wb.Save();
                 WriteLauncherConfig(workbookToOpen, options);
@@ -4254,6 +4387,7 @@ namespace ReportAutomationLauncher
                 writer.WriteLine("TableInsertMode=" + options.TableInsertMode);
                 writer.WriteLine("HwpMaxSections=" + options.HwpMaxSections);
                 writer.WriteLine("HwpDispatchMode=" + options.HwpDispatchMode);
+                writer.WriteLine("TableRangeOverrides=" + (options.TableRangeOverrides ?? "").Replace("\r", "").Replace("\n", ";"));
                 writer.WriteLine("UseLlm=" + options.UseLlm);
                 writer.WriteLine("LlmProvider=" + options.LlmProvider);
                 writer.WriteLine("LlmModel=" + options.LlmModel);
@@ -4871,10 +5005,19 @@ namespace ReportAutomationLauncher
 
     internal sealed class TablePreview
     {
+        public string TableKey;
         public string SheetName;
+        public string AutoSheetName;
         public string TableNo;
         public string Title;
         public int Row;
+        public int RowCount;
+        public int ColCount;
+        public int AutoRowCount;
+        public int AutoColCount;
+        public string AutoRange;
+        public string FinalRange;
+        public bool IsManual;
     }
 
     internal static class BannerInspector
@@ -4923,14 +5066,10 @@ namespace ReportAutomationLauncher
                 primary.Add("전체");
                 primarySeen.Add("전체");
 
-                foreach (dynamic ws in wb.Worksheets)
+                dynamic dataSheet = ResolvePreviewWorksheet(wb);
+                if (dataSheet != null)
                 {
-                    if (IsGeneratedSheet(Convert.ToString(ws.Name)))
-                    {
-                        continue;
-                    }
-
-                    ScanWorksheet(ws, found, seen, primary, primarySeen, preview.Tables);
+                    ScanWorksheet(dataSheet, found, seen, primary, primarySeen, preview.Tables);
                 }
 
                 return preview;
@@ -4966,7 +5105,7 @@ namespace ReportAutomationLauncher
             {
                 int startRow = tableStarts[i];
                 int endRow = (i + 1 < tableStarts.Count) ? tableStarts[i + 1] - 1 : sheet.LastRow;
-                AddTablePreview(tables, Convert.ToString(ws.Name), sheet.Text(startRow, 1), startRow);
+                AddTablePreview(tables, Convert.ToString(ws.Name), sheet.Text(startRow, 1), startRow, endRow, sheet.LastCol);
                 int totalRow = FindTotalRow(sheet, startRow, endRow);
                 if (totalRow == 0)
                 {
@@ -4995,7 +5134,7 @@ namespace ReportAutomationLauncher
                    text.StartsWith("<표", StringComparison.Ordinal);
         }
 
-        private static void AddTablePreview(List<TablePreview> tables, string sheetName, string rawTitle, int row)
+        private static void AddTablePreview(List<TablePreview> tables, string sheetName, string rawTitle, int row, int endRow, int lastCol)
         {
             if (tables.Count >= 500)
             {
@@ -5003,11 +5142,91 @@ namespace ReportAutomationLauncher
             }
 
             var preview = new TablePreview();
+            preview.TableKey = "T" + (tables.Count + 1).ToString("0000");
             preview.SheetName = sheetName;
+            preview.AutoSheetName = sheetName;
             preview.Row = row;
+            preview.RowCount = Math.Max(1, endRow - row + 1);
+            preview.ColCount = Math.Max(1, lastCol);
+            preview.AutoRowCount = preview.RowCount;
+            preview.AutoColCount = preview.ColCount;
+            preview.AutoRange = "A" + row + ":" + ExcelColumnName(lastCol) + endRow;
+            preview.FinalRange = preview.AutoRange;
             preview.TableNo = ParseTableNo(rawTitle);
             preview.Title = ParseTableTitle(rawTitle);
             tables.Add(preview);
+        }
+
+        private static dynamic ResolvePreviewWorksheet(dynamic workbook)
+        {
+            foreach (dynamic ws in workbook.Worksheets)
+            {
+                if (Convert.ToString(ws.Name).IndexOf("배너조정", StringComparison.OrdinalIgnoreCase) >= 0 && HasTableTitles(ws))
+                {
+                    return ws;
+                }
+            }
+            try
+            {
+                dynamic active = workbook.ActiveSheet;
+                if (active != null && HasTableTitles(active))
+                {
+                    return active;
+                }
+            }
+            catch
+            {
+            }
+            try
+            {
+                dynamic sheet1 = workbook.Worksheets["Sheet1"];
+                if (HasTableTitles(sheet1))
+                {
+                    return sheet1;
+                }
+            }
+            catch
+            {
+            }
+            foreach (dynamic ws in workbook.Worksheets)
+            {
+                if (!IsGeneratedSheet(Convert.ToString(ws.Name)) && HasTableTitles(ws))
+                {
+                    return ws;
+                }
+            }
+            return null;
+        }
+
+        private static bool HasTableTitles(dynamic worksheet)
+        {
+            try
+            {
+                int lastRow = Math.Min(Convert.ToInt32(worksheet.Cells[worksheet.Rows.Count, 1].End(-4162).Row), MaxPreviewRows);
+                for (int row = 1; row <= lastRow; row++)
+                {
+                    if (IsTableTitle(Convert.ToString(worksheet.Cells[row, 1].Value2)))
+                    {
+                        return true;
+                    }
+                }
+            }
+            catch
+            {
+            }
+            return false;
+        }
+
+        private static string ExcelColumnName(int column)
+        {
+            string name = "";
+            while (column > 0)
+            {
+                column--;
+                name = (char)('A' + column % 26) + name;
+                column /= 26;
+            }
+            return name;
         }
 
         private static string ParseTableNo(string rawTitle)

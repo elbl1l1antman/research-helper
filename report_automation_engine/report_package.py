@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any, Dict, Iterable, List
 
 import openpyxl
+from openpyxl.utils.cell import range_boundaries
 
 try:
     from .template_inspector import inspect_template
@@ -16,9 +17,9 @@ except ImportError:
     from template_inspector import inspect_template
 
 try:
-    from .report_table_matrix import build_table_matrix
+    from .report_table_matrix import build_table_matrix, build_table_matrix_from_cells
 except ImportError:
-    from report_table_matrix import build_table_matrix
+    from report_table_matrix import build_table_matrix, build_table_matrix_from_cells
 
 
 def build_report_package(excel_path: str | Path, meta: Dict[str, Any] | None = None) -> Dict[str, Any]:
@@ -28,7 +29,8 @@ def build_report_package(excel_path: str | Path, meta: Dict[str, Any] | None = N
     sections = read_sections(wb, qa)
     charts = read_rows(wb, "보고서_차트데이터")
     decimal_places = int(str((meta or {}).get("decimal_places", "1") or "1"))
-    tables = group_table_rows(read_rows(wb, "보고서_삽입표"), decimal_places)
+    cell_rows = read_rows(wb, "보고서_삽입표셀")
+    tables = group_cell_rows(cell_rows) if cell_rows else group_table_rows(read_rows(wb, "보고서_삽입표"), decimal_places)
     package = {
         "schema_version": "1.0",
         "meta": {
@@ -43,6 +45,7 @@ def build_report_package(excel_path: str | Path, meta: Dict[str, Any] | None = N
         "qa": qa,
     }
     add_contract_qa(package)
+    add_source_range_qa(package, wb)
     return package
 
 
@@ -175,6 +178,15 @@ def group_table_rows(rows: List[Dict[str, Any]], decimal_places: int = 1) -> Lis
     return [build_table_matrix(table, decimal_places) for table in grouped.values()]
 
 
+def group_cell_rows(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    grouped: Dict[str, List[Dict[str, Any]]] = {}
+    for row in rows:
+        table_key = clean(row.get("table_key"))
+        if table_key:
+            grouped.setdefault(table_key, []).append(row)
+    return [build_table_matrix_from_cells(table_rows) for table_rows in grouped.values()]
+
+
 def add_contract_qa(package: Dict[str, Any]) -> None:
     seen = set()
     table_keys = {clean(table.get("table_key")) for table in package["tables"]}
@@ -192,11 +204,39 @@ def add_contract_qa(package: Dict[str, Any]) -> None:
     if not package["sections"]:
         package["qa"].append(issue("", "contract", "error", "보고서_분석문 산출 시트가 없거나 비어 있습니다."))
     for table in package["tables"]:
-        if not table["rows"]:
+        if not table.get("cell_contract") and not table["rows"]:
             package["qa"].append(issue(table["table_key"], "contract", "error", "삽입표 rows가 비어 있습니다."))
         for qa_item in table.get("qa", []):
             package["qa"].append(
                 issue(table["table_key"], "table_matrix", qa_item.get("severity", "warning"), qa_item.get("message", ""))
+            )
+
+
+def add_source_range_qa(package: Dict[str, Any], wb) -> None:
+    for table in package["tables"]:
+        if not table.get("cell_contract"):
+            continue
+        key = table.get("table_key", "")
+        sheet_name = clean(table.get("source_sheet"))
+        source_range = clean(table.get("source_range")).replace("$", "")
+        if sheet_name not in wb.sheetnames:
+            package["qa"].append(issue(key, "table_matrix", "error", f"source sheet를 찾을 수 없습니다: {sheet_name}"))
+            continue
+        try:
+            min_col, min_row, max_col, max_row = range_boundaries(source_range)
+        except ValueError:
+            package["qa"].append(issue(key, "table_matrix", "error", f"source range가 올바르지 않습니다: {source_range}"))
+            continue
+        source_rows = max_row - min_row + 1
+        source_cols = max_col - min_col + 1
+        if source_rows != table.get("row_count") or source_cols != table.get("col_count"):
+            package["qa"].append(
+                issue(
+                    key,
+                    "table_matrix",
+                    "error",
+                    f"source range 크기({source_rows}x{source_cols})와 matrix 크기({table.get('row_count')}x{table.get('col_count')})가 다릅니다.",
+                )
             )
 
 
@@ -215,7 +255,7 @@ def build_preflight(package: Dict[str, Any], templates: Iterable[tuple[str, str,
                 warnings.append(issue("", "template", "warning", f"{label} 템플릿 권장 필드가 부족합니다."))
 
     chart_candidates = [row for row in package["charts"] if row.get("include_chart")]
-    table_rows = sum(len(table["rows"]) for table in package["tables"])
+    table_rows = sum(int(table.get("row_count") or len(table.get("rows", []))) for table in package["tables"])
     for section in package["sections"]:
         if section["qa_flags"]:
             warnings.append(issue(section["table_key"], "sentence", "warning", ", ".join(section["qa_flags"])))

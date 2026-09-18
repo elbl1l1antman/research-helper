@@ -362,3 +362,31 @@ v1 범위:
 3. HWPX 직접 writer 최소 경로 검증
 4. 실제 사용자 HWPX 템플릿 1장 생성 검수
 5. COM writer는 fallback/진단용으로 정리
+
+## 0.0.34 확인 결과
+
+- VBA 셀 계약 `보고서_삽입표셀` 추가
+  - Excel `Range.Text` 표시값과 `Value2` 원시값 분리
+  - 병합, 셀 역할, 정렬, 원본 시트/범위 보존
+- 런처 표 범위 검토 기능 추가
+  - 자동 탐지 범위와 최종 사용 범위 표시
+  - Excel 기본 범위 선택 창으로 표별 수동 범위 보정
+  - 작업 복사본의 `table_range.Txxxx` 설정으로 전달
+- `report_package.json` table matrix v2 우선 읽기 및 source 범위 검증
+- HWP COM writer에 Excel Range.Copy/Paste 경로 추가
+  - 새 HWP 표 객체와 행·열 크기 검증
+  - 실패 시 matrix 기반 `TableCreate` fallback
+  - 표별 insert mode와 fallback 사유 기록
+- 검증 결과
+  - Python 테스트 14개 통과
+  - VBA add-in 빌드 및 Excel COM smoke 통과
+  - 수동 범위 `A2:B3`, 표시값 `3.3`, 원시값 `3.333535353` 보존 확인
+  - 런처 빌드 통과
+  - 현재 PC의 HWP COM dispatch는 객체 생성 단계에서 지연되어 실제 HWPX 저장 검증은 미완료
+
+## 다음 개발 우선순위
+
+1. HWP COM이 정상 동작하는 환경에서 한 문항 HWPX fixture 검증
+2. clipboard 표의 역할별 배경색·선·여백 적용 검증
+3. 병합 표 `TableCreate` fallback 셀 병합 지원
+4. 표 폭 초과 시 축소 또는 분할 정책 구현

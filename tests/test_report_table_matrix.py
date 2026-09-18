@@ -1,4 +1,4 @@
-from report_automation_engine.report_table_matrix import build_table_matrix, format_display_value
+from report_automation_engine.report_table_matrix import build_table_matrix, build_table_matrix_from_cells, format_display_value
 
 
 def test_format_display_value_uses_one_decimal_for_float():
@@ -26,3 +26,17 @@ def test_build_table_matrix_adds_display_cells_without_losing_rows():
     assert matrix_table["matrix"][1][1]["raw_value"] == 63.25
     assert matrix_table["matrix"][1][1]["source_cell"] == "D5"
     assert matrix_table["roles"]["value"] >= 1
+
+
+def test_cell_contract_reports_overlapping_merges_and_hash_display():
+    rows = [
+        {"table_key": "T001", "row": 1, "col": 1, "rowspan": 1, "colspan": 2, "role": "banner_horizontal", "display_text": "구분", "source_range": "A1:B2"},
+        {"table_key": "T001", "row": 1, "col": 2, "rowspan": 2, "colspan": 1, "role": "banner_horizontal", "display_text": "비율", "source_range": "A1:B2"},
+        {"table_key": "T001", "row": 2, "col": 1, "role": "value", "display_text": "###", "raw_value": 123.4, "source_range": "A1:B2"},
+    ]
+
+    table = build_table_matrix_from_cells(rows)
+    errors = [item["message"] for item in table["qa"] if item["severity"] == "error"]
+
+    assert any("병합" in message for message in errors)
+    assert any("###" in message for message in errors)

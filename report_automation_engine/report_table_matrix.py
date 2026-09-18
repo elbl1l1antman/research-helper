@@ -5,6 +5,7 @@ from typing import Any, Dict, List
 
 
 HEADER_LABELS = ["항목", "비율", "가중 N", "원 N"]
+ALLOWED_ROLES = {"title", "base", "banner_horizontal", "banner_vertical", "stub", "value", "note", "source", "blank", "unknown"}
 LONG_TEXT_LIMIT = 40
 MANY_COLUMNS_LIMIT = 8
 
@@ -45,6 +46,60 @@ def build_table_matrix(table: Dict[str, Any], decimal_places: int = 1) -> Dict[s
     return result
 
 
+def build_table_matrix_from_cells(rows: List[Dict[str, Any]]) -> Dict[str, Any]:
+    first = rows[0]
+    row_count = max(as_positive_int(row.get("row")) + as_positive_int(row.get("rowspan")) - 1 for row in rows)
+    col_count = max(as_positive_int(row.get("col")) + as_positive_int(row.get("colspan")) - 1 for row in rows)
+    matrix = [[empty_cell(r, c) for c in range(1, col_count + 1)] for r in range(1, row_count + 1)]
+    merged_ranges: List[Dict[str, int]] = []
+
+    for source in rows:
+        row = as_positive_int(source.get("row"))
+        col = as_positive_int(source.get("col"))
+        rowspan = as_positive_int(source.get("rowspan"))
+        colspan = as_positive_int(source.get("colspan"))
+        role = str(source.get("role") or "unknown").strip()
+        if role not in ALLOWED_ROLES:
+            role = "unknown"
+        raw_value = source.get("raw_value")
+        matrix[row - 1][col - 1] = {
+            "row": row,
+            "col": col,
+            "rowspan": rowspan,
+            "colspan": colspan,
+            "role": role,
+            "display_text": "" if source.get("display_text") is None else str(source.get("display_text")),
+            "raw_value": raw_value,
+            "number_format": str(source.get("number_format") or ""),
+            "source_cell": str(source.get("source_cell") or ""),
+            "align": str(source.get("horizontal_align") or ""),
+            "vertical_align": str(source.get("vertical_align") or ""),
+            "covered_by": str(source.get("covered_by") or ""),
+            "is_numeric": is_number(raw_value),
+        }
+        if rowspan > 1 or colspan > 1:
+            merged_ranges.append({"row": row, "col": col, "rowspan": rowspan, "colspan": colspan})
+
+    cells = [cell for matrix_row in matrix for cell in matrix_row]
+    result = {
+        "table_key": str(first.get("table_key") or ""),
+        "title": str(first.get("title") or ""),
+        "rows": [],
+        "source_sheet": str(first.get("source_sheet") or ""),
+        "source_range": str(first.get("source_range") or ""),
+        "row_count": row_count,
+        "col_count": col_count,
+        "matrix": matrix,
+        "cells": cells,
+        "merged_ranges": merged_ranges,
+        "roles": role_counts(cells),
+        "style_hints": {"table_width": "body", "wrap_text": True, "header_fill": "#E7E7E7", "font_size_pt": 9},
+        "cell_contract": True,
+    }
+    result["qa"] = table_matrix_qa(result)
+    return result
+
+
 def header_row() -> List[Dict[str, Any]]:
     return [
         make_cell(1, index, "header", label, label, "", "", "center")
@@ -67,6 +122,17 @@ def make_cell(row: int, col: int, role: str, display_text: Any, raw_value: Any, 
         "align": align,
         "is_numeric": is_number(raw_value),
     }
+
+
+def empty_cell(row: int, col: int) -> Dict[str, Any]:
+    return make_cell(row, col, "blank", "", None, "", "", "") | {"vertical_align": "", "covered_by": ""}
+
+
+def as_positive_int(value: Any) -> int:
+    try:
+        return max(int(value), 1)
+    except (TypeError, ValueError):
+        return 1
 
 
 def format_display_value(value: Any, unit: str = "", decimal_places: int = 1) -> str:
@@ -94,15 +160,30 @@ def table_matrix_qa(table_matrix: Dict[str, Any]) -> List[Dict[str, str]]:
     if not str(table_matrix.get("title") or "").strip():
         qa.append(issue("warning", "표 제목이 없습니다."))
     if not str(table_matrix.get("source_range") or "").strip():
-        qa.append(issue("warning", "표 source_range가 없습니다."))
+        qa.append(issue("error" if table_matrix.get("cell_contract") else "warning", "표 source_range가 없습니다."))
     value_cells = [cell for cell in table_matrix.get("cells", []) if cell.get("role") == "value"]
     if value_cells and all(not str(cell.get("display_text") or "").strip() for cell in value_cells):
         qa.append(issue("error", "값 영역이 모두 비어 있습니다."))
     for cell in table_matrix.get("cells", []):
+        display_text = str(cell.get("display_text") or "")
         if not str(cell.get("display_text") or "").strip() and cell.get("raw_value") not in (None, ""):
             qa.append(issue("error", f"{cell.get('row')}행 {cell.get('col')}열 display_text가 없습니다."))
-        if len(str(cell.get("display_text") or "")) > LONG_TEXT_LIMIT:
+        if display_text and set(display_text.strip()) == {"#"}:
+            qa.append(issue("error", f"{cell.get('row')}행 {cell.get('col')}열 표시값이 ###입니다."))
+        if cell.get("role") == "unknown":
+            qa.append(issue("warning", f"{cell.get('row')}행 {cell.get('col')}열 역할을 판정하지 못했습니다."))
+        if len(display_text) > LONG_TEXT_LIMIT:
             qa.append(issue("warning", f"{cell.get('row')}행 {cell.get('col')}열 텍스트가 길어 줄바꿈됩니다."))
+    occupied: Dict[tuple[int, int], tuple[int, int]] = {}
+    for merged in table_matrix.get("merged_ranges", []):
+        anchor = (merged["row"], merged["col"])
+        for row in range(merged["row"], merged["row"] + merged["rowspan"]):
+            for col in range(merged["col"], merged["col"] + merged["colspan"]):
+                previous = occupied.get((row, col))
+                if previous and previous != anchor:
+                    qa.append(issue("error", f"{row}행 {col}열 병합 범위가 충돌합니다."))
+                    return qa
+                occupied[(row, col)] = anchor
     return qa
 
 
