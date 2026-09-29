@@ -40,3 +40,31 @@ def test_cell_contract_reports_overlapping_merges_and_hash_display():
 
     assert any("병합" in message for message in errors)
     assert any("###" in message for message in errors)
+
+
+def test_cell_contract_preserves_wide_multilevel_banner_table():
+    rows = []
+    for row in range(1, 5):
+        for col in range(1, 37):
+            rows.append(
+                {
+                    "table_key": "T001",
+                    "title": "응답자 특성",
+                    "row": row,
+                    "col": col,
+                    "rowspan": 1,
+                    "colspan": 4 if row == 1 and col == 4 else 1,
+                    "role": "banner_horizontal" if row <= 2 else "value",
+                    "display_text": f"{row}.{col}",
+                    "source_sheet": "Sheet1",
+                    "source_range": "A39:AJ42",
+                }
+            )
+
+    table = build_table_matrix_from_cells(rows)
+
+    assert table["row_count"] == 4
+    assert table["col_count"] == 36
+    assert len(table["matrix"][0]) == 36
+    assert table["matrix"][0][35]["display_text"] == "1.36"
+    assert table["merged_ranges"] == [{"row": 1, "col": 4, "rowspan": 1, "colspan": 4}]

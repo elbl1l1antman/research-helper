@@ -32,6 +32,22 @@ def test_table_rows_for_hwp_uses_cell_contract_display_text():
     assert table_rows_for_hwp(table) == [["구분", "비율"], ["전체", "63.3%"]]
 
 
+def test_table_rows_for_hwp_does_not_truncate_wide_table():
+    table = {
+        "matrix": [
+            [{"display_text": f"배너 {col}"} for col in range(1, 37)],
+            [{"display_text": f"{col}.0"} for col in range(1, 37)],
+        ]
+    }
+
+    rows = table_rows_for_hwp(table)
+
+    assert len(rows) == 2
+    assert len(rows[0]) == 36
+    assert rows[0][-1] == "배너 36"
+    assert rows[1][-1] == "36.0"
+
+
 def test_hwp_table_control_requires_tbl_control_id():
     assert is_hwp_table_control(FakeControl("tbl"))
     assert not is_hwp_table_control(FakeControl("gso"))

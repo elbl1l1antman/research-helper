@@ -30,8 +30,12 @@ End Sub
 Public Function ReportAutomation_TableSourceRange(ByVal dataWs As Worksheet, ByVal tableRec As Variant, _
                                                    ByVal wsSettings As Worksheet) As Range
     Dim defaultRange As Range
+    ' 표 제목은 HWP writer가 별도 문단으로 입력하므로 셀 계약에는 BASE/배너/값 영역만 포함한다.
+    Dim dataStartRow As Long
+    dataStartRow = CLng(tableRec(IDX_START_ROW)) + 1
+    If dataStartRow > CLng(tableRec(IDX_END_ROW)) Then dataStartRow = CLng(tableRec(IDX_START_ROW))
     Set defaultRange = dataWs.Range( _
-        dataWs.Cells(CLng(tableRec(IDX_START_ROW)), 1), _
+        dataWs.Cells(dataStartRow, 1), _
         dataWs.Cells(CLng(tableRec(IDX_END_ROW)), CLng(tableRec(IDX_LAST_COL))))
 
     Dim overrideText As String
