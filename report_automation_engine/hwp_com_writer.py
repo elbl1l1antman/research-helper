@@ -12,6 +12,7 @@ import json
 import platform
 import shutil
 import sys
+import tempfile
 import time
 from datetime import datetime
 from pathlib import Path
@@ -433,9 +434,13 @@ def write_body(
             run_action(hwp, "BreakPara", report, "body")
             inserted = insert_clipboard_table(hwp, excel_workbook, table, report, table_style_profile)
             if not inserted:
-                if table.get("cell_contract") and table.get("merged_ranges"):
-                    raise HwpWriterError("table", "contract_fallback", f"병합 표 clipboard 삽입에 실패했습니다: {key}")
-                inserted = insert_hwp_table(hwp, table_rows_for_hwp(table), report, table_style_profile)
+                inserted = insert_hwp_table(
+                    hwp,
+                    table_rows_for_hwp(table),
+                    report,
+                    table_style_profile,
+                    table.get("merged_ranges", []),
+                )
                 report["table_results"].append(
                     table_result(table, "contract_fallback", "tbl" if inserted else "", "applied" if inserted else "failed", report.pop("clipboard_failure", ""))
                 )
@@ -520,6 +525,7 @@ def insert_hwp_table(
     rows: List[List[str]],
     report: Dict[str, Any],
     table_style_profile: Dict[str, Any] | None = None,
+    merged_ranges: List[Dict[str, Any]] | None = None,
 ) -> bool:
     """Try to create a real HWP table. Fall back to text table when COM differs."""
 
@@ -545,7 +551,11 @@ def insert_hwp_table(
                 insert_text(hwp, value, report)
                 if not (row_idx == len(rows) - 1 and col_idx == len(row) - 1):
                     run_action(hwp, "TableRightCell", report, "table")
+        apply_table_merges(hwp, merged_ranges or [], len(rows), report)
         report["tables_written"] += 1
+        for _ in range(len(rows)):
+            run_action(hwp, "TableLowerCell", report, "table")
+        run_action(hwp, "TableColEnd", report, "table")
         try:
             hwp.HAction.Run("MoveRight")
         except Exception:
@@ -554,6 +564,32 @@ def insert_hwp_table(
     except Exception as exc:
         report["warnings"].append(f"HWP 표 객체 생성 실패, 텍스트 표로 대체합니다: {exc}")
         return False
+
+
+def apply_table_merges(
+    hwp,
+    merged_ranges: List[Dict[str, Any]],
+    row_count: int,
+    report: Dict[str, Any],
+) -> None:
+    """Merge contract cells from bottom-right so earlier coordinates stay stable."""
+
+    ranges = [item for item in merged_ranges if int(item.get("rowspan") or 1) > 1 or int(item.get("colspan") or 1) > 1]
+    for merged in sorted(ranges, key=lambda item: (int(item.get("row") or 1), int(item.get("col") or 1)), reverse=True):
+        run_action(hwp, "TableColBegin", report, "table")
+        for _ in range(row_count):
+            run_action(hwp, "TableUpperCell", report, "table")
+        for _ in range(int(merged.get("row") or 1) - 1):
+            run_action(hwp, "TableLowerCell", report, "table")
+        for _ in range(int(merged.get("col") or 1) - 1):
+            run_action(hwp, "TableRightCell", report, "table")
+        run_action(hwp, "TableCellBlock", report, "table")
+        run_action(hwp, "TableCellBlockExtend", report, "table")
+        for _ in range(int(merged.get("rowspan") or 1) - 1):
+            run_action(hwp, "TableLowerCell", report, "table")
+        for _ in range(int(merged.get("colspan") or 1) - 1):
+            run_action(hwp, "TableRightCell", report, "table")
+        run_action(hwp, "TableMergeCell", report, "table")
 
 
 def load_table_style_profile(path: Path | None, report: Dict[str, Any]) -> Dict[str, Any] | None:
@@ -924,14 +960,15 @@ def insert_clipboard_table(hwp, workbook, table: Dict[str, Any], report: Dict[st
 
         previous_control = last_hwp_control(hwp)
         disable_picture_paste(hwp, report)
-        if not run_action(hwp, "Paste", report, "table"):
-            raise RuntimeError("HWP Paste action returned False")
+        paste_result = run_action(hwp, "Paste", report, "table")
+        time.sleep(0.5)
         control = last_hwp_control(hwp)
         if not is_hwp_table_control(control):
             control = find_hwp_table_control(hwp)
         if not is_hwp_table_control(control):
             run_action(hwp, "Undo", report, "table")
-            raise RuntimeError("붙여넣기 결과가 HWP 표 객체가 아닙니다.")
+            detail = "Paste returned False; " if not paste_result else ""
+            raise RuntimeError(detail + "붙여넣기 결과가 HWP 표 객체가 아닙니다.")
         if same_hwp_control(previous_control, control):
             run_action(hwp, "Undo", report, "table")
             raise RuntimeError("붙여넣기 전후 HWP 컨트롤이 같아 새 표 생성을 확인할 수 없습니다.")
@@ -1039,9 +1076,13 @@ def save_as_hwpx(hwp, output_file: Path, report: Dict[str, Any], checkpoint_path
     record_com_step(report, "save_as", "started", path=str(output_file))
     write_checkpoint(report, checkpoint_path)
     format_name = "HWPX" if output_file.suffix.lower() == ".hwpx" else "HWP"
+    temp_output = Path(tempfile.gettempdir()) / f"report_automation_{time.time_ns()}{output_file.suffix}"
     attempts = [
-        lambda: hwp.SaveAs(str(output_file), format_name, ""),
-        lambda: hwp.SaveAs(str(output_file)),
+        lambda: hwp.XHwpDocuments.Active_XHwpDocument.SaveAs(
+            str(temp_output), format_name, "lock:false;backup:false;fullsave:true"
+        ),
+        lambda: hwp.SaveAs(str(temp_output), format_name, "lock:false;backup:false;fullsave:true"),
+        lambda: hwp.SaveAs(str(temp_output)),
         lambda: hwp.Save(),
     ]
     last_error = None
@@ -1053,10 +1094,16 @@ def save_as_hwpx(hwp, output_file: Path, report: Dict[str, Any], checkpoint_path
                 record_com_step(report, "save_as", "failed", str(last_error), path=str(output_file))
                 write_checkpoint(report, checkpoint_path)
                 continue
-            if output_file.exists():
+            if temp_output.exists():
+                output_file.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(temp_output, output_file)
                 report["document_saved"] = True
                 record_com_step(report, "save_as", "ready", path=str(output_file))
                 write_checkpoint(report, checkpoint_path)
+                try:
+                    temp_output.unlink()
+                except OSError:
+                    pass
                 return
         except Exception as exc:
             last_error = exc
