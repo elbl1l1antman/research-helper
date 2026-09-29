@@ -418,6 +418,8 @@ def write_body(
     charts_by_key = group_charts(package.get("charts", []))
     sections = select_sections(package, max_sections)
     for index, section in enumerate(sections, start=1):
+        if index > 1:
+            run_action(hwp, "BreakPage", report, "body")
         key = str(section.get("table_key", ""))
         title = str(section.get("title") or key or f"문항 {index}")
         narrative = str(section.get("narrative_final") or "")
@@ -553,13 +555,9 @@ def insert_hwp_table(
                     run_action(hwp, "TableRightCell", report, "table")
         apply_table_merges(hwp, merged_ranges or [], len(rows), report)
         report["tables_written"] += 1
-        for _ in range(len(rows)):
-            run_action(hwp, "TableLowerCell", report, "table")
-        run_action(hwp, "TableColEnd", report, "table")
-        try:
-            hwp.HAction.Run("MoveRight")
-        except Exception:
-            pass
+        run_action(hwp, "MoveDocEnd", report, "table")
+        if is_hwp_table_control(getattr(hwp, "ParentCtrl", None)):
+            raise RuntimeError("표 생성 후 커서가 표 밖으로 이동하지 못했습니다.")
         return True
     except Exception as exc:
         report["warnings"].append(f"HWP 표 객체 생성 실패, 텍스트 표로 대체합니다: {exc}")
