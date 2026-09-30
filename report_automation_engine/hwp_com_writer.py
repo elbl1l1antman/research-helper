@@ -81,7 +81,7 @@ def write_hwp_document(
     hwp = None
     excel = None
     excel_workbook = None
-    temporary_directory = None
+    temporary_root = None
 
     try:
         package = load_json(package_file)
@@ -111,8 +111,7 @@ def write_hwp_document(
         if template_file.resolve() == output_file.resolve():
             raise HwpWriterError("validate", "output", "원본 템플릿과 출력 경로가 같습니다. 원본 보호를 위해 중단합니다.")
 
-        temporary_directory = tempfile.TemporaryDirectory(prefix="research-helper-hwp-")
-        temporary_root = Path(temporary_directory.name)
+        temporary_root = Path(tempfile.mkdtemp(prefix="research-helper-hwp-"))
         working_template = temporary_root / "styled_template.hwpx"
         style_indexes = None
         if template_file.suffix.lower() == ".hwpx":
@@ -176,16 +175,14 @@ def write_hwp_document(
         raise
     finally:
         close_excel_clipboard_source(excel, excel_workbook, writer_report)
+        finalize_hwp_resources(
+            temporary_root,
+            hwp,
+            writer_report,
+            keep_open_on_error,
+            keep_open_after_save,
+        )
         write_json(report_file, writer_report)
-        if hwp is not None and should_close_hwp(writer_report, keep_open_on_error, keep_open_after_save):
-            close_hwp(hwp, writer_report)
-            write_json(report_file, writer_report)
-        elif hwp is not None:
-            writer_report["com"]["closed"] = False
-            writer_report["warnings"].append("HWP COM document was intentionally left open.")
-            write_json(report_file, writer_report)
-        if temporary_directory is not None:
-            temporary_directory.cleanup()
 
 
 def check_environment(
@@ -991,6 +988,31 @@ def should_close_hwp(report: Dict[str, Any], keep_open_on_error: bool, keep_open
     return True
 
 
+def finalize_hwp_resources(
+    temporary_root: Path | None,
+    hwp,
+    report: Dict[str, Any],
+    keep_open_on_error: bool,
+    keep_open_after_save: bool,
+) -> None:
+    if hwp is not None and should_close_hwp(report, keep_open_on_error, keep_open_after_save):
+        close_hwp(hwp, report)
+    elif hwp is not None:
+        report["com"]["closed"] = False
+        report["warnings"].append("HWP COM document was intentionally left open.")
+
+    retained = hwp is not None and not bool(report.get("com", {}).get("closed"))
+    report["temporary_files_retained"] = retained
+    report["temporary_root_path"] = str(temporary_root) if temporary_root else ""
+    if temporary_root is None or retained:
+        return
+    try:
+        shutil.rmtree(temporary_root)
+    except Exception as exc:
+        report["temporary_files_retained"] = True
+        report["warnings"].append(f"HWP 임시 작업 폴더를 삭제하지 못했습니다: {exc}")
+
+
 def insert_text_table(hwp, rows: List[List[str]], report: Dict[str, Any]) -> None:
     lines = ["\t".join(row) for row in rows]
     insert_text(hwp, "\n".join(lines), report)
@@ -1305,9 +1327,13 @@ def apply_table_matrix_styles(
     for _ in range(len(rows)):
         run_action(hwp, "TableUpperCell", report, "style")
     for row_index, row in enumerate(rows):
-        for col_index, _value in enumerate(row):
+        for col_index, value in enumerate(row):
             style_name = style_name_for_cell_role(table_cell_role(table, row_index, col_index))
+            run_action(hwp, "TableCellBlock", report, "style")
+            if not run_action(hwp, "Delete", report, "style"):
+                raise HwpWriterError("style", "Delete", "붙여넣은 표 셀 내용을 지우지 못했습니다.")
             apply_named_style(hwp, require_style_index(style_indexes, style_name), report, style_name)
+            insert_text(hwp, value, report)
             apply_cell_appearance(
                 hwp,
                 style_config,
@@ -1472,6 +1498,8 @@ def new_report(package_file: Path, preflight_file: Path, template_file: Path, ou
         "style_index_map": {},
         "style_application_counts": {},
         "working_template_path": "",
+        "temporary_files_retained": False,
+        "temporary_root_path": "",
         "visible": visible,
         "template_copied": False,
         "document_opened": False,

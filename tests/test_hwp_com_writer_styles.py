@@ -10,6 +10,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from report_automation_engine.hwp_com_writer import (
     HwpWriterError,
     apply_named_style,
+    finalize_hwp_resources,
+    insert_clipboard_table,
     insert_hwp_table,
     insert_narrative_blocks,
     write_hwp_document,
@@ -102,6 +104,31 @@ class FakeHwp:
         return red | (green << 8) | (blue << 16)
 
 
+class FakeTableControl:
+    CtrlID = "tbl"
+    Properties = SimpleNamespace(Rows=1, Cols=3)
+
+    @staticmethod
+    def GetCtrlInstID():
+        return 1
+
+
+class FakeClipboardRange:
+    def Copy(self):
+        return None
+
+
+class FakeWorkbook:
+    class Sheet:
+        @staticmethod
+        def Range(_address):
+            return FakeClipboardRange()
+
+    @staticmethod
+    def Worksheets(_name):
+        return FakeWorkbook.Sheet()
+
+
 class HwpComWriterStyleTests(unittest.TestCase):
     def test_apply_named_style_uses_style_action_and_counts(self):
         hwp = FakeHwp()
@@ -168,6 +195,92 @@ class HwpComWriterStyleTests(unittest.TestCase):
         self.assertNotEqual(fills[0][1], fills[1][1])
         self.assertIn(("run", "TableCellAlignCenterCenter"), hwp.events)
         self.assertIn(("run", "TableCellAlignLeftCenter"), hwp.events)
+
+    def test_clipboard_table_replaces_each_cell_after_applying_style(self):
+        hwp = FakeHwp()
+        hwp.LastCtrl = None
+        hwp.EngineProperties = SimpleNamespace(SetItem=lambda *_args: None)
+        original_run = hwp.HAction.Run
+
+        def run(action):
+            result = original_run(action)
+            if action == "Paste":
+                hwp.LastCtrl = FakeTableControl()
+            return result
+
+        hwp.HAction.Run = run
+        report = {
+            "warnings": [],
+            "style_application_counts": {},
+            "table_results": [],
+            "tables_written": 0,
+        }
+        table = {
+            "table_key": "T001",
+            "cell_contract": True,
+            "source_sheet": "Sheet1",
+            "source_range": "A1:C1",
+            "row_count": 1,
+            "col_count": 3,
+            "matrix": [[
+                {"display_text": "배너", "role": "banner_horizontal"},
+                {"display_text": "42.0", "role": "value"},
+                {"display_text": "항목", "role": "stub"},
+            ]],
+        }
+
+        with patch("report_automation_engine.hwp_com_writer.time.sleep"):
+            self.assertTrue(
+                insert_clipboard_table(
+                    hwp,
+                    FakeWorkbook(),
+                    table,
+                    report,
+                    None,
+                    STYLE_INDEXES,
+                    DEFAULT_HWP_STYLE_CONFIG,
+                )
+            )
+
+        self.assertEqual(
+            [event for event in hwp.events if event[0] in {"style", "text"}],
+            [
+                ("style", 13), ("text", "배너"),
+                ("style", 14), ("text", "42.0"),
+                ("style", 12), ("text", "항목"),
+            ],
+        )
+        self.assertEqual(sum(event == ("run", "Delete") for event in hwp.events), 3)
+
+    def test_temporary_files_follow_hwp_lifecycle(self):
+        cases = (
+            ("ready", False, False, False),
+            ("ready", False, True, True),
+            ("failed", True, False, True),
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            parent = Path(directory)
+            for index, (status, keep_on_error, keep_after_save, retained) in enumerate(cases):
+                root = parent / str(index)
+                root.mkdir()
+                (root / "styled_template.hwpx").write_bytes(b"template")
+                hwp = SimpleNamespace(Clear=lambda *_args: None, Quit=lambda: None)
+                report = {"status": status, "com": {"closed": False}, "warnings": []}
+
+                finalize_hwp_resources(root, hwp, report, keep_on_error, keep_after_save)
+
+                self.assertEqual(root.exists(), retained)
+                self.assertEqual(report["temporary_files_retained"], retained)
+                self.assertEqual(report["com"]["closed"], not retained)
+
+            failed_cleanup = parent / "cleanup-failure"
+            failed_cleanup.mkdir()
+            report = {"status": "ready", "com": {"closed": False}, "warnings": []}
+            hwp = SimpleNamespace(Clear=lambda *_args: None, Quit=lambda: None)
+            with patch("report_automation_engine.hwp_com_writer.shutil.rmtree", side_effect=OSError("locked")):
+                finalize_hwp_resources(failed_cleanup, hwp, report, False, False)
+            self.assertTrue(report["temporary_files_retained"])
+            self.assertIn("locked", report["warnings"][-1])
 
     def test_style_registration_failure_does_not_create_output(self):
         with tempfile.TemporaryDirectory() as directory:
