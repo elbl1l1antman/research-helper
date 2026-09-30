@@ -114,26 +114,31 @@ class HwpStyleConfigTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, field.replace(".", r"\.")):
                     validate_hwp_style_config(config)
 
-        boundary_config = copy.deepcopy(DEFAULT_HWP_STYLE_CONFIG)
-        boundary_config["paragraph_styles"]["보고서 본문1"]["left_indent_mm"] = -30
-        boundary_config["paragraph_styles"]["보고서 본문1"]["first_line_indent_mm"] = 100
-        boundary_config["table_border"]["inner_width_mm"] = 0.1
-        boundary_config["table_border"]["outer_width_mm"] = 5.0
-        validate_hwp_style_config(boundary_config)
-
-        range_cases = (
-            ("left_indent_mm", -30.1, "paragraph_styles.보고서 본문1.left_indent_mm"),
-            ("first_line_indent_mm", 100.1, "paragraph_styles.보고서 본문1.first_line_indent_mm"),
-            ("inner_width_mm", 0.09, "table_border.inner_width_mm"),
-            ("outer_width_mm", 5.1, "table_border.outer_width_mm"),
+        range_fields = (
+            (("paragraph_styles", "보고서 본문1"), "left_indent_mm", -30, 100),
+            (("paragraph_styles", "보고서 본문1"), "first_line_indent_mm", -30, 100),
+            (("table_border",), "inner_width_mm", 0.1, 5.0),
+            (("table_border",), "outer_width_mm", 0.1, 5.0),
         )
-        for field, value, error_field in range_cases:
-            with self.subTest(field=field, value=value):
-                config = copy.deepcopy(DEFAULT_HWP_STYLE_CONFIG)
-                target = config["table_border"] if "width" in field else config["paragraph_styles"]["보고서 본문1"]
-                target[field] = value
-                with self.assertRaisesRegex(ValueError, error_field.replace(".", r"\.")):
+        for path, field, minimum, maximum in range_fields:
+            for value in (minimum, maximum):
+                with self.subTest(field=field, accepted=value):
+                    config = copy.deepcopy(DEFAULT_HWP_STYLE_CONFIG)
+                    target = config
+                    for key in path:
+                        target = target[key]
+                    target[field] = value
                     validate_hwp_style_config(config)
+            for value in (minimum - 0.01, maximum + 0.01):
+                error_field = ".".join((*path, field))
+                with self.subTest(field=field, rejected=value):
+                    config = copy.deepcopy(DEFAULT_HWP_STYLE_CONFIG)
+                    target = config
+                    for key in path:
+                        target = target[key]
+                    target[field] = value
+                    with self.assertRaisesRegex(ValueError, error_field.replace(".", r"\.")):
+                        validate_hwp_style_config(config)
 
     def test_loads_default_or_json_file(self) -> None:
         loaded_default = load_hwp_style_config(None)
