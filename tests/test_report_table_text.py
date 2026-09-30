@@ -43,6 +43,10 @@ class TableDisplayTextTests(unittest.TestCase):
         self.assertEqual(table["matrix"][0][0]["removed_symbols"], "●◆")
         self.assertTrue(any("D12" in item["message"] for item in table["qa"]))
 
+    def test_compound_emoji_sequences_are_removed_completely(self):
+        self.assertEqual(sanitize_table_display_text("❤️"), "")
+        self.assertEqual(sanitize_table_display_text("👍🏽"), "")
+
 
 if __name__ == "__main__":
     unittest.main()

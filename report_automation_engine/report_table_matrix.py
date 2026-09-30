@@ -24,11 +24,18 @@ def _clean_table_display_text(value: Any) -> tuple[str, str]:
     removed: List[str] = []
     for character in decoded:
         category = unicodedata.category(character)
+        codepoint = ord(character)
         if category.startswith("C"):
             if character.isspace():
                 kept.append(" ")
             removed.append(character)
-        elif character in DECORATIVE_SYMBOLS or (category == "So" and character not in ALLOWED_UNIT_SYMBOLS):
+        elif (
+            character in DECORATIVE_SYMBOLS
+            or (category == "So" and character not in ALLOWED_UNIT_SYMBOLS)
+            or 0xFE00 <= codepoint <= 0xFE0F
+            or 0xE0100 <= codepoint <= 0xE01EF
+            or 0x1F3FB <= codepoint <= 0x1F3FF
+        ):
             removed.append(character)
         else:
             kept.append(character)
