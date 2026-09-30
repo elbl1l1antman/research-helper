@@ -26,6 +26,8 @@ GUI에서 집계표 Excel 파일과 자동화 추가기능(`.xlam`)을 선택하
 - 실행 후 `report_package.json`과 `preflight_report.json`을 생성해 HWPX/PPTX 문서 생성 전 준비 상태를 `ready`, `ready_with_warnings`, `blocked`로 표시합니다.
 - 실행 완료 후 결과 탭에서 산출 엑셀 열기, 초안 TXT 열기, HWPX 초본 열기, HWPX writer report 열기, 초안 미리보기 복사, 문장별 수정, 검토본 저장을 할 수 있습니다.
 - HWPX 보고서 출력은 실행 전 아래한글 COM 환경을 먼저 점검하고, 실패 시 writer report에 실패 단계와 오류를 남깁니다.
+- HWPX 옵션의 `서식`에서 기본 서식 또는 최대 3개의 사용자 서식을 선택할 수 있습니다. `서식 설정`에서는 `보고서 본문1`, `보고서 본문2`, `표보기`, `표배너`, `표숫자`의 글꼴·크기·정렬·줄간격·들여쓰기와 표 배경·테두리를 편집합니다.
+- 사용자 서식은 `%LOCALAPPDATA%\ResearchHelper\hwp_style_presets.json`에 저장되며 기본 서식은 수정하거나 삭제할 수 없습니다. 실행 시 선택한 서식은 산출 폴더의 `hwp_style_config.json`으로 기록되어 HWPX writer에 전달됩니다.
 - QA 경고 탭에서는 출처 없음, 제목 없음, 문장 짧음, 수치 없음, 종결 표현 확인 항목을 필터링해 검토할 수 있습니다.
 - 실행 설정은 산출 파일 옆에 `*_launcher_config.txt`로 기록됩니다.
 - `REPORT_AUTOMATION_ADDIN` 환경변수를 지정하면 기본 추가기능 경로로 사용합니다.
@@ -89,6 +91,14 @@ GUI 없이 자동화 호출만 확인할 때 사용할 수 있습니다.
 - `--hwp-template <path>`: HWPX 보고서 템플릿
 - `--hwp-visible`: 아래한글 창 표시 상태로 HWPX 생성
 - `--hwp-keep-open-on-error`: HWPX 생성 실패 시 열린 문서 유지
+- `--hwp-style-config <path>`: 검증할 HWP 서식 JSON 지정. 실행 시 산출 폴더의 `hwp_style_config.json`으로 정규화해 사용
+- `--hwp-style-preset <name>`: 실행 기록에 남길 서식 이름(설정 JSON의 이름이 우선)
+
+런처 preset 저장소만 점검하려면 다음 명령을 사용합니다.
+
+```powershell
+report_automation_launcher\bin\ReportAutomationLauncher.exe --self-check-hwp-style-presets
+```
 
 배너 목록 탐지만 확인할 때는 다음 옵션을 사용할 수 있습니다.
 

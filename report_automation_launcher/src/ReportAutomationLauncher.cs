@@ -31,6 +31,13 @@ namespace ReportAutomationLauncher
         {
             try
             {
+                if (HasFlag(args, "self-check-hwp-style-presets"))
+                {
+                    HwpStylePresetStore.RunSelfCheck();
+                    Console.WriteLine("HWP style preset self-check passed.");
+                    return 0;
+                }
+
                 if (HasFlag(args, "list-banners"))
                 {
                     string workbookPath = GetArgValue(args, "workbook");
@@ -102,6 +109,376 @@ namespace ReportAutomationLauncher
                 }
             }
             return "";
+        }
+    }
+
+    internal sealed class HwpStylePresetStore
+    {
+        internal const string BuiltInName = "기본 보고서";
+        internal static readonly string[] StyleNames = { "보고서 본문1", "보고서 본문2", "표보기", "표배너", "표숫자" };
+        internal static readonly string[] TableStyleNames = { "표보기", "표배너", "표숫자" };
+        private readonly string path;
+        private readonly JavaScriptSerializer serializer = new JavaScriptSerializer();
+
+        internal HwpStylePresetStore(string storagePath = null)
+        {
+            path = storagePath ?? Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                "ResearchHelper",
+                "hwp_style_presets.json");
+            serializer.MaxJsonLength = int.MaxValue;
+        }
+
+        internal string StoragePath { get { return path; } }
+
+        internal List<Dictionary<string, object>> LoadAll()
+        {
+            var result = new List<Dictionary<string, object>> { DefaultConfig() };
+            foreach (Dictionary<string, object> preset in LoadUsers())
+            {
+                result.Add(Clone(preset));
+            }
+            return result;
+        }
+
+        internal Dictionary<string, object> Get(string name)
+        {
+            foreach (Dictionary<string, object> preset in LoadAll())
+            {
+                if (string.Equals(Convert.ToString(preset["preset_name"]), name, StringComparison.OrdinalIgnoreCase))
+                {
+                    return Clone(preset);
+                }
+            }
+            return DefaultConfig();
+        }
+
+        internal void Save(Dictionary<string, object> config, bool overwrite)
+        {
+            Dictionary<string, object> normalized = Normalize(config);
+            string name = Convert.ToString(normalized["preset_name"]).Trim();
+            if (string.Equals(name, BuiltInName, StringComparison.OrdinalIgnoreCase))
+            {
+                throw new InvalidOperationException("기본 보고서 서식은 수정할 수 없습니다.");
+            }
+
+            List<Dictionary<string, object>> users = LoadUsers();
+            int existing = users.FindIndex(item => string.Equals(Convert.ToString(item["preset_name"]), name, StringComparison.OrdinalIgnoreCase));
+            if (existing >= 0 && !overwrite)
+            {
+                throw new InvalidOperationException("같은 이름의 서식이 있습니다. 덮어쓰기를 명시적으로 선택하세요.");
+            }
+            if (existing < 0 && users.Count >= 3)
+            {
+                throw new InvalidOperationException("사용자 서식은 최대 3개까지 저장할 수 있습니다.");
+            }
+            if (existing >= 0)
+            {
+                users[existing] = normalized;
+            }
+            else
+            {
+                users.Add(normalized);
+            }
+            WriteUsers(users);
+        }
+
+        internal void Delete(string name)
+        {
+            if (string.Equals(name, BuiltInName, StringComparison.OrdinalIgnoreCase))
+            {
+                throw new InvalidOperationException("기본 보고서 서식은 삭제할 수 없습니다.");
+            }
+            List<Dictionary<string, object>> users = LoadUsers();
+            users.RemoveAll(item => string.Equals(Convert.ToString(item["preset_name"]), name, StringComparison.OrdinalIgnoreCase));
+            WriteUsers(users);
+        }
+
+        internal static Dictionary<string, object> Normalize(Dictionary<string, object> config)
+        {
+            if (config == null)
+            {
+                throw new InvalidOperationException("서식 설정이 비어 있습니다.");
+            }
+            var copy = Clone(config);
+            if (Convert.ToString(Value(copy, "schema_version")) != "1.0")
+            {
+                throw new InvalidOperationException("schema_version은 1.0이어야 합니다.");
+            }
+            string presetName = Convert.ToString(Value(copy, "preset_name")).Trim();
+            if (presetName.Length == 0)
+            {
+                throw new InvalidOperationException("서식 이름을 입력하세요.");
+            }
+            copy["preset_name"] = presetName;
+
+            Dictionary<string, object> paragraph = Map(Value(copy, "paragraph_styles"), "paragraph_styles");
+            RequireExactKeys(paragraph, StyleNames, "paragraph_styles");
+            foreach (string name in StyleNames)
+            {
+                Dictionary<string, object> style = Map(paragraph[name], name);
+                RequireText(style, "font_family", name);
+                style["font_size_pt"] = Number(style, "font_size_pt", 6, 30, name);
+                if (!(Value(style, "bold") is bool)) throw new InvalidOperationException(name + ".bold 값이 올바르지 않습니다.");
+                if (!(Value(style, "bullet") is string)) throw new InvalidOperationException(name + ".bullet 값이 올바르지 않습니다.");
+                style["line_spacing_percent"] = Number(style, "line_spacing_percent", 80, 300, name);
+                style["left_indent_mm"] = Number(style, "left_indent_mm", -30, 100, name);
+                style["first_line_indent_mm"] = Number(style, "first_line_indent_mm", -30, 100, name);
+                string alignment = Convert.ToString(Value(style, "alignment"));
+                if (!(new[] { "left", "center", "right", "justify" }).Contains(alignment))
+                    throw new InvalidOperationException(name + ".alignment 값이 올바르지 않습니다.");
+            }
+
+            Dictionary<string, object> cells = Map(Value(copy, "table_cell_styles"), "table_cell_styles");
+            RequireExactKeys(cells, TableStyleNames, "table_cell_styles");
+            foreach (string name in TableStyleNames)
+            {
+                Dictionary<string, object> style = Map(cells[name], name);
+                style["fill_color"] = ColorValue(style, "fill_color", name);
+                string vertical = Convert.ToString(Value(style, "vertical_alignment"));
+                if (!(new[] { "top", "center", "bottom" }).Contains(vertical))
+                    throw new InvalidOperationException(name + ".vertical_alignment 값이 올바르지 않습니다.");
+            }
+
+            Dictionary<string, object> border = Map(Value(copy, "table_border"), "table_border");
+            border["inner_width_mm"] = Number(border, "inner_width_mm", 0.1, 5.0, "table_border");
+            border["outer_width_mm"] = Number(border, "outer_width_mm", 0.1, 5.0, "table_border");
+            border["color"] = ColorValue(border, "color", "table_border");
+            return copy;
+        }
+
+        internal static Dictionary<string, object> DefaultConfig()
+        {
+            var styles = new Dictionary<string, object>();
+            styles["보고서 본문1"] = Style("맑은 고딕", 10, false, "", 160, 0, 0, "left");
+            styles["보고서 본문2"] = Style("맑은 고딕", 10, false, "-", 160, 5, -5, "left");
+            styles["표보기"] = Style("맑은 고딕", 8.5, false, "", 130, 0, 0, "left");
+            styles["표배너"] = Style("맑은 고딕", 8.5, true, "", 130, 0, 0, "center");
+            styles["표숫자"] = Style("맑은 고딕", 8.5, false, "", 130, 0, 0, "center");
+            return new Dictionary<string, object>
+            {
+                { "schema_version", "1.0" },
+                { "preset_name", BuiltInName },
+                { "paragraph_styles", styles },
+                { "table_cell_styles", new Dictionary<string, object>
+                    {
+                        { "표보기", Cell("FFFFFF") }, { "표배너", Cell("E7E7E7") }, { "표숫자", Cell("FFFFFF") }
+                    }
+                },
+                { "table_border", new Dictionary<string, object>
+                    {
+                        { "inner_width_mm", 0.12 }, { "outer_width_mm", 0.4 }, { "color", "000000" }
+                    }
+                }
+            };
+        }
+
+        internal static void WriteConfig(string outputPath, Dictionary<string, object> config)
+        {
+            var serializer = new JavaScriptSerializer { MaxJsonLength = int.MaxValue };
+            AtomicWrite(outputPath, serializer.Serialize(Normalize(config)));
+        }
+
+        internal static void RunSelfCheck()
+        {
+            string directory = Path.Combine(Path.GetTempPath(), "ResearchHelperPresetCheck_" + Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(directory);
+            try
+            {
+                string file = Path.Combine(directory, "presets.json");
+                var store = new HwpStylePresetStore(file);
+                Assert(store.LoadAll().Count == 1, "default loading");
+                for (int i = 1; i <= 3; i++)
+                {
+                    Dictionary<string, object> preset = DefaultConfig();
+                    preset["preset_name"] = "사용자 " + i;
+                    store.Save(preset, false);
+                }
+                Assert(store.LoadAll().Count == 4, "three user presets");
+                Dictionary<string, object> fourth = DefaultConfig();
+                fourth["preset_name"] = "사용자 4";
+                AssertThrows(delegate { store.Save(fourth, false); }, "fourth-preset rejection");
+                Dictionary<string, object> duplicate = DefaultConfig();
+                duplicate["preset_name"] = "사용자 1";
+                Map(Map(duplicate["paragraph_styles"], "paragraph_styles")["보고서 본문1"], "보고서 본문1")["font_size_pt"] = 11.0;
+                AssertThrows(delegate { store.Save(duplicate, false); }, "duplicate rejection");
+                store.Save(duplicate, true);
+                Assert(Convert.ToDouble(Map(Map(store.Get("사용자 1")["paragraph_styles"], "paragraph_styles")["보고서 본문1"], "보고서 본문1")["font_size_pt"]) == 11.0, "duplicate overwrite");
+                store.Delete("사용자 3");
+                Assert(store.LoadAll().Count == 3, "deletion");
+
+                var checkSerializer = new JavaScriptSerializer();
+                Dictionary<string, object> partial = checkSerializer.DeserializeObject(File.ReadAllText(file, System.Text.Encoding.UTF8)) as Dictionary<string, object>;
+                object[] stored = (object[])partial["presets"];
+                Map(Map(Map(stored[1], "preset")["paragraph_styles"], "paragraph_styles")["보고서 본문1"], "보고서 본문1").Remove("font_family");
+                File.WriteAllText(file, checkSerializer.Serialize(partial), System.Text.Encoding.UTF8);
+                Assert(store.LoadAll().Any(item => Convert.ToString(item["preset_name"]) == "사용자 1"), "valid preset recovery");
+                Assert(Directory.GetFiles(directory, "presets.json.corrupt.*.bak").Length == 1, "partial-corrupt backup");
+
+                File.WriteAllText(file, "{broken", System.Text.Encoding.UTF8);
+                Assert(store.LoadAll().Count == 1, "corrupt recovery");
+                Assert(Directory.GetFiles(directory, "presets.json.corrupt.*.bak").Length == 2, "corrupt backup");
+                AssertThrows(delegate { store.Delete(BuiltInName); }, "immutable default");
+            }
+            finally
+            {
+                try { Directory.Delete(directory, true); } catch { }
+            }
+        }
+
+        private List<Dictionary<string, object>> LoadUsers()
+        {
+            var valid = new List<Dictionary<string, object>>();
+            if (!File.Exists(path)) return valid;
+            bool damaged = false;
+            try
+            {
+                Dictionary<string, object> root = serializer.DeserializeObject(File.ReadAllText(path, System.Text.Encoding.UTF8)) as Dictionary<string, object>;
+                object presetsValue;
+                object[] presets = root != null && root.TryGetValue("presets", out presetsValue) ? presetsValue as object[] : null;
+                if (presets == null) throw new InvalidDataException("presets 배열이 없습니다.");
+                var names = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                foreach (object value in presets)
+                {
+                    try
+                    {
+                        Dictionary<string, object> preset = Normalize(Map(value, "preset"));
+                        string name = Convert.ToString(preset["preset_name"]);
+                        if (string.Equals(name, BuiltInName, StringComparison.OrdinalIgnoreCase) || !names.Add(name) || valid.Count >= 3)
+                        {
+                            damaged = true;
+                            continue;
+                        }
+                        valid.Add(preset);
+                    }
+                    catch
+                    {
+                        damaged = true;
+                    }
+                }
+            }
+            catch
+            {
+                damaged = true;
+            }
+            if (damaged)
+            {
+                BackupCorrupt();
+                WriteUsers(valid);
+            }
+            return valid;
+        }
+
+        private void WriteUsers(List<Dictionary<string, object>> users)
+        {
+            var root = new Dictionary<string, object> { { "schema_version", "1.0" }, { "presets", users.ToArray() } };
+            AtomicWrite(path, serializer.Serialize(root));
+        }
+
+        private void BackupCorrupt()
+        {
+            if (!File.Exists(path)) return;
+            string backup = path + ".corrupt." + DateTime.Now.ToString("yyyyMMddHHmmssfff") + "." + Guid.NewGuid().ToString("N") + ".bak";
+            File.Copy(path, backup, false);
+        }
+
+        private static void AtomicWrite(string outputPath, string json)
+        {
+            string directory = Path.GetDirectoryName(outputPath);
+            if (!string.IsNullOrWhiteSpace(directory)) Directory.CreateDirectory(directory);
+            string temp = outputPath + ".tmp." + Guid.NewGuid().ToString("N");
+            File.WriteAllText(temp, json, new System.Text.UTF8Encoding(false));
+            try
+            {
+                if (File.Exists(outputPath))
+                {
+                    string backup = outputPath + ".replace.bak";
+                    File.Replace(temp, outputPath, backup, true);
+                    if (File.Exists(backup)) File.Delete(backup);
+                }
+                else
+                {
+                    File.Move(temp, outputPath);
+                }
+            }
+            finally
+            {
+                if (File.Exists(temp)) File.Delete(temp);
+            }
+        }
+
+        private static Dictionary<string, object> Style(string font, double size, bool bold, string bullet, int spacing, double left, double first, string alignment)
+        {
+            return new Dictionary<string, object> { { "font_family", font }, { "font_size_pt", size }, { "bold", bold }, { "bullet", bullet }, { "line_spacing_percent", spacing }, { "left_indent_mm", left }, { "first_line_indent_mm", first }, { "alignment", alignment } };
+        }
+
+        private static Dictionary<string, object> Cell(string color)
+        {
+            return new Dictionary<string, object> { { "fill_color", color }, { "vertical_alignment", "center" } };
+        }
+
+        private static object Value(Dictionary<string, object> map, string key)
+        {
+            object value;
+            if (!map.TryGetValue(key, out value)) throw new InvalidOperationException(key + " 값이 없습니다.");
+            return value;
+        }
+
+        private static Dictionary<string, object> Map(object value, string field)
+        {
+            Dictionary<string, object> map = value as Dictionary<string, object>;
+            if (map == null) throw new InvalidOperationException(field + " 값이 올바르지 않습니다.");
+            return map;
+        }
+
+        private static void RequireExactKeys(Dictionary<string, object> map, string[] expected, string field)
+        {
+            if (map.Count != expected.Length || expected.Any(name => !map.ContainsKey(name)))
+                throw new InvalidOperationException(field + "에는 고정된 서식 이름만 사용할 수 있습니다.");
+        }
+
+        private static void RequireText(Dictionary<string, object> map, string key, string field)
+        {
+            if (string.IsNullOrWhiteSpace(Convert.ToString(Value(map, key))))
+                throw new InvalidOperationException(field + "." + key + " 값을 입력하세요.");
+        }
+
+        private static double Number(Dictionary<string, object> map, string key, double minimum, double maximum, string field)
+        {
+            object value = Value(map, key);
+            if (value is bool) throw new InvalidOperationException(field + "." + key + " 값이 올바르지 않습니다.");
+            double number;
+            try { number = Convert.ToDouble(value, System.Globalization.CultureInfo.InvariantCulture); }
+            catch { throw new InvalidOperationException(field + "." + key + " 값이 올바르지 않습니다."); }
+            if (number < minimum || number > maximum)
+                throw new InvalidOperationException(field + "." + key + " 범위는 " + minimum + "~" + maximum + "입니다.");
+            return number;
+        }
+
+        private static string ColorValue(Dictionary<string, object> map, string key, string field)
+        {
+            string color = Convert.ToString(Value(map, key)).Trim().ToUpperInvariant();
+            if (color.Length != 6 || color.Any(ch => !Uri.IsHexDigit(ch)))
+                throw new InvalidOperationException(field + "." + key + " 값은 6자리 RGB 색상이어야 합니다.");
+            return color;
+        }
+
+        private static Dictionary<string, object> Clone(Dictionary<string, object> value)
+        {
+            var serializer = new JavaScriptSerializer { MaxJsonLength = int.MaxValue };
+            return serializer.DeserializeObject(serializer.Serialize(value)) as Dictionary<string, object>;
+        }
+
+        private static void Assert(bool condition, string message)
+        {
+            if (!condition) throw new InvalidOperationException("Self-check failed: " + message);
+        }
+
+        private static void AssertThrows(Action action, string message)
+        {
+            try { action(); }
+            catch { return; }
+            throw new InvalidOperationException("Self-check failed: " + message);
         }
     }
 
@@ -394,8 +771,305 @@ namespace ReportAutomationLauncher
         }
     }
 
+    internal sealed class HwpStylePresetDialog : Form
+    {
+        private readonly HwpStylePresetStore store;
+        private readonly ComboBox presetCombo = new ComboBox();
+        private readonly TextBox nameText = new TextBox();
+        private readonly DataGridView paragraphGrid = new DataGridView();
+        private readonly DataGridView tableGrid = new DataGridView();
+        private readonly NumericUpDown innerBorder = new NumericUpDown();
+        private readonly NumericUpDown outerBorder = new NumericUpDown();
+        private readonly TextBox borderColor = new TextBox();
+
+        internal string SelectedPresetName { get; private set; }
+
+        internal HwpStylePresetDialog(HwpStylePresetStore store, string selectedName)
+        {
+            this.store = store;
+            SelectedPresetName = selectedName;
+            Text = "HWP 보고서 서식 설정";
+            StartPosition = FormStartPosition.CenterParent;
+            MinimumSize = new Size(980, 620);
+            Size = new Size(1080, 700);
+            BuildUi();
+            ReloadPresets(selectedName);
+            LauncherUi.ApplyToForm(this);
+            LauncherUi.ApplyTree(this);
+        }
+
+        private void BuildUi()
+        {
+            var root = new TableLayoutPanel { Dock = DockStyle.Fill, Padding = new Padding(16), RowCount = 6, ColumnCount = 1 };
+            root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+            root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+            root.RowStyles.Add(new RowStyle(SizeType.Percent, 62));
+            root.RowStyles.Add(new RowStyle(SizeType.Percent, 25));
+            root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+            root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+            Controls.Add(root);
+
+            var top = new FlowLayoutPanel { Dock = DockStyle.Fill, AutoSize = true };
+            top.Controls.Add(new Label { Text = "저장된 서식", AutoSize = true, Margin = new Padding(0, 8, 8, 0) });
+            presetCombo.DropDownStyle = ComboBoxStyle.DropDownList;
+            presetCombo.Width = 180;
+            presetCombo.SelectedIndexChanged += delegate
+            {
+                if (presetCombo.SelectedItem != null) LoadPreset(presetCombo.SelectedItem.ToString());
+            };
+            top.Controls.Add(presetCombo);
+            top.Controls.Add(new Label { Text = "서식 이름", AutoSize = true, Margin = new Padding(18, 8, 8, 0) });
+            nameText.Width = 220;
+            top.Controls.Add(nameText);
+            root.Controls.Add(top, 0, 0);
+
+            var help = new Label
+            {
+                Text = "고정된 5개 스타일의 글꼴·문단 설정과 표 셀 배경·테두리를 지정합니다. 사용자 서식은 최대 3개입니다.",
+                AutoSize = true,
+                ForeColor = LauncherUi.ColorMutedText,
+                Margin = new Padding(0, 6, 0, 10)
+            };
+            root.Controls.Add(help, 0, 1);
+
+            ConfigureParagraphGrid();
+            root.Controls.Add(paragraphGrid, 0, 2);
+            ConfigureTableGrid();
+            root.Controls.Add(tableGrid, 0, 3);
+
+            var borderPanel = new FlowLayoutPanel { Dock = DockStyle.Fill, AutoSize = true };
+            borderPanel.Controls.Add(new Label { Text = "내부선(mm)", AutoSize = true, Margin = new Padding(0, 8, 6, 0) });
+            ConfigureNumber(innerBorder, 0.1M, 5M, 0.01M);
+            borderPanel.Controls.Add(innerBorder);
+            borderPanel.Controls.Add(new Label { Text = "외곽선(mm)", AutoSize = true, Margin = new Padding(16, 8, 6, 0) });
+            ConfigureNumber(outerBorder, 0.1M, 5M, 0.01M);
+            borderPanel.Controls.Add(outerBorder);
+            borderPanel.Controls.Add(new Label { Text = "선 색상(RGB)", AutoSize = true, Margin = new Padding(16, 8, 6, 0) });
+            borderColor.Width = 90;
+            borderPanel.Controls.Add(borderColor);
+            root.Controls.Add(borderPanel, 0, 4);
+
+            var buttons = new FlowLayoutPanel { Dock = DockStyle.Fill, AutoSize = true, FlowDirection = FlowDirection.RightToLeft };
+            Button close = MakeButton("선택 후 닫기", delegate
+            {
+                SelectedPresetName = presetCombo.SelectedItem == null ? HwpStylePresetStore.BuiltInName : presetCombo.SelectedItem.ToString();
+                DialogResult = DialogResult.OK;
+            });
+            Button cancel = MakeButton("취소", delegate { DialogResult = DialogResult.Cancel; });
+            Button save = MakeButton("새로 저장", SaveNew);
+            Button overwrite = MakeButton("덮어쓰기", Overwrite);
+            Button delete = MakeButton("삭제", DeletePreset);
+            Button reset = MakeButton("기본값으로 초기화", ResetEditor);
+            buttons.Controls.Add(close);
+            buttons.Controls.Add(cancel);
+            buttons.Controls.Add(save);
+            buttons.Controls.Add(overwrite);
+            buttons.Controls.Add(delete);
+            buttons.Controls.Add(reset);
+            root.Controls.Add(buttons, 0, 5);
+        }
+
+        private void ConfigureParagraphGrid()
+        {
+            paragraphGrid.Dock = DockStyle.Fill;
+            paragraphGrid.AllowUserToAddRows = false;
+            paragraphGrid.AllowUserToDeleteRows = false;
+            paragraphGrid.RowHeadersVisible = false;
+            paragraphGrid.AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.Fill;
+            paragraphGrid.Columns.Add(new DataGridViewTextBoxColumn { Name = "StyleName", HeaderText = "스타일", ReadOnly = true, FillWeight = 110 });
+            paragraphGrid.Columns.Add(new DataGridViewTextBoxColumn { Name = "Font", HeaderText = "글꼴", FillWeight = 110 });
+            paragraphGrid.Columns.Add(new DataGridViewTextBoxColumn { Name = "Size", HeaderText = "크기(pt)", FillWeight = 65 });
+            paragraphGrid.Columns.Add(new DataGridViewCheckBoxColumn { Name = "Bold", HeaderText = "굵게", FillWeight = 48 });
+            paragraphGrid.Columns.Add(new DataGridViewTextBoxColumn { Name = "Bullet", HeaderText = "말머리", FillWeight = 55 });
+            paragraphGrid.Columns.Add(new DataGridViewTextBoxColumn { Name = "Spacing", HeaderText = "줄간격(%)", FillWeight = 75 });
+            paragraphGrid.Columns.Add(new DataGridViewTextBoxColumn { Name = "Left", HeaderText = "왼쪽(mm)", FillWeight = 70 });
+            paragraphGrid.Columns.Add(new DataGridViewTextBoxColumn { Name = "First", HeaderText = "첫줄(mm)", FillWeight = 70 });
+            paragraphGrid.Columns.Add(new DataGridViewComboBoxColumn { Name = "Align", HeaderText = "정렬", DataSource = new[] { "left", "center", "right", "justify" }, FillWeight = 75 });
+        }
+
+        private void ConfigureTableGrid()
+        {
+            tableGrid.Dock = DockStyle.Fill;
+            tableGrid.AllowUserToAddRows = false;
+            tableGrid.AllowUserToDeleteRows = false;
+            tableGrid.RowHeadersVisible = false;
+            tableGrid.AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.Fill;
+            tableGrid.Columns.Add(new DataGridViewTextBoxColumn { Name = "StyleName", HeaderText = "표 스타일", ReadOnly = true });
+            tableGrid.Columns.Add(new DataGridViewTextBoxColumn { Name = "Fill", HeaderText = "배경 RGB" });
+            tableGrid.Columns.Add(new DataGridViewComboBoxColumn { Name = "Vertical", HeaderText = "세로 정렬", DataSource = new[] { "top", "center", "bottom" } });
+        }
+
+        private static void ConfigureNumber(NumericUpDown control, decimal minimum, decimal maximum, decimal increment)
+        {
+            control.Minimum = minimum;
+            control.Maximum = maximum;
+            control.Increment = increment;
+            control.DecimalPlaces = 2;
+            control.Width = 75;
+        }
+
+        private Button MakeButton(string text, EventHandler handler)
+        {
+            var button = new Button { Text = text, AutoSize = true, Margin = new Padding(8, 4, 0, 0) };
+            button.Click += handler;
+            return button;
+        }
+
+        private void ReloadPresets(string selectedName)
+        {
+            presetCombo.Items.Clear();
+            foreach (Dictionary<string, object> preset in store.LoadAll())
+                presetCombo.Items.Add(Convert.ToString(preset["preset_name"]));
+            int index = presetCombo.Items.IndexOf(selectedName);
+            presetCombo.SelectedIndex = index >= 0 ? index : 0;
+        }
+
+        private void LoadPreset(string name)
+        {
+            Dictionary<string, object> config = store.Get(name);
+            nameText.Text = Convert.ToString(config["preset_name"]);
+            paragraphGrid.Rows.Clear();
+            Dictionary<string, object> styles = (Dictionary<string, object>)config["paragraph_styles"];
+            foreach (string styleName in HwpStylePresetStore.StyleNames)
+            {
+                Dictionary<string, object> style = (Dictionary<string, object>)styles[styleName];
+                paragraphGrid.Rows.Add(styleName, style["font_family"], style["font_size_pt"], style["bold"], style["bullet"], style["line_spacing_percent"], style["left_indent_mm"], style["first_line_indent_mm"], style["alignment"]);
+            }
+            tableGrid.Rows.Clear();
+            Dictionary<string, object> cells = (Dictionary<string, object>)config["table_cell_styles"];
+            foreach (string styleName in HwpStylePresetStore.TableStyleNames)
+            {
+                Dictionary<string, object> style = (Dictionary<string, object>)cells[styleName];
+                tableGrid.Rows.Add(styleName, style["fill_color"], style["vertical_alignment"]);
+            }
+            Dictionary<string, object> border = (Dictionary<string, object>)config["table_border"];
+            innerBorder.Value = Convert.ToDecimal(border["inner_width_mm"]);
+            outerBorder.Value = Convert.ToDecimal(border["outer_width_mm"]);
+            borderColor.Text = Convert.ToString(border["color"]);
+        }
+
+        private Dictionary<string, object> ReadEditor()
+        {
+            var styles = new Dictionary<string, object>();
+            foreach (DataGridViewRow row in paragraphGrid.Rows)
+            {
+                styles[Convert.ToString(row.Cells["StyleName"].Value)] = new Dictionary<string, object>
+                {
+                    { "font_family", CellText(row, "Font") },
+                    { "font_size_pt", CellNumber(row, "Size") },
+                    { "bold", Convert.ToBoolean(row.Cells["Bold"].Value) },
+                    { "bullet", CellText(row, "Bullet", true) },
+                    { "line_spacing_percent", CellNumber(row, "Spacing") },
+                    { "left_indent_mm", CellNumber(row, "Left") },
+                    { "first_line_indent_mm", CellNumber(row, "First") },
+                    { "alignment", CellText(row, "Align") }
+                };
+            }
+            var cells = new Dictionary<string, object>();
+            foreach (DataGridViewRow row in tableGrid.Rows)
+            {
+                cells[Convert.ToString(row.Cells["StyleName"].Value)] = new Dictionary<string, object>
+                {
+                    { "fill_color", CellText(row, "Fill") },
+                    { "vertical_alignment", CellText(row, "Vertical") }
+                };
+            }
+            return HwpStylePresetStore.Normalize(new Dictionary<string, object>
+            {
+                { "schema_version", "1.0" }, { "preset_name", nameText.Text.Trim() },
+                { "paragraph_styles", styles }, { "table_cell_styles", cells },
+                { "table_border", new Dictionary<string, object>
+                    {
+                        { "inner_width_mm", Convert.ToDouble(innerBorder.Value) },
+                        { "outer_width_mm", Convert.ToDouble(outerBorder.Value) },
+                        { "color", borderColor.Text.Trim() }
+                    }
+                }
+            });
+        }
+
+        private static string CellText(DataGridViewRow row, string name, bool allowEmpty = false)
+        {
+            string value = Convert.ToString(row.Cells[name].Value).Trim();
+            if (!allowEmpty && value.Length == 0) throw new InvalidOperationException(name + " 값을 입력하세요.");
+            return value;
+        }
+
+        private static double CellNumber(DataGridViewRow row, string name)
+        {
+            double value;
+            string text = Convert.ToString(row.Cells[name].Value);
+            if (!double.TryParse(text, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.CurrentCulture, out value) &&
+                !double.TryParse(text, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out value))
+                throw new InvalidOperationException(name + " 값은 숫자여야 합니다.");
+            return value;
+        }
+
+        private void SaveNew(object sender, EventArgs e)
+        {
+            ExecuteEditorAction(delegate
+            {
+                Dictionary<string, object> config = ReadEditor();
+                string name = Convert.ToString(config["preset_name"]);
+                bool exists = store.LoadAll().Any(item => string.Equals(Convert.ToString(item["preset_name"]), name, StringComparison.OrdinalIgnoreCase));
+                if (exists)
+                {
+                    if (string.Equals(name, HwpStylePresetStore.BuiltInName, StringComparison.OrdinalIgnoreCase))
+                        throw new InvalidOperationException("기본 보고서 서식은 수정할 수 없습니다. 다른 이름을 입력하세요.");
+                    if (MessageBox.Show(this, "같은 이름의 서식을 덮어쓸까요?", "서식 덮어쓰기", MessageBoxButtons.YesNo, MessageBoxIcon.Warning) != DialogResult.Yes) return;
+                }
+                store.Save(config, exists);
+                SelectedPresetName = name;
+                ReloadPresets(name);
+            });
+        }
+
+        private void Overwrite(object sender, EventArgs e)
+        {
+            ExecuteEditorAction(delegate
+            {
+                string selected = presetCombo.SelectedItem == null ? "" : presetCombo.SelectedItem.ToString();
+                if (string.Equals(selected, HwpStylePresetStore.BuiltInName, StringComparison.OrdinalIgnoreCase))
+                    throw new InvalidOperationException("기본 보고서 서식은 수정할 수 없습니다.");
+                nameText.Text = selected;
+                if (MessageBox.Show(this, "'" + selected + "' 서식을 덮어쓸까요?", "서식 덮어쓰기", MessageBoxButtons.YesNo, MessageBoxIcon.Warning) != DialogResult.Yes) return;
+                store.Save(ReadEditor(), true);
+                SelectedPresetName = selected;
+                ReloadPresets(selected);
+            });
+        }
+
+        private void DeletePreset(object sender, EventArgs e)
+        {
+            ExecuteEditorAction(delegate
+            {
+                string selected = presetCombo.SelectedItem == null ? "" : presetCombo.SelectedItem.ToString();
+                if (string.Equals(selected, HwpStylePresetStore.BuiltInName, StringComparison.OrdinalIgnoreCase))
+                    throw new InvalidOperationException("기본 보고서 서식은 삭제할 수 없습니다.");
+                if (MessageBox.Show(this, "'" + selected + "' 서식을 삭제할까요?", "서식 삭제", MessageBoxButtons.YesNo, MessageBoxIcon.Warning) != DialogResult.Yes) return;
+                store.Delete(selected);
+                SelectedPresetName = HwpStylePresetStore.BuiltInName;
+                ReloadPresets(SelectedPresetName);
+            });
+        }
+
+        private void ResetEditor(object sender, EventArgs e)
+        {
+            string name = nameText.Text;
+            LoadPreset(HwpStylePresetStore.BuiltInName);
+            if (!string.Equals(name, HwpStylePresetStore.BuiltInName, StringComparison.OrdinalIgnoreCase)) nameText.Text = name;
+        }
+
+        private void ExecuteEditorAction(Action action)
+        {
+            try { action(); }
+            catch (Exception ex) { MessageBox.Show(this, ex.Message, "서식 설정", MessageBoxButtons.OK, MessageBoxIcon.Warning); }
+        }
+    }
+
     internal sealed class MainForm : Form
     {
+        private readonly HwpStylePresetStore hwpStylePresetStore = new HwpStylePresetStore();
         private readonly TextBox workbookPathText = new TextBox();
         private readonly TextBox addinPathText = new TextBox();
         private readonly ComboBox outputTypeCombo = new ComboBox();
@@ -413,6 +1087,8 @@ namespace ReportAutomationLauncher
         private readonly CheckBox hwpKeepOpenOnErrorCheck = new CheckBox();
         private readonly ComboBox hwpMaxSectionsCombo = new ComboBox();
         private readonly ComboBox hwpDispatchModeCombo = new ComboBox();
+        private readonly ComboBox hwpStylePresetCombo = new ComboBox();
+        private readonly Button hwpStyleSettingsButton = new Button();
         private readonly Button hwpEnvironmentCheckButton = new Button();
         private readonly TextBox bannerText = new TextBox();
         private readonly CheckedListBox bannerList = new CheckedListBox();
@@ -579,6 +1255,7 @@ namespace ReportAutomationLauncher
             llmModelText.Text = "gpt-4.1-mini";
             hwpMaxSectionsCombo.SelectedIndex = 0;
             hwpDispatchModeCombo.SelectedIndex = 0;
+            RefreshHwpStylePresetCombo(HwpStylePresetStore.BuiltInName);
             dashboardOutputModeCombo.SelectedIndex = 0;
             dashboardPageSizeCombo.SelectedIndex = 0;
             dashboardDesignCombo.SelectedIndex = 0;
@@ -979,6 +1656,15 @@ namespace ReportAutomationLauncher
             hwpEnvironmentCheckButton.Text = "COM diag";
             hwpEnvironmentCheckButton.Width = 85;
             hwpEnvironmentCheckButton.Click += HwpEnvironmentCheckButton_Click;
+            var hwpStyleLabel = new Label();
+            hwpStyleLabel.Text = "서식";
+            hwpStyleLabel.AutoSize = true;
+            hwpStyleLabel.Margin = new Padding(12, 7, 6, 0);
+            hwpStylePresetCombo.DropDownStyle = ComboBoxStyle.DropDownList;
+            hwpStylePresetCombo.Width = 130;
+            hwpStyleSettingsButton.Text = "서식 설정";
+            hwpStyleSettingsButton.Width = 85;
+            hwpStyleSettingsButton.Click += HwpStyleSettingsButton_Click;
             hwpOptions.Controls.Add(hwpVisibleCheck);
             hwpOptions.Controls.Add(hwpKeepOpenOnErrorCheck);
             hwpOptions.Controls.Add(hwpLimitLabel);
@@ -986,6 +1672,9 @@ namespace ReportAutomationLauncher
             hwpOptions.Controls.Add(hwpDispatchLabel);
             hwpOptions.Controls.Add(hwpDispatchModeCombo);
             hwpOptions.Controls.Add(hwpEnvironmentCheckButton);
+            hwpOptions.Controls.Add(hwpStyleLabel);
+            hwpOptions.Controls.Add(hwpStylePresetCombo);
+            hwpOptions.Controls.Add(hwpStyleSettingsButton);
             AddLabel(grid, 6, "HWPX 옵션");
             grid.Controls.Add(hwpOptions, 1, 6);
             grid.SetColumnSpan(hwpOptions, 2);
@@ -3782,6 +4471,35 @@ namespace ReportAutomationLauncher
             return string.Join(Environment.NewLine, lines.ToArray()) + Environment.NewLine;
         }
 
+        private void RefreshHwpStylePresetCombo(string selectedName)
+        {
+            hwpStylePresetCombo.Items.Clear();
+            foreach (Dictionary<string, object> preset in hwpStylePresetStore.LoadAll())
+            {
+                hwpStylePresetCombo.Items.Add(Convert.ToString(preset["preset_name"]));
+            }
+            int index = hwpStylePresetCombo.Items.IndexOf(selectedName);
+            hwpStylePresetCombo.SelectedIndex = index >= 0 ? index : 0;
+        }
+
+        private void HwpStyleSettingsButton_Click(object sender, EventArgs e)
+        {
+            string selected = hwpStylePresetCombo.SelectedItem == null
+                ? HwpStylePresetStore.BuiltInName
+                : hwpStylePresetCombo.SelectedItem.ToString();
+            using (var dialog = new HwpStylePresetDialog(hwpStylePresetStore, selected))
+            {
+                if (dialog.ShowDialog(this) == DialogResult.OK)
+                {
+                    RefreshHwpStylePresetCombo(dialog.SelectedPresetName);
+                }
+                else
+                {
+                    RefreshHwpStylePresetCombo(selected);
+                }
+            }
+        }
+
         private LauncherOptions ReadOptions()
         {
             var options = new LauncherOptions();
@@ -3813,6 +4531,10 @@ namespace ReportAutomationLauncher
             options.HwpKeepOpenOnError = hwpKeepOpenOnErrorCheck.Checked;
             options.HwpMaxSections = SelectedHwpMaxSections();
             options.HwpDispatchMode = SelectedHwpDispatchMode();
+            options.HwpStylePresetName = hwpStylePresetCombo.SelectedItem == null
+                ? HwpStylePresetStore.BuiltInName
+                : hwpStylePresetCombo.SelectedItem.ToString();
+            options.HwpStyleConfig = hwpStylePresetStore.Get(options.HwpStylePresetName);
             options.TableRangeOverrides = string.Join(Environment.NewLine, currentTablePreviews
                 .Where(table => table.IsManual)
                 .Select(table => table.TableKey + "=" + table.SheetName + "!" + table.FinalRange)
@@ -3932,6 +4654,9 @@ namespace ReportAutomationLauncher
         public string HwpTemplatePath;
         public string PptTemplatePath;
         public string HwpTableStyleProfilePath;
+        public string HwpStylePresetName = HwpStylePresetStore.BuiltInName;
+        public string HwpStyleConfigPath;
+        public Dictionary<string, object> HwpStyleConfig;
         public string BannerSetting = "전체";
         public string TitlePrefixes = "";
         public int DecimalPlaces = 1;
@@ -3995,6 +4720,20 @@ namespace ReportAutomationLauncher
                 {
                     throw new FileNotFoundException("HWP 표 스타일 profile 파일을 찾을 수 없습니다.", HwpTableStyleProfilePath);
                 }
+            }
+            if (!string.IsNullOrWhiteSpace(HwpStyleConfigPath))
+            {
+                HwpStyleConfigPath = Path.GetFullPath(HwpStyleConfigPath);
+                if (!File.Exists(HwpStyleConfigPath))
+                    throw new FileNotFoundException("HWP 서식 설정 파일을 찾을 수 없습니다.", HwpStyleConfigPath);
+                var serializer = new JavaScriptSerializer { MaxJsonLength = int.MaxValue };
+                HwpStyleConfig = HwpStylePresetStore.Normalize(
+                    serializer.DeserializeObject(File.ReadAllText(HwpStyleConfigPath, System.Text.Encoding.UTF8)) as Dictionary<string, object>);
+            }
+            if (HwpStyleConfig != null)
+            {
+                HwpStyleConfig = HwpStylePresetStore.Normalize(HwpStyleConfig);
+                HwpStylePresetName = Convert.ToString(HwpStyleConfig["preset_name"]);
             }
             if (OutputType.IndexOf("HWP", StringComparison.OrdinalIgnoreCase) >= 0)
             {
@@ -4081,6 +4820,8 @@ namespace ReportAutomationLauncher
             options.HwpTemplatePath = Get(values, "hwp-template", "");
             options.PptTemplatePath = Get(values, "ppt-template", "");
             options.HwpTableStyleProfilePath = Get(values, "hwp-table-style-profile", "");
+            options.HwpStyleConfigPath = Get(values, "hwp-style-config", "");
+            options.HwpStylePresetName = Get(values, "hwp-style-preset", HwpStylePresetStore.BuiltInName);
             options.BannerSetting = Get(values, "banner", "전체");
             options.TitlePrefixes = Get(values, "prefixes", "");
             options.DecimalPlaces = GetInt(values, "decimal-places", 1);
@@ -4380,6 +5121,8 @@ namespace ReportAutomationLauncher
                 writer.WriteLine("HwpTemplate=" + options.HwpTemplatePath);
                 writer.WriteLine("PptTemplate=" + options.PptTemplatePath);
                 writer.WriteLine("HwpTableStyleProfile=" + options.HwpTableStyleProfilePath);
+                writer.WriteLine("HwpStylePreset=" + options.HwpStylePresetName);
+                writer.WriteLine("HwpStyleConfig=" + options.HwpStyleConfigPath);
                 writer.WriteLine("BannerSetting=" + options.BannerSetting);
                 writer.WriteLine("TitlePrefixes=" + options.TitlePrefixes);
                 writer.WriteLine("DecimalPlaces=" + options.DecimalPlaces);
@@ -4628,6 +5371,12 @@ namespace ReportAutomationLauncher
                     return;
                 }
 
+                Dictionary<string, object> config = options.HwpStyleConfig ?? HwpStylePresetStore.DefaultConfig();
+                options.HwpStyleConfigPath = Path.Combine(Path.GetDirectoryName(options.LastReportPackagePath), "hwp_style_config.json");
+                HwpStylePresetStore.WriteConfig(options.HwpStyleConfigPath, config);
+                options.HwpStylePresetName = Convert.ToString(config["preset_name"]);
+                log("HWP 서식 설정 저장: " + options.HwpStyleConfigPath);
+
                 string directory = Path.GetDirectoryName(options.LastGeneratedWorkbookPath);
                 string stem = Path.GetFileNameWithoutExtension(options.LastGeneratedWorkbookPath);
                 string outputPath = Path.Combine(directory, stem + "_hwp_report_" + DateTime.Now.ToString("yyyyMMdd_HHmmss") + ".hwpx");
@@ -4652,6 +5401,7 @@ namespace ReportAutomationLauncher
                                      " --render-plan-output " + Quote(renderPlanPath) +
                                      " --max-sections " + Quote(options.HwpMaxSections.ToString()) +
                                      " --dispatch-mode " + Quote(options.HwpDispatchMode) +
+                                     " --style-config " + Quote(options.HwpStyleConfigPath) +
                                      OptionalArgument(" --table-style-profile ", options.HwpTableStyleProfilePath) +
                                      (options.HwpKeepOpenOnError ? " --keep-open-on-error" : "");
                 startInfo.UseShellExecute = false;
