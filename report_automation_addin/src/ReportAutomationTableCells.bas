@@ -11,6 +11,7 @@ Public Sub ReportAutomation_WriteTableCells(ByVal wsOut As Worksheet, ByVal tabl
         "role", "display_text", "raw_value", "number_format", "source_sheet", "source_cell", _
         "source_range", "horizontal_align", "vertical_align", "covered_by")
     ReportAutomation_StyleHeader wsOut.Range("A1:P1")
+    wsOut.Columns("H:H").NumberFormat = "@"
 
     Dim outputRow As Long: outputRow = 2
     Dim i As Long, rec As Variant
@@ -92,8 +93,15 @@ Private Sub ReportAutomation_WriteTableRangeCells(ByVal wsOut As Worksheet, ByRe
             wsOut.Cells(outputRow, 5).Value = rowSpan
             wsOut.Cells(outputRow, 6).Value = colSpan
             wsOut.Cells(outputRow, 7).Value = ReportAutomation_CellRole(cell, r, c, sourceRange, coveredBy)
-            wsOut.Cells(outputRow, 8).Value = ReportAutomation_CellDisplayText(cell)
-            wsOut.Cells(outputRow, 9).Value = cell.Value2
+            wsOut.Cells(outputRow, 8).Value2 = CStr(ReportAutomation_CellDisplayText(cell))
+            Dim rawValue As Variant
+            rawValue = cell.Value2
+            If VarType(rawValue) = vbString Then
+                wsOut.Cells(outputRow, 9).NumberFormat = "@"
+                wsOut.Cells(outputRow, 9).Value2 = CStr(rawValue)
+            Else
+                wsOut.Cells(outputRow, 9).Value2 = rawValue
+            End If
             wsOut.Cells(outputRow, 10).Value = cell.NumberFormat
             wsOut.Cells(outputRow, 11).Value = sourceRange.Worksheet.Name
             wsOut.Cells(outputRow, 12).Value = cell.Address(False, False)

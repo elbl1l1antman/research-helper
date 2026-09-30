@@ -1,13 +1,47 @@
 from __future__ import annotations
 
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
+import html
 from typing import Any, Dict, List
+import unicodedata
 
 
 HEADER_LABELS = ["항목", "비율", "가중 N", "원 N"]
 ALLOWED_ROLES = {"title", "base", "banner_horizontal", "banner_vertical", "stub", "value", "note", "source", "blank", "unknown"}
 LONG_TEXT_LIMIT = 40
 MANY_COLUMNS_LIMIT = 8
+ALLOWED_UNIT_SYMBOLS = set("℃°㎡㎢㎥㎏㎎㎞㎝㎜㏄")
+DECORATIVE_SYMBOLS = set("●■◆▶※")
+
+
+def sanitize_table_display_text(value: Any) -> str:
+    return _clean_table_display_text(value)[0]
+
+
+def _clean_table_display_text(value: Any) -> tuple[str, str]:
+    decoded = html.unescape("" if value is None else str(value))
+    kept: List[str] = []
+    removed: List[str] = []
+    for character in decoded:
+        category = unicodedata.category(character)
+        if category.startswith("C"):
+            if character.isspace():
+                kept.append(" ")
+            removed.append(character)
+        elif character in DECORATIVE_SYMBOLS or (category == "So" and character not in ALLOWED_UNIT_SYMBOLS):
+            removed.append(character)
+        else:
+            kept.append(character)
+    return " ".join("".join(kept).split()), "".join(removed)
+
+
+def _display_text_fields(value: Any) -> Dict[str, str]:
+    original = "" if value is None else str(value)
+    cleaned, removed = _clean_table_display_text(value)
+    fields = {"display_text": cleaned}
+    if cleaned != original:
+        fields.update(original_display_text=original, removed_symbols=removed)
+    return fields
 
 
 def build_table_matrix(table: Dict[str, Any], decimal_places: int = 1) -> Dict[str, Any]:
@@ -68,7 +102,7 @@ def build_table_matrix_from_cells(rows: List[Dict[str, Any]]) -> Dict[str, Any]:
             "rowspan": rowspan,
             "colspan": colspan,
             "role": role,
-            "display_text": "" if source.get("display_text") is None else str(source.get("display_text")),
+            **_display_text_fields(source.get("display_text")),
             "raw_value": raw_value,
             "number_format": str(source.get("number_format") or ""),
             "source_cell": str(source.get("source_cell") or ""),
@@ -108,14 +142,13 @@ def header_row() -> List[Dict[str, Any]]:
 
 
 def make_cell(row: int, col: int, role: str, display_text: Any, raw_value: Any, number_format: str, source_cell: Any, align: str) -> Dict[str, Any]:
-    text = "" if display_text is None else str(display_text)
     return {
         "row": row,
         "col": col,
         "rowspan": 1,
         "colspan": 1,
         "role": role,
-        "display_text": text,
+        **_display_text_fields(display_text),
         "raw_value": raw_value,
         "number_format": number_format,
         "source_cell": "" if source_cell is None else str(source_cell),
@@ -166,7 +199,10 @@ def table_matrix_qa(table_matrix: Dict[str, Any]) -> List[Dict[str, str]]:
         qa.append(issue("error", "값 영역이 모두 비어 있습니다."))
     for cell in table_matrix.get("cells", []):
         display_text = str(cell.get("display_text") or "")
-        if not str(cell.get("display_text") or "").strip() and cell.get("raw_value") not in (None, ""):
+        if "original_display_text" in cell:
+            location = str(cell.get("source_cell") or f"{cell.get('row')}행 {cell.get('col')}열")
+            qa.append(issue("warning", f"{location} 표시문자를 정리했습니다."))
+        if not display_text.strip() and cell.get("raw_value") not in (None, "") and "original_display_text" not in cell:
             qa.append(issue("error", f"{cell.get('row')}행 {cell.get('col')}열 display_text가 없습니다."))
         if display_text and set(display_text.strip()) == {"#"}:
             qa.append(issue("error", f"{cell.get('row')}행 {cell.get('col')}열 표시값이 ###입니다."))
