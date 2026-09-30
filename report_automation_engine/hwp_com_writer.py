@@ -18,6 +18,11 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List
 
+try:
+    from .report_package import split_narrative_blocks
+except ImportError:
+    from report_package import split_narrative_blocks
+
 
 BODY_PLACEHOLDER = "{{BODY}}"
 REPORT_PLACEHOLDERS = {
@@ -422,12 +427,9 @@ def write_body(
             run_action(hwp, "BreakPage", report, "body")
         key = str(section.get("table_key", ""))
         title = str(section.get("title") or key or f"문항 {index}")
-        narrative = str(section.get("narrative_final") or "")
-
         insert_text(hwp, title, report)
         run_action(hwp, "BreakPara", report, "body")
-        insert_text(hwp, narrative, report)
-        run_action(hwp, "BreakPara", report, "body")
+        insert_narrative_blocks(hwp, section, report)
         run_action(hwp, "BreakPara", report, "body")
 
         table = tables_by_key.get(key)
@@ -461,6 +463,21 @@ def write_body(
         run_action(hwp, "BreakPara", report, "body")
         run_action(hwp, "BreakPara", report, "body")
         report["sections_written"] += 1
+
+
+def insert_narrative_blocks(
+    hwp,
+    section: Dict[str, Any],
+    report: Dict[str, Any],
+    style_indexes=None,
+) -> None:
+    blocks = section.get("narrative_blocks") or split_narrative_blocks(str(section.get("narrative_final") or ""))
+    for block in blocks:
+        text = str(block.get("text") or "")
+        if block.get("style") == "보고서 본문2" and (text.startswith("- ") or text.startswith("-\t")):
+            text = text[1:].lstrip()
+        insert_text(hwp, text, report)
+        run_action(hwp, "BreakPara", report, "body")
 
 
 def select_sections(package: Dict[str, Any], max_sections: int | None = None) -> List[Dict[str, Any]]:

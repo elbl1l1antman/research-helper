@@ -98,6 +98,7 @@ def read_sections(wb, qa: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
                 "table_key": table_key,
                 "title": clean(row.get("문항/표 제목")),
                 "narrative_final": narrative,
+                "narrative_blocks": split_narrative_blocks(narrative),
                 "narrative_source": narrative_source(row),
                 "summary": clean(row.get("주요 수치 요약")),
                 "review_status": clean(row.get("검토 상태")),
@@ -105,6 +106,17 @@ def read_sections(wb, qa: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
             }
         )
     return sections
+
+
+def split_narrative_blocks(text: str) -> List[Dict[str, str]]:
+    normalized = str(text or "").replace("\r\n", "\n").replace("\r", "\n")
+    for boundary in ("다음으로", "그다음으로", "반면,"):
+        normalized = normalized.replace(f"나타남{boundary}", f"나타남\n{boundary}")
+    lines = [line.strip() for line in normalized.split("\n") if line.strip()]
+    return [
+        {"style": "보고서 본문1" if index == 0 else "보고서 본문2", "text": line}
+        for index, line in enumerate(lines)
+    ]
 
 
 def first_text(row: Dict[str, Any], *keys: str) -> str:
