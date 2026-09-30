@@ -131,6 +131,7 @@ class HwpxStyleRegistryTests(unittest.TestCase):
             self.assertEqual(bullets[0].attrib["id"], "1")
             self.assertEqual(bullets[0].attrib["id"], heading.attrib["idRef"])
             self.assertEqual(bullets[0].attrib["char"], "-")
+            self.assertEqual(child(bullets[0], "paraHead").attrib["numFormat"], "DIGIT")
 
     def test_updates_existing_named_style_without_duplication(self) -> None:
         config = copy.deepcopy(DEFAULT_HWP_STYLE_CONFIG)
@@ -141,6 +142,9 @@ class HwpxStyleRegistryTests(unittest.TestCase):
         existing = copy.deepcopy(list(styles)[0])
         existing.attrib.update({"id": "9", "name": "보고서 본문1"})
         styles.insert(0, existing)
+        duplicate = copy.deepcopy(existing)
+        duplicate.attrib["id"] = "10"
+        styles.append(duplicate)
         styles.attrib["itemCnt"] = str(len(list(styles)))
 
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -167,6 +171,38 @@ class HwpxStyleRegistryTests(unittest.TestCase):
             self.assertEqual(body_char_pr.attrib["height"], "1200")
             self.assertTrue(any(local_name(node.tag) == "bold" for node in list(body_char_pr)))
 
+    def test_assigns_font_ids_in_required_style_order(self) -> None:
+        config = copy.deepcopy(DEFAULT_HWP_STYLE_CONFIG)
+        expected_families = []
+        for index, name in enumerate(REQUIRED_STYLE_NAMES, start=1):
+            family = f"테스트 글꼴 {index}"
+            config["paragraph_styles"][name]["font_family"] = family
+            expected_families.append(family)
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            template = Path(temp_dir) / "template.hwpx"
+            output = Path(temp_dir) / "working.hwpx"
+            write_fixture(template)
+            mapping = register_named_styles(template, output, config)
+
+            with zipfile.ZipFile(output) as archive:
+                root = ET.fromstring(archive.read("Contents/header.xml"))
+            ref_list = child(root, "refList")
+            fontfaces = child(ref_list, "fontfaces")
+            for fontface in list(fontfaces):
+                self.assertEqual(
+                    [(font.attrib["id"], font.attrib["face"]) for font in list(fontface)],
+                    [("0", "함초롬돋움"), *[(str(index), family) for index, family in enumerate(expected_families, start=1)]],
+                )
+
+            styles = list(child(ref_list, "styles"))
+            char_prs = {node.attrib["id"]: node for node in child(ref_list, "charProperties")}
+            for expected_id, name in enumerate(REQUIRED_STYLE_NAMES, start=1):
+                style = styles[mapping[name]]
+                font_ref = child(char_prs[style.attrib["charPrIDRef"]], "fontRef")
+                self.assertEqual(font_ref.attrib["hangul"], str(expected_id))
+                self.assertEqual(font_ref.attrib["latin"], str(expected_id))
+
     def test_rejects_missing_or_invalid_header(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             temp = Path(temp_dir)
@@ -180,6 +216,20 @@ class HwpxStyleRegistryTests(unittest.TestCase):
                 register_named_styles(missing, output, DEFAULT_HWP_STYLE_CONFIG)
             with self.assertRaisesRegex(ValueError, r"Contents/header\.xml.*XML"):
                 register_named_styles(invalid, output, DEFAULT_HWP_STYLE_CONFIG)
+
+    def test_rejects_lookalike_head_namespaces(self) -> None:
+        headers = (
+            b'<?xml version="1.0" encoding="UTF-8"?><head/>',
+            b'<?xml version="1.0" encoding="UTF-8"?><x:head xmlns:x="urn:not-hwpx"/>',
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp = Path(temp_dir)
+            for index, header in enumerate(headers):
+                with self.subTest(index=index):
+                    template = temp / f"lookalike-{index}.hwpx"
+                    write_fixture(template, header)
+                    with self.assertRaisesRegex(ValueError, "네임스페이스"):
+                        register_named_styles(template, temp / f"output-{index}.hwpx", DEFAULT_HWP_STYLE_CONFIG)
 
 
 if __name__ == "__main__":

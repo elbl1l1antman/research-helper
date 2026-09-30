@@ -58,7 +58,7 @@ def _set_counts(*collections: ET.Element) -> None:
         collection.attrib["itemCnt"] = str(len(list(collection)))
 
 
-def _ensure_fonts(fontfaces: ET.Element, families: set[str]) -> Dict[str, Dict[str, int]]:
+def _ensure_fonts(fontfaces: ET.Element, families: list[str]) -> Dict[str, Dict[str, int]]:
     result: Dict[str, Dict[str, int]] = {family: {} for family in families}
     for fontface in list(fontfaces):
         language = fontface.attrib.get("lang", "")
@@ -192,7 +192,7 @@ def _bullet_for_para(bullets: ET.Element, para_pr: ET.Element, bullet_char: str)
                 "widthAdjust": "0",
                 "textOffsetType": "PERCENT",
                 "textOffset": "50",
-                "numFormat": "CHAR",
+                "numFormat": "DIGIT",
                 "charPrIDRef": "4294967295",
                 "checkable": "0",
             },
@@ -207,8 +207,9 @@ def _update_header(header: bytes, config: Dict[str, Any]) -> tuple[bytes, Dict[s
         root = ET.fromstring(header)
     except ET.ParseError as exc:
         raise ValueError(f"Contents/header.xml XML을 읽을 수 없습니다: {exc}") from exc
-    if _local_name(root.tag) not in {"head", "header"}:
-        raise ValueError("Contents/header.xml XML 루트가 HWPX head가 아닙니다.")
+    if root.tag != _tag("head"):
+        namespace = root.tag[1:].split("}", 1)[0] if root.tag.startswith("{") else "없음"
+        raise ValueError(f"Contents/header.xml 루트의 HWPX head 네임스페이스가 올바르지 않습니다: {namespace}")
 
     ref_list = _required_child(root, "refList")
     fontfaces = _required_child(ref_list, "fontfaces")
@@ -217,7 +218,18 @@ def _update_header(header: bytes, config: Dict[str, Any]) -> tuple[bytes, Dict[s
     styles = _required_child(ref_list, "styles")
     bullets = _ensure_bullets(ref_list, para_properties)
     style_config = config["paragraph_styles"]
-    font_ids = _ensure_fonts(fontfaces, {style_config[name]["font_family"] for name in REQUIRED_STYLE_NAMES})
+    families = list(dict.fromkeys(style_config[name]["font_family"] for name in REQUIRED_STYLE_NAMES))
+    font_ids = _ensure_fonts(fontfaces, families)
+
+    seen_names = set()
+    for style in list(styles):
+        name = style.attrib.get("name")
+        if name not in REQUIRED_STYLE_NAMES:
+            continue
+        if name in seen_names:
+            styles.remove(style)
+        else:
+            seen_names.add(name)
 
     for name in REQUIRED_STYLE_NAMES:
         settings = style_config[name]
