@@ -24,27 +24,54 @@ class HwpStyleConfigTests(unittest.TestCase):
             REQUIRED_STYLE_NAMES,
             ("보고서 본문1", "보고서 본문2", "표보기", "표배너", "표숫자"),
         )
-        body1 = DEFAULT_HWP_STYLE_CONFIG["paragraph_styles"]["보고서 본문1"]
-        body2 = DEFAULT_HWP_STYLE_CONFIG["paragraph_styles"]["보고서 본문2"]
-        banner = DEFAULT_HWP_STYLE_CONFIG["paragraph_styles"]["표배너"]
-        self.assertEqual(body1["font_family"], "맑은 고딕")
-        self.assertEqual(body1["font_size_pt"], 10.0)
-        self.assertEqual(body1["line_spacing_percent"], 160)
-        self.assertEqual(body2["bullet"], "-")
-        self.assertEqual(body2["left_indent_mm"], 5.0)
-        self.assertEqual(body2["first_line_indent_mm"], -5.0)
-        self.assertTrue(banner["bold"])
-        self.assertEqual(banner["alignment"], "center")
+        self.assertEqual(DEFAULT_HWP_STYLE_CONFIG["schema_version"], "1.0")
+        self.assertEqual(DEFAULT_HWP_STYLE_CONFIG["preset_name"], "기본 보고서")
+        common_body = {
+            "font_family": "맑은 고딕",
+            "font_size_pt": 10.0,
+            "bold": False,
+            "bullet": "",
+            "line_spacing_percent": 160,
+            "left_indent_mm": 0.0,
+            "first_line_indent_mm": 0.0,
+            "alignment": "left",
+        }
+        common_table = {
+            "font_family": "맑은 고딕",
+            "font_size_pt": 8.5,
+            "bold": False,
+            "bullet": "",
+            "line_spacing_percent": 130,
+            "left_indent_mm": 0.0,
+            "first_line_indent_mm": 0.0,
+            "alignment": "left",
+        }
+        styles = DEFAULT_HWP_STYLE_CONFIG["paragraph_styles"]
+        self.assertEqual(styles["보고서 본문1"], common_body)
         self.assertEqual(
-            DEFAULT_HWP_STYLE_CONFIG["table_cell_styles"]["표배너"]["fill_color"],
-            "E7E7E7",
+            styles["보고서 본문2"],
+            {**common_body, "bullet": "-", "left_indent_mm": 5.0, "first_line_indent_mm": -5.0},
         )
-        self.assertEqual(DEFAULT_HWP_STYLE_CONFIG["table_border"]["inner_width_mm"], 0.12)
-        self.assertEqual(DEFAULT_HWP_STYLE_CONFIG["table_border"]["outer_width_mm"], 0.4)
+        self.assertEqual(styles["표보기"], common_table)
+        self.assertEqual(styles["표배너"], {**common_table, "bold": True, "alignment": "center"})
+        self.assertEqual(styles["표숫자"], {**common_table, "alignment": "center"})
+        self.assertEqual(
+            DEFAULT_HWP_STYLE_CONFIG["table_cell_styles"],
+            {
+                "표보기": {"fill_color": "FFFFFF", "vertical_alignment": "center"},
+                "표배너": {"fill_color": "E7E7E7", "vertical_alignment": "center"},
+                "표숫자": {"fill_color": "FFFFFF", "vertical_alignment": "center"},
+            },
+        )
+        self.assertEqual(
+            DEFAULT_HWP_STYLE_CONFIG["table_border"],
+            {"inner_width_mm": 0.12, "outer_width_mm": 0.4, "color": "000000"},
+        )
 
         expected = {
             "title": "표배너",
             "base": "표배너",
+            "header": "표배너",
             "banner_horizontal": "표배너",
             "banner_vertical": "표보기",
             "stub": "표보기",
@@ -85,6 +112,27 @@ class HwpStyleConfigTests(unittest.TestCase):
                 config = copy.deepcopy(DEFAULT_HWP_STYLE_CONFIG)
                 mutate(config)
                 with self.assertRaisesRegex(ValueError, field.replace(".", r"\.")):
+                    validate_hwp_style_config(config)
+
+        boundary_config = copy.deepcopy(DEFAULT_HWP_STYLE_CONFIG)
+        boundary_config["paragraph_styles"]["보고서 본문1"]["left_indent_mm"] = -30
+        boundary_config["paragraph_styles"]["보고서 본문1"]["first_line_indent_mm"] = 100
+        boundary_config["table_border"]["inner_width_mm"] = 0.1
+        boundary_config["table_border"]["outer_width_mm"] = 5.0
+        validate_hwp_style_config(boundary_config)
+
+        range_cases = (
+            ("left_indent_mm", -30.1, "paragraph_styles.보고서 본문1.left_indent_mm"),
+            ("first_line_indent_mm", 100.1, "paragraph_styles.보고서 본문1.first_line_indent_mm"),
+            ("inner_width_mm", 0.09, "table_border.inner_width_mm"),
+            ("outer_width_mm", 5.1, "table_border.outer_width_mm"),
+        )
+        for field, value, error_field in range_cases:
+            with self.subTest(field=field, value=value):
+                config = copy.deepcopy(DEFAULT_HWP_STYLE_CONFIG)
+                target = config["table_border"] if "width" in field else config["paragraph_styles"]["보고서 본문1"]
+                target[field] = value
+                with self.assertRaisesRegex(ValueError, error_field.replace(".", r"\.")):
                     validate_hwp_style_config(config)
 
     def test_loads_default_or_json_file(self) -> None:

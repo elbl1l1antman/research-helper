@@ -101,9 +101,8 @@ def load_hwp_style_config(path: Path | None) -> Dict[str, Any]:
 
 
 def style_name_for_cell_role(role: str) -> str:
-    if role in {"banner_horizontal", "base", "title"}:
+    if role in {"banner_horizontal", "base", "header", "title"}:
         return "표배너"
     if role == "value":
         return "표숫자"
     return "표보기"
-
