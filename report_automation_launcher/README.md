@@ -98,6 +98,7 @@ GUI 없이 자동화 호출만 확인할 때 사용할 수 있습니다.
 
 ```powershell
 report_automation_launcher\bin\ReportAutomationLauncher.exe --self-check-hwp-style-presets
+report_automation_launcher\bin\ReportAutomationLauncher.exe --self-check-hwp-style-cli
 ```
 
 배너 목록 탐지만 확인할 때는 다음 옵션을 사용할 수 있습니다.

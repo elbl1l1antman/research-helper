@@ -37,6 +37,12 @@ namespace ReportAutomationLauncher
                     Console.WriteLine("HWP style preset self-check passed.");
                     return 0;
                 }
+                if (HasFlag(args, "self-check-hwp-style-cli"))
+                {
+                    EngineRunner.RunHwpStyleCliSelfCheck();
+                    Console.WriteLine("HWP style CLI self-check passed.");
+                    return 0;
+                }
 
                 if (HasFlag(args, "list-banners"))
                 {
@@ -64,6 +70,10 @@ namespace ReportAutomationLauncher
                     options.LastDraftTextPath = EngineRunner.TryGenerateDraft(generatedWorkbookPath, Console.WriteLine);
                 }
                 EngineRunner.TryGenerateReportPackage(generatedWorkbookPath, options, Console.WriteLine);
+                if (options.OutputType.IndexOf("HWP", StringComparison.OrdinalIgnoreCase) >= 0)
+                {
+                    EngineRunner.TryGenerateHwpDocument(options, Console.WriteLine);
+                }
                 AutomationRunner.WriteLauncherConfig(generatedWorkbookPath, options);
                 return 0;
             }
@@ -205,7 +215,9 @@ namespace ReportAutomationLauncher
             {
                 throw new InvalidOperationException("schema_version은 1.0이어야 합니다.");
             }
-            string presetName = Convert.ToString(Value(copy, "preset_name")).Trim();
+            object presetNameValue = Value(copy, "preset_name");
+            if (!(presetNameValue is string)) throw new InvalidOperationException("preset_name 값은 문자열이어야 합니다.");
+            string presetName = ((string)presetNameValue).Trim();
             if (presetName.Length == 0)
             {
                 throw new InvalidOperationException("서식 이름을 입력하세요.");
@@ -319,6 +331,17 @@ namespace ReportAutomationLauncher
                 Assert(store.LoadAll().Count == 1, "corrupt recovery");
                 Assert(Directory.GetFiles(directory, "presets.json.corrupt.*.bak").Length == 2, "corrupt backup");
                 AssertThrows(delegate { store.Delete(BuiltInName); }, "immutable default");
+
+                Dictionary<string, object> invalidText = DefaultConfig();
+                Map(Map(invalidText["paragraph_styles"], "paragraph_styles")["보고서 본문1"], "보고서 본문1")["font_family"] = 123;
+                AssertThrows(delegate { Normalize(invalidText); }, "strict string validation");
+                Dictionary<string, object> invalidNumber = DefaultConfig();
+                Map(Map(invalidNumber["paragraph_styles"], "paragraph_styles")["보고서 본문1"], "보고서 본문1")["font_size_pt"] = double.NaN;
+                AssertThrows(delegate { Normalize(invalidNumber); }, "NaN rejection");
+                Map(Map(invalidNumber["paragraph_styles"], "paragraph_styles")["보고서 본문1"], "보고서 본문1")["font_size_pt"] = double.PositiveInfinity;
+                AssertThrows(delegate { Normalize(invalidNumber); }, "infinite config value rejection");
+                AssertThrows(delegate { ParseFiniteDouble("NaN", "grid"); }, "NaN grid value rejection");
+                AssertThrows(delegate { ParseFiniteDouble("Infinity", "grid"); }, "infinite grid value rejection");
             }
             finally
             {
@@ -439,7 +462,8 @@ namespace ReportAutomationLauncher
 
         private static void RequireText(Dictionary<string, object> map, string key, string field)
         {
-            if (string.IsNullOrWhiteSpace(Convert.ToString(Value(map, key))))
+            object value = Value(map, key);
+            if (!(value is string) || string.IsNullOrWhiteSpace((string)value))
                 throw new InvalidOperationException(field + "." + key + " 값을 입력하세요.");
         }
 
@@ -450,14 +474,26 @@ namespace ReportAutomationLauncher
             double number;
             try { number = Convert.ToDouble(value, System.Globalization.CultureInfo.InvariantCulture); }
             catch { throw new InvalidOperationException(field + "." + key + " 값이 올바르지 않습니다."); }
-            if (number < minimum || number > maximum)
+            if (double.IsNaN(number) || double.IsInfinity(number) || number < minimum || number > maximum)
                 throw new InvalidOperationException(field + "." + key + " 범위는 " + minimum + "~" + maximum + "입니다.");
             return number;
         }
 
+        internal static double ParseFiniteDouble(string text, string field)
+        {
+            double value;
+            if ((!double.TryParse(text, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.CurrentCulture, out value) &&
+                 !double.TryParse(text, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out value)) ||
+                double.IsNaN(value) || double.IsInfinity(value))
+                throw new InvalidOperationException(field + " 값은 유한한 숫자여야 합니다.");
+            return value;
+        }
+
         private static string ColorValue(Dictionary<string, object> map, string key, string field)
         {
-            string color = Convert.ToString(Value(map, key)).Trim().ToUpperInvariant();
+            object value = Value(map, key);
+            if (!(value is string)) throw new InvalidOperationException(field + "." + key + " 값은 문자열이어야 합니다.");
+            string color = ((string)value).Trim().ToUpperInvariant();
             if (color.Length != 6 || color.Any(ch => !Uri.IsHexDigit(ch)))
                 throw new InvalidOperationException(field + "." + key + " 값은 6자리 RGB 색상이어야 합니다.");
             return color;
@@ -997,12 +1033,7 @@ namespace ReportAutomationLauncher
 
         private static double CellNumber(DataGridViewRow row, string name)
         {
-            double value;
-            string text = Convert.ToString(row.Cells[name].Value);
-            if (!double.TryParse(text, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.CurrentCulture, out value) &&
-                !double.TryParse(text, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out value))
-                throw new InvalidOperationException(name + " 값은 숫자여야 합니다.");
-            return value;
+            return HwpStylePresetStore.ParseFiniteDouble(Convert.ToString(row.Cells[name].Value), name);
         }
 
         private void SaveNew(object sender, EventArgs e)
@@ -5200,6 +5231,30 @@ namespace ReportAutomationLauncher
 
     internal static class EngineRunner
     {
+        internal static void RunHwpStyleCliSelfCheck()
+        {
+            string directory = Path.Combine(Path.GetTempPath(), "ResearchHelperStyleCliCheck_" + Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(directory);
+            try
+            {
+                var options = new LauncherOptions();
+                options.LastReportPackagePath = Path.Combine(directory, "report_package.json");
+                options.HwpStyleConfig = HwpStylePresetStore.DefaultConfig();
+                File.WriteAllText(options.LastReportPackagePath, "{}", System.Text.Encoding.UTF8);
+                PrepareHwpStyleConfig(options);
+                string expected = Path.Combine(directory, "hwp_style_config.json");
+                if (!string.Equals(options.HwpStyleConfigPath, expected, StringComparison.OrdinalIgnoreCase) || !File.Exists(expected))
+                    throw new InvalidOperationException("Self-check failed: normalized style config emission");
+                string arguments = BuildHwpWriterArguments("writer.py", options, "output.hwpx", "writer_report.json", "render_plan.json");
+                if (arguments.IndexOf(" --style-config " + Quote(expected), StringComparison.Ordinal) < 0)
+                    throw new InvalidOperationException("Self-check failed: --style-config forwarding");
+            }
+            finally
+            {
+                try { Directory.Delete(directory, true); } catch { }
+            }
+        }
+
         public static string TryGenerateDraft(string workbookPath, Action<string> log)
         {
             try
@@ -5371,10 +5426,7 @@ namespace ReportAutomationLauncher
                     return;
                 }
 
-                Dictionary<string, object> config = options.HwpStyleConfig ?? HwpStylePresetStore.DefaultConfig();
-                options.HwpStyleConfigPath = Path.Combine(Path.GetDirectoryName(options.LastReportPackagePath), "hwp_style_config.json");
-                HwpStylePresetStore.WriteConfig(options.HwpStyleConfigPath, config);
-                options.HwpStylePresetName = Convert.ToString(config["preset_name"]);
+                PrepareHwpStyleConfig(options);
                 log("HWP 서식 설정 저장: " + options.HwpStyleConfigPath);
 
                 string directory = Path.GetDirectoryName(options.LastGeneratedWorkbookPath);
@@ -5391,19 +5443,7 @@ namespace ReportAutomationLauncher
 
                 var startInfo = new ProcessStartInfo();
                 startInfo.FileName = pythonPath;
-                startInfo.Arguments = Quote(toolPath) +
-                                      " --package " + Quote(options.LastReportPackagePath) +
-                                      " --preflight " + Quote(options.LastPreflightReportPath) +
-                                      " --template " + Quote(options.HwpTemplatePath) +
-                                      " --output " + Quote(outputPath) +
-                                      " --visible " + Quote(options.HwpVisible ? "true" : "false") +
-                                     " --report-output " + Quote(reportPath) +
-                                     " --render-plan-output " + Quote(renderPlanPath) +
-                                     " --max-sections " + Quote(options.HwpMaxSections.ToString()) +
-                                     " --dispatch-mode " + Quote(options.HwpDispatchMode) +
-                                     " --style-config " + Quote(options.HwpStyleConfigPath) +
-                                     OptionalArgument(" --table-style-profile ", options.HwpTableStyleProfilePath) +
-                                     (options.HwpKeepOpenOnError ? " --keep-open-on-error" : "");
+                startInfo.Arguments = BuildHwpWriterArguments(toolPath, options, outputPath, reportPath, renderPlanPath);
                 startInfo.UseShellExecute = false;
                 startInfo.CreateNoWindow = true;
                 startInfo.RedirectStandardOutput = true;
@@ -5450,6 +5490,31 @@ namespace ReportAutomationLauncher
             {
                 log("HWPX 생성 실패: " + ex.Message);
             }
+        }
+
+        private static void PrepareHwpStyleConfig(LauncherOptions options)
+        {
+            Dictionary<string, object> config = options.HwpStyleConfig ?? HwpStylePresetStore.DefaultConfig();
+            options.HwpStyleConfigPath = Path.Combine(Path.GetDirectoryName(options.LastReportPackagePath), "hwp_style_config.json");
+            HwpStylePresetStore.WriteConfig(options.HwpStyleConfigPath, config);
+            options.HwpStylePresetName = Convert.ToString(config["preset_name"]);
+        }
+
+        private static string BuildHwpWriterArguments(string toolPath, LauncherOptions options, string outputPath, string reportPath, string renderPlanPath)
+        {
+            return Quote(toolPath) +
+                   " --package " + Quote(options.LastReportPackagePath) +
+                   " --preflight " + Quote(options.LastPreflightReportPath) +
+                   " --template " + Quote(options.HwpTemplatePath) +
+                   " --output " + Quote(outputPath) +
+                   " --visible " + Quote(options.HwpVisible ? "true" : "false") +
+                   " --report-output " + Quote(reportPath) +
+                   " --render-plan-output " + Quote(renderPlanPath) +
+                   " --max-sections " + Quote(options.HwpMaxSections.ToString()) +
+                   " --dispatch-mode " + Quote(options.HwpDispatchMode) +
+                   " --style-config " + Quote(options.HwpStyleConfigPath) +
+                   OptionalArgument(" --table-style-profile ", options.HwpTableStyleProfilePath) +
+                   (options.HwpKeepOpenOnError ? " --keep-open-on-error" : "");
         }
 
         public static string TryRunHwpEnvironmentDiagnostics(LauncherOptions options, string outputReportPath, Action<string> log)
