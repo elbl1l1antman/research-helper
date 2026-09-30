@@ -198,6 +198,8 @@ def _bullet_for_para(bullets: ET.Element, para_pr: ET.Element, bullet_char: str)
             },
         )
     bullet.attrib.update({"char": bullet_char, "useImage": "0"})
+    for para_head in (node for node in list(bullet) if _local_name(node.tag) == "paraHead"):
+        para_head.attrib["numFormat"] = "DIGIT"
     bullets.attrib["itemCnt"] = str(len(list(bullets)))
     return int(bullet.attrib["id"])
 

@@ -203,6 +203,30 @@ class HwpxStyleRegistryTests(unittest.TestCase):
                 self.assertEqual(font_ref.attrib["hangul"], str(expected_id))
                 self.assertEqual(font_ref.attrib["latin"], str(expected_id))
 
+    def test_normalizes_reused_bullet_num_format(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp = Path(temp_dir)
+            template = temp / "template.hwpx"
+            seeded = temp / "seeded.hwpx"
+            legacy = temp / "legacy-char.hwpx"
+            output = temp / "working.hwpx"
+            write_fixture(template)
+            register_named_styles(template, seeded, DEFAULT_HWP_STYLE_CONFIG)
+
+            with zipfile.ZipFile(seeded) as archive:
+                root = ET.fromstring(archive.read("Contents/header.xml"))
+            para_head = next(node for node in root.iter() if local_name(node.tag) == "paraHead")
+            para_head.attrib["numFormat"] = "CHAR"
+            write_fixture(legacy, ET.tostring(root, encoding="utf-8", xml_declaration=True))
+
+            register_named_styles(legacy, output, DEFAULT_HWP_STYLE_CONFIG)
+
+            with zipfile.ZipFile(output) as archive:
+                output_root = ET.fromstring(archive.read("Contents/header.xml"))
+            para_heads = [node for node in output_root.iter() if local_name(node.tag) == "paraHead"]
+            self.assertEqual(len(para_heads), 1)
+            self.assertEqual(para_heads[0].attrib["numFormat"], "DIGIT")
+
     def test_rejects_missing_or_invalid_header(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             temp = Path(temp_dir)
