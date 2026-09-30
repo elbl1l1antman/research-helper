@@ -129,6 +129,38 @@ class FakeWorkbook:
         return FakeWorkbook.Sheet()
 
 
+def insert_fake_clipboard_table(table):
+    hwp = FakeHwp()
+    hwp.LastCtrl = None
+    hwp.EngineProperties = SimpleNamespace(SetItem=lambda *_args: None)
+    original_run = hwp.HAction.Run
+
+    def run(action):
+        result = original_run(action)
+        if action == "Paste":
+            hwp.LastCtrl = FakeTableControl()
+        return result
+
+    hwp.HAction.Run = run
+    report = {
+        "warnings": [],
+        "style_application_counts": {},
+        "table_results": [],
+        "tables_written": 0,
+    }
+    with patch("report_automation_engine.hwp_com_writer.time.sleep"):
+        inserted = insert_clipboard_table(
+            hwp,
+            FakeWorkbook(),
+            table,
+            report,
+            None,
+            STYLE_INDEXES,
+            DEFAULT_HWP_STYLE_CONFIG,
+        )
+    return hwp, report, inserted
+
+
 class HwpComWriterStyleTests(unittest.TestCase):
     def test_apply_named_style_uses_style_action_and_counts(self):
         hwp = FakeHwp()
@@ -197,24 +229,6 @@ class HwpComWriterStyleTests(unittest.TestCase):
         self.assertIn(("run", "TableCellAlignLeftCenter"), hwp.events)
 
     def test_clipboard_table_replaces_each_cell_after_applying_style(self):
-        hwp = FakeHwp()
-        hwp.LastCtrl = None
-        hwp.EngineProperties = SimpleNamespace(SetItem=lambda *_args: None)
-        original_run = hwp.HAction.Run
-
-        def run(action):
-            result = original_run(action)
-            if action == "Paste":
-                hwp.LastCtrl = FakeTableControl()
-            return result
-
-        hwp.HAction.Run = run
-        report = {
-            "warnings": [],
-            "style_application_counts": {},
-            "table_results": [],
-            "tables_written": 0,
-        }
         table = {
             "table_key": "T001",
             "cell_contract": True,
@@ -229,18 +243,8 @@ class HwpComWriterStyleTests(unittest.TestCase):
             ]],
         }
 
-        with patch("report_automation_engine.hwp_com_writer.time.sleep"):
-            self.assertTrue(
-                insert_clipboard_table(
-                    hwp,
-                    FakeWorkbook(),
-                    table,
-                    report,
-                    None,
-                    STYLE_INDEXES,
-                    DEFAULT_HWP_STYLE_CONFIG,
-                )
-            )
+        hwp, _report, inserted = insert_fake_clipboard_table(table)
+        self.assertTrue(inserted)
 
         self.assertEqual(
             [event for event in hwp.events if event[0] in {"style", "text"}],
@@ -251,6 +255,31 @@ class HwpComWriterStyleTests(unittest.TestCase):
             ],
         )
         self.assertEqual(sum(event == ("run", "Delete") for event in hwp.events), 3)
+
+    def test_clipboard_table_skips_covered_merged_slots(self):
+        table = {
+            "table_key": "T001",
+            "cell_contract": True,
+            "source_sheet": "Sheet1",
+            "source_range": "A1:C1",
+            "row_count": 1,
+            "col_count": 3,
+            "matrix": [[
+                {"display_text": "병합 배너", "role": "banner_horizontal", "colspan": 2},
+                {"display_text": "", "role": "blank", "covered_by": "A1"},
+                {"display_text": "다음 실제 셀", "role": "value"},
+            ]],
+        }
+
+        hwp, _report, inserted = insert_fake_clipboard_table(table)
+
+        self.assertTrue(inserted)
+        self.assertEqual(
+            [event for event in hwp.events if event[0] in {"style", "text"}],
+            [("style", 13), ("text", "병합 배너"), ("style", 14), ("text", "다음 실제 셀")],
+        )
+        self.assertEqual(sum(event == ("run", "Delete") for event in hwp.events), 2)
+        self.assertEqual(sum(event == ("run", "TableRightCell") for event in hwp.events), 1)
 
     def test_temporary_files_follow_hwp_lifecycle(self):
         cases = (

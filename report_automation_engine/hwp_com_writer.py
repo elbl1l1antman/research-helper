@@ -1326,26 +1326,37 @@ def apply_table_matrix_styles(
     run_action(hwp, "TableColBegin", report, "style")
     for _ in range(len(rows)):
         run_action(hwp, "TableUpperCell", report, "style")
+    matrix = table.get("matrix") or []
+    cells = []
     for row_index, row in enumerate(rows):
         for col_index, value in enumerate(row):
-            style_name = style_name_for_cell_role(table_cell_role(table, row_index, col_index))
-            run_action(hwp, "TableCellBlock", report, "style")
-            if not run_action(hwp, "Delete", report, "style"):
-                raise HwpWriterError("style", "Delete", "붙여넣은 표 셀 내용을 지우지 못했습니다.")
-            apply_named_style(hwp, require_style_index(style_indexes, style_name), report, style_name)
-            insert_text(hwp, value, report)
-            apply_cell_appearance(
-                hwp,
-                style_config,
-                style_name,
-                row_index,
-                col_index,
-                len(rows),
-                len(row),
-                report,
+            cell = (
+                matrix[row_index][col_index]
+                if row_index < len(matrix) and col_index < len(matrix[row_index])
+                else {}
             )
-            if not (row_index == len(rows) - 1 and col_index == len(row) - 1):
-                run_action(hwp, "TableRightCell", report, "style")
+            if cell.get("covered_by"):
+                continue
+            cells.append((row_index, col_index, value, len(row)))
+    for position, (row_index, col_index, value, col_count) in enumerate(cells):
+        style_name = style_name_for_cell_role(table_cell_role(table, row_index, col_index))
+        run_action(hwp, "TableCellBlock", report, "style")
+        if not run_action(hwp, "Delete", report, "style"):
+            raise HwpWriterError("style", "Delete", "붙여넣은 표 셀 내용을 지우지 못했습니다.")
+        apply_named_style(hwp, require_style_index(style_indexes, style_name), report, style_name)
+        insert_text(hwp, value, report)
+        apply_cell_appearance(
+            hwp,
+            style_config,
+            style_name,
+            row_index,
+            col_index,
+            len(rows),
+            col_count,
+            report,
+        )
+        if position < len(cells) - 1:
+            run_action(hwp, "TableRightCell", report, "style")
 
 
 def table_result(table: Dict[str, Any], insert_mode: str, ctrl_id: str, style_status: str, fallback_reason: str) -> Dict[str, Any]:
