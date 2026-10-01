@@ -519,7 +519,7 @@ def write_body(
             apply_named_style(hwp, require_style_index(style_indexes, "보고서 본문1"), report, "보고서 본문1")
         insert_text(hwp, title, report)
         run_action(hwp, "BreakPara", report, "body")
-        insert_narrative_blocks(hwp, section, report, style_indexes)
+        insert_narrative_blocks(hwp, section, report, style_indexes, style_config)
         run_action(hwp, "BreakPara", report, "body")
 
         table = tables_by_key.get(key)
@@ -577,13 +577,15 @@ def insert_narrative_blocks(
     section: Dict[str, Any],
     report: Dict[str, Any],
     style_indexes=None,
+    style_config: Dict[str, Any] | None = None,
 ) -> None:
     blocks = section.get("narrative_blocks") or split_narrative_blocks(str(section.get("narrative_final") or ""))
+    bullet = style_config["paragraph_styles"]["보고서 본문2"]["bullet"] if style_config is not None else "-"
     for block in blocks:
         text = str(block.get("text") or "")
         style_name = str(block.get("style") or "보고서 본문1")
-        if style_name == "보고서 본문2" and (text.startswith("- ") or text.startswith("-\t")):
-            text = text[1:].lstrip()
+        if style_name == "보고서 본문2" and bullet and text.startswith((bullet + " ", bullet + "\t")):
+            text = text[len(bullet):].lstrip(" \t")
         if style_indexes is not None:
             apply_named_style(hwp, require_style_index(style_indexes, style_name), report, style_name)
         insert_text(hwp, text, report)
@@ -678,6 +680,7 @@ def insert_hwp_table(
             pass
         if not hwp.HAction.Execute("TableCreate", params.HSet):
             return False
+        control = hwp.ParentCtrl
         for row_idx, row in enumerate(rows):
             for col_idx, value in enumerate(row):
                 style_name = style_name_for_cell_role(table_cell_role(table or {}, row_idx, col_idx))
@@ -698,10 +701,8 @@ def insert_hwp_table(
                 if not (row_idx == len(rows) - 1 and col_idx == len(row) - 1):
                     run_action(hwp, "TableRightCell", report, "table")
         apply_table_merges(hwp, merged_ranges or [], len(rows), report)
+        leave_hwp_table(hwp, control, report)
         report["tables_written"] += 1
-        run_action(hwp, "MoveDocEnd", report, "table")
-        if is_hwp_table_control(getattr(hwp, "ParentCtrl", None)):
-            raise RuntimeError("표 생성 후 커서가 표 밖으로 이동하지 못했습니다.")
         return True
     except HwpWriterError:
         raise
@@ -1092,6 +1093,8 @@ def apply_cell_appearance(
     row_count: int,
     col_count: int,
     report: Dict[str, Any],
+    rowspan: int = 1,
+    colspan: int = 1,
 ) -> None:
     cell_style = config["table_cell_styles"][style_name]
     border = config["table_border"]
@@ -1105,13 +1108,14 @@ def apply_cell_appearance(
         hwp.HAction.GetDefault("CellBorderFill", params.HSet)
         set_parameter_item(params, "ApplyTo", 0)
         color = hwp_color(hwp, border["color"])
+        solid = hwp.HwpLineType("Solid")
         for side, width in {
             "Left": outer if col_index == 0 else inner,
-            "Right": outer if col_index == col_count - 1 else inner,
+            "Right": outer if col_index + colspan == col_count else inner,
             "Top": outer if row_index == 0 else inner,
-            "Bottom": outer if row_index == row_count - 1 else inner,
+            "Bottom": outer if row_index + rowspan == row_count else inner,
         }.items():
-            set_parameter_item(params, f"BorderType{side}", 0)
+            set_parameter_item(params, f"BorderType{side}", solid)
             set_parameter_item(params, f"BorderWidth{side}", width)
             set_parameter_item(params, f"BorderColor{side}", color)
         if not hwp.HAction.Execute("CellBorderFill", params.HSet):
@@ -1218,6 +1222,7 @@ def insert_clipboard_table(
     if workbook is None or not table.get("cell_contract"):
         report["clipboard_failure"] = "Excel source unavailable" if table.get("cell_contract") else "legacy table contract"
         return False
+    editing_started = False
     try:
         worksheet = workbook.Worksheets(str(table.get("source_sheet") or ""))
         source_range = worksheet.Range(str(table.get("source_range") or ""))
@@ -1241,24 +1246,42 @@ def insert_clipboard_table(
         if not is_hwp_table_control(control):
             control = find_hwp_table_control(hwp)
         if not is_hwp_table_control(control):
-            run_action(hwp, "Undo", report, "table")
+            rollback_clipboard_paste(hwp, report)
             detail = "Paste returned False; " if not paste_result else ""
             raise RuntimeError(detail + "붙여넣기 결과가 HWP 표 객체가 아닙니다.")
         if same_hwp_control(previous_control, control):
-            run_action(hwp, "Undo", report, "table")
+            rollback_clipboard_paste(hwp, report)
             raise RuntimeError("붙여넣기 전후 HWP 컨트롤이 같아 새 표 생성을 확인할 수 없습니다.")
 
         rows, cols = hwp_table_dimensions(control)
         expected_rows = int(table.get("row_count") or 0)
         expected_cols = int(table.get("col_count") or 0)
         if rows and cols and (rows != expected_rows or cols != expected_cols):
-            run_action(hwp, "Undo", report, "table")
+            rollback_clipboard_paste(hwp, report)
             raise RuntimeError(f"붙여넣기 표 크기가 다릅니다: {rows}x{cols}, expected {expected_rows}x{expected_cols}")
 
+        # Paste leaves the cursor outside the object; select its anchor before editing cells.
+        try:
+            entered = (
+                hwp.SetPosBySet(control.GetAnchorPos(0))
+                and hwp.FindCtrl()
+                and run_action(hwp, "ShapeObjTableSelCell", report, "table")
+            )
+            entered = entered and same_hwp_control(getattr(hwp, "ParentCtrl", None), control)
+        except Exception as exc:
+            rollback_clipboard_paste(hwp, report)
+            raise RuntimeError(f"붙여넣은 표 셀 진입 API 실패: {exc}") from exc
+        if not entered:
+            rollback_clipboard_paste(hwp, report)
+            raise RuntimeError("붙여넣은 표 셀에 진입하지 못했습니다.")
+        run_action(hwp, "Cancel", report, "table")
+
+        editing_started = True
         if style_indexes is not None and style_config is not None:
             apply_table_matrix_styles(hwp, table, style_indexes, style_config, report)
         else:
             apply_table_style_after_paste(hwp, profile, report)
+        leave_hwp_table(hwp, control, report)
         report["tables_written"] += 1
         report["table_results"].append(table_result(table, "clipboard", "tbl", "applied", ""))
         report.pop("clipboard_failure", None)
@@ -1266,9 +1289,30 @@ def insert_clipboard_table(
     except HwpWriterError:
         raise
     except Exception as exc:
+        if editing_started:
+            raise HwpWriterError("style", str(report.get("action") or "clipboard"), f"붙여넣은 표 편집 중 실패하여 중복 표 생성을 차단합니다: {exc}") from exc
         report["clipboard_failure"] = str(exc)
         report["warnings"].append(f"Excel clipboard 표 삽입 실패, contract fallback을 사용합니다: {table.get('table_key')}: {exc}")
         return False
+
+
+def rollback_clipboard_paste(hwp, report: Dict[str, Any]) -> None:
+    run_action(hwp, "Cancel", report, "table")
+    if not run_action(hwp, "Undo", report, "table"):
+        raise HwpWriterError("table", "Undo", "붙여넣은 개체를 되돌리지 못해 계약 기반 표 생성을 중단합니다.")
+
+
+def leave_hwp_table(hwp, control, report: Dict[str, Any]) -> None:
+    # Return after this table, not after template footers/QA at the document end.
+    try:
+        run_action(hwp, "Cancel", report, "table")
+        if not is_hwp_table_control(control) or not hwp.SetPosBySet(control.GetAnchorPos(0)):
+            raise RuntimeError("표 앵커를 찾지 못했습니다.")
+        list_id, paragraph, offset = hwp.GetPos()
+        if not hwp.SetPos(list_id, paragraph, offset + 1) or is_hwp_table_control(hwp.ParentCtrl):
+            raise RuntimeError("표 뒤 본문으로 이동하지 못했습니다.")
+    except Exception as exc:
+        raise HwpWriterError("table", "SetPos", f"표 뒤 삽입 위치 복귀 실패: {exc}") from exc
 
 
 def disable_picture_paste(hwp, report: Dict[str, Any]) -> None:
@@ -1337,11 +1381,18 @@ def apply_table_matrix_styles(
             )
             if cell.get("covered_by"):
                 continue
-            cells.append((row_index, col_index, value, len(row)))
-    for position, (row_index, col_index, value, col_count) in enumerate(cells):
+            cells.append((row_index, col_index, value, len(row), int(cell.get("rowspan") or 1), int(cell.get("colspan") or 1)))
+    visited_lists = set()
+    for position, (row_index, col_index, value, col_count, rowspan, colspan) in enumerate(cells):
+        visited_lists.add(int(hwp.GetPos()[0]))
         style_name = style_name_for_cell_role(table_cell_role(table, row_index, col_index))
-        run_action(hwp, "TableCellBlock", report, "style")
-        if not run_action(hwp, "Delete", report, "style"):
+        # Select the cell's text list, not the cell block (Delete on a block is not text deletion).
+        if not run_action(hwp, "MoveListBegin", report, "style"):
+            raise HwpWriterError("style", "MoveListBegin", "붙여넣은 표 셀 텍스트 시작 위치를 찾지 못했습니다.")
+        text_start = tuple(hwp.GetPos())
+        if not run_action(hwp, "MoveSelListEnd", report, "style"):
+            raise HwpWriterError("style", "MoveSelListEnd", "붙여넣은 표 셀 텍스트를 선택하지 못했습니다.")
+        if tuple(hwp.GetPos()) != text_start and not run_action(hwp, "Delete", report, "style"):
             raise HwpWriterError("style", "Delete", "붙여넣은 표 셀 내용을 지우지 못했습니다.")
         apply_named_style(hwp, require_style_index(style_indexes, style_name), report, style_name)
         insert_text(hwp, value, report)
@@ -1354,9 +1405,20 @@ def apply_table_matrix_styles(
             len(rows),
             col_count,
             report,
+            rowspan=rowspan,
+            colspan=colspan,
         )
         if position < len(cells) - 1:
-            run_action(hwp, "TableRightCell", report, "style")
+            # Vertical merges can revisit the same cell list on the next logical row.
+            for _ in range(len(rows) * max(len(row) for row in rows)):
+                if not run_action(hwp, "TableRightCell", report, "style"):
+                    raise HwpWriterError("style", "TableRightCell", "붙여넣은 표의 다음 셀로 이동하지 못했습니다.")
+                if not is_hwp_table_control(getattr(hwp, "ParentCtrl", None)):
+                    raise HwpWriterError("style", "TableRightCell", "셀 이동 중 표 밖으로 나가 서식 적용을 중단합니다.")
+                if int(hwp.GetPos()[0]) not in visited_lists:
+                    break
+            else:
+                raise HwpWriterError("style", "TableRightCell", "병합 셀 이동이 반복되어 표 서식 적용을 중단합니다.")
 
 
 def table_result(table: Dict[str, Any], insert_mode: str, ctrl_id: str, style_status: str, fallback_reason: str) -> Dict[str, Any]:

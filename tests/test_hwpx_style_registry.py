@@ -74,6 +74,78 @@ def write_fixture(path: Path, header: bytes | None = HEADER_XML.encode("utf-8"))
 
 
 class HwpxStyleRegistryTests(unittest.TestCase):
+    def test_duplicate_style_references_follow_survivor_before_id_reuse(self) -> None:
+        root = ET.fromstring(HEADER_XML)
+        styles = child(child(root, "refList"), "styles")
+        styles[0].attrib["nextStyleIDRef"] = "10"
+        for style_id in ("9", "10"):
+            style = copy.deepcopy(styles[0])
+            style.attrib.update({"id": style_id, "name": "보고서 본문1"})
+            styles.append(style)
+        section = f'<hp:sec xmlns:hp="{HP}"><hp:p styleIDRef="10"/><hp:p styleIDRef="0"/></hp:sec>'.encode()
+        with tempfile.TemporaryDirectory() as temp_dir:
+            template = Path(temp_dir) / "template.hwpx"
+            output = Path(temp_dir) / "working.hwpx"
+            write_fixture(template, ET.tostring(root, encoding="utf-8"))
+            with zipfile.ZipFile(template, "a") as archive:
+                archive.writestr("Contents/section1.xml", section)
+                archive.writestr("Contents/section2.xml", section)
+                archive.writestr("Contents/untouched.xml", b'<keep attr="original" /> <!-- retain bytes -->')
+            source_bytes = template.read_bytes()
+
+            register_named_styles(template, output, DEFAULT_HWP_STYLE_CONFIG)
+
+            self.assertEqual(template.read_bytes(), source_bytes)
+            with zipfile.ZipFile(template) as source, zipfile.ZipFile(output) as archive:
+                self.assertEqual(archive.namelist(), source.namelist())
+                for info in source.infolist():
+                    self.assertEqual(archive.getinfo(info.filename).compress_type, info.compress_type)
+                    self.assertEqual(archive.getinfo(info.filename).date_time, info.date_time)
+                    if info.filename not in {"Contents/header.xml", "Contents/section1.xml", "Contents/section2.xml"}:
+                        self.assertEqual(archive.read(info.filename), source.read(info.filename))
+                for member in ("Contents/section1.xml", "Contents/section2.xml"):
+                    paragraphs = list(ET.fromstring(archive.read(member)))
+                    self.assertEqual([node.attrib["styleIDRef"] for node in paragraphs], ["9", "0"])
+                updated_styles = child(child(ET.fromstring(archive.read("Contents/header.xml")), "refList"), "styles")
+                normal = next(node for node in updated_styles if node.attrib["id"] == "0")
+                self.assertEqual(normal.attrib["nextStyleIDRef"], "9")
+                reused = next(node for node in updated_styles if node.attrib["id"] == "10")
+                self.assertEqual(reused.attrib["name"], "보고서 본문2")
+
+    def test_cloned_body2_does_not_change_shared_template_bullet(self) -> None:
+        root = ET.fromstring(HEADER_XML)
+        ref_list = child(root, "refList")
+        para_properties = child(ref_list, "paraProperties")
+        child(para_properties[0], "heading").attrib.update({"type": "BULLET", "idRef": "1"})
+        unrelated = copy.deepcopy(para_properties[0])
+        unrelated.attrib["id"] = "7"
+        para_properties.append(unrelated)
+        bullets = ET.Element(f"{{{HH}}}bullets", {"itemCnt": "1"})
+        bullet = ET.SubElement(bullets, f"{{{HH}}}bullet", {"id": "1", "char": "*", "useImage": "0"})
+        ET.SubElement(bullet, f"{{{HH}}}paraHead", {"numFormat": "CHAR", "textOffset": "75"})
+        original_bullet = ET.tostring(bullet)
+        ref_list.insert(list(ref_list).index(para_properties), bullets)
+        with tempfile.TemporaryDirectory() as temp_dir:
+            template = Path(temp_dir) / "template.hwpx"
+            output = Path(temp_dir) / "working.hwpx"
+            write_fixture(template, ET.tostring(root, encoding="utf-8"))
+            source_bytes = template.read_bytes()
+
+            register_named_styles(template, output, DEFAULT_HWP_STYLE_CONFIG)
+
+            self.assertEqual(template.read_bytes(), source_bytes)
+            with zipfile.ZipFile(output) as archive:
+                updated = child(ET.fromstring(archive.read("Contents/header.xml")), "refList")
+            updated_bullets = {node.attrib["id"]: node for node in child(updated, "bullets")}
+            self.assertEqual(ET.tostring(updated_bullets["1"]), original_bullet)
+            paras = {node.attrib["id"]: node for node in child(updated, "paraProperties")}
+            self.assertEqual(child(paras["7"], "heading").attrib["idRef"], "1")
+            body2 = next(node for node in child(updated, "styles") if node.attrib["name"] == "보고서 본문2")
+            bullet_id = child(paras[body2.attrib["paraPrIDRef"]], "heading").attrib["idRef"]
+            self.assertNotEqual(bullet_id, "1")
+            self.assertEqual(updated_bullets[bullet_id].attrib["char"], "-")
+            self.assertEqual(child(updated_bullets[bullet_id], "paraHead").attrib["textOffset"], "75")
+
     def test_registers_five_styles_and_preserves_template(self) -> None:
         config = copy.deepcopy(DEFAULT_HWP_STYLE_CONFIG)
         with tempfile.TemporaryDirectory() as temp_dir:

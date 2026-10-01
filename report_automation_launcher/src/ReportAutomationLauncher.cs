@@ -129,17 +129,21 @@ namespace ReportAutomationLauncher
         internal static readonly string[] TableStyleNames = { "표보기", "표배너", "표숫자" };
         private readonly string path;
         private readonly JavaScriptSerializer serializer = new JavaScriptSerializer();
+        private readonly Action<string> recoveryLog;
 
-        internal HwpStylePresetStore(string storagePath = null)
+        internal HwpStylePresetStore(string storagePath = null, Action<string> recoveryLog = null)
         {
             path = storagePath ?? Path.Combine(
                 Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
                 "ResearchHelper",
                 "hwp_style_presets.json");
             serializer.MaxJsonLength = int.MaxValue;
+            this.recoveryLog = recoveryLog;
         }
 
         internal string StoragePath { get { return path; } }
+        internal string RecoveryWarning { get; private set; }
+        internal string RecoveryBackupPath { get; private set; }
 
         internal List<Dictionary<string, object>> LoadAll()
         {
@@ -298,8 +302,10 @@ namespace ReportAutomationLauncher
             try
             {
                 string file = Path.Combine(directory, "presets.json");
-                var store = new HwpStylePresetStore(file);
+                var warnings = new List<string>();
+                var store = new HwpStylePresetStore(file, warnings.Add);
                 Assert(store.LoadAll().Count == 1, "default loading");
+                Assert(warnings.Count == 0 && string.IsNullOrWhiteSpace(store.RecoveryWarning), "no warning for missing store");
                 for (int i = 1; i <= 3; i++)
                 {
                     Dictionary<string, object> preset = DefaultConfig();
@@ -326,10 +332,21 @@ namespace ReportAutomationLauncher
                 File.WriteAllText(file, checkSerializer.Serialize(partial), System.Text.Encoding.UTF8);
                 Assert(store.LoadAll().Any(item => Convert.ToString(item["preset_name"]) == "사용자 1"), "valid preset recovery");
                 Assert(Directory.GetFiles(directory, "presets.json.corrupt.*.bak").Length == 1, "partial-corrupt backup");
+                string partialBackup = store.RecoveryBackupPath;
+                Assert(File.Exists(partialBackup) && store.RecoveryWarning.Contains(partialBackup), "partial recovery warning contains backup path");
+                Assert(warnings.Count == 1 && warnings[0] == store.RecoveryWarning, "partial recovery logged");
+                store.LoadAll();
+                Assert(warnings.Count == 1, "recovered store does not repeat warning");
 
                 File.WriteAllText(file, "{broken", System.Text.Encoding.UTF8);
                 Assert(store.LoadAll().Count == 1, "corrupt recovery");
                 Assert(Directory.GetFiles(directory, "presets.json.corrupt.*.bak").Length == 2, "corrupt backup");
+                string corruptBackup = store.RecoveryBackupPath;
+                Assert(corruptBackup != partialBackup && File.Exists(corruptBackup) && store.RecoveryWarning.Contains(corruptBackup), "corrupt recovery warning contains backup path");
+                Assert(warnings.Count == 2 && warnings[1] == store.RecoveryWarning, "corrupt recovery logged");
+                File.WriteAllText(file, "{broken", System.Text.Encoding.UTF8);
+                var quietStore = new HwpStylePresetStore(file);
+                Assert(quietStore.LoadAll().Count == 1 && !string.IsNullOrWhiteSpace(quietStore.RecoveryWarning), "recovery without interactive logging");
                 AssertThrows(delegate { store.Delete(BuiltInName); }, "immutable default");
 
                 Dictionary<string, object> invalidText = DefaultConfig();
@@ -386,8 +403,10 @@ namespace ReportAutomationLauncher
             }
             if (damaged)
             {
-                BackupCorrupt();
+                RecoveryBackupPath = BackupCorrupt();
                 WriteUsers(valid);
+                RecoveryWarning = "HWP 서식 프리셋 파일의 손상된 항목을 복구했습니다. 백업: " + RecoveryBackupPath;
+                if (recoveryLog != null) recoveryLog(RecoveryWarning);
             }
             return valid;
         }
@@ -398,11 +417,11 @@ namespace ReportAutomationLauncher
             AtomicWrite(path, serializer.Serialize(root));
         }
 
-        private void BackupCorrupt()
+        private string BackupCorrupt()
         {
-            if (!File.Exists(path)) return;
             string backup = path + ".corrupt." + DateTime.Now.ToString("yyyyMMddHHmmssfff") + "." + Guid.NewGuid().ToString("N") + ".bak";
             File.Copy(path, backup, false);
+            return backup;
         }
 
         private static void AtomicWrite(string outputPath, string json)
@@ -1100,7 +1119,7 @@ namespace ReportAutomationLauncher
 
     internal sealed class MainForm : Form
     {
-        private readonly HwpStylePresetStore hwpStylePresetStore = new HwpStylePresetStore();
+        private readonly HwpStylePresetStore hwpStylePresetStore;
         private readonly TextBox workbookPathText = new TextBox();
         private readonly TextBox addinPathText = new TextBox();
         private readonly ComboBox outputTypeCombo = new ComboBox();
@@ -1217,6 +1236,7 @@ namespace ReportAutomationLauncher
 
         public MainForm()
         {
+            hwpStylePresetStore = new HwpStylePresetStore(recoveryLog: Log);
             Text = "보고서 자동화 Alpha";
             MinimumSize = new Size(980, 720);
             Size = new Size(1120, 820);
@@ -4868,6 +4888,10 @@ namespace ReportAutomationLauncher
             options.HwpKeepOpenOnError = flags.Contains("hwp-keep-open-on-error");
             options.HwpMaxSections = GetInt(values, "hwp-max-sections", 1);
             options.HwpDispatchMode = Get(values, "hwp-dispatch-mode", "ensure_dispatch");
+            if (options.OutputType.IndexOf("HWP", StringComparison.OrdinalIgnoreCase) >= 0 && string.IsNullOrWhiteSpace(options.HwpStyleConfigPath))
+            {
+                options.HwpStyleConfig = new HwpStylePresetStore(recoveryLog: Console.Error.WriteLine).Get(options.HwpStylePresetName);
+            }
             options.Validate();
             return options;
         }

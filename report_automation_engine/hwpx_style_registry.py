@@ -8,7 +8,10 @@ from pathlib import Path
 from typing import Any, Dict
 from xml.etree import ElementTree as ET
 
-from .hwp_style_config import REQUIRED_STYLE_NAMES, validate_hwp_style_config
+try:
+    from .hwp_style_config import REQUIRED_STYLE_NAMES, validate_hwp_style_config
+except ImportError:
+    from hwp_style_config import REQUIRED_STYLE_NAMES, validate_hwp_style_config
 
 
 HH = "http://www.hancom.co.kr/hwpml/2011/head"
@@ -174,10 +177,21 @@ def _ensure_bullets(ref_list: ET.Element, para_properties: ET.Element) -> ET.Ele
     return bullets
 
 
-def _bullet_for_para(bullets: ET.Element, para_pr: ET.Element, bullet_char: str) -> int:
+def _bullet_for_para(bullets: ET.Element, para_properties: ET.Element, para_pr: ET.Element, bullet_char: str) -> int:
     headings = [node for node in para_pr.iter() if _local_name(node.tag) == "heading"]
     existing_id = next((node.attrib.get("idRef") for node in headings if node.attrib.get("type") == "BULLET"), None)
     bullet = next((node for node in list(bullets) if node.attrib.get("id") == existing_id), None)
+    if bullet is not None and any(
+        other is not para_pr and any(
+            _local_name(node.tag) == "heading" and node.attrib.get("type") == "BULLET"
+            and node.attrib.get("idRef") == existing_id
+            for node in other.iter()
+        )
+        for other in para_properties
+    ):
+        bullet = copy.deepcopy(bullet)
+        bullet.attrib["id"] = str(max(_next_id(bullets), 1))
+        bullets.append(bullet)
     if bullet is None:
         bullet_id = max(_next_id(bullets), 1)
         bullet = ET.SubElement(bullets, _tag("bullet"), {"id": str(bullet_id)})
@@ -204,7 +218,18 @@ def _bullet_for_para(bullets: ET.Element, para_pr: ET.Element, bullet_char: str)
     return int(bullet.attrib["id"])
 
 
-def _update_header(header: bytes, config: Dict[str, Any]) -> tuple[bytes, Dict[str, int]]:
+def _remap_style_references(root: ET.Element, remap: Dict[str, str]) -> bool:
+    changed = False
+    for node in root.iter():
+        for attribute in ("styleIDRef", "nextStyleIDRef"):
+            value = node.attrib.get(attribute)
+            if value in remap:
+                node.attrib[attribute] = remap[value]
+                changed = True
+    return changed
+
+
+def _update_header(header: bytes, config: Dict[str, Any], payloads: Dict[str, bytes]) -> tuple[bytes, Dict[str, int]]:
     try:
         root = ET.fromstring(header)
     except ET.ParseError as exc:
@@ -223,22 +248,34 @@ def _update_header(header: bytes, config: Dict[str, Any]) -> tuple[bytes, Dict[s
     families = list(dict.fromkeys(style_config[name]["font_family"] for name in REQUIRED_STYLE_NAMES))
     font_ids = _ensure_fonts(fontfaces, families)
 
-    seen_names = set()
+    seen_names = {}
+    remap = {}
     for style in list(styles):
         name = style.attrib.get("name")
         if name not in REQUIRED_STYLE_NAMES:
             continue
         if name in seen_names:
+            remap[style.attrib["id"]] = seen_names[name]
             styles.remove(style)
         else:
-            seen_names.add(name)
+            seen_names[name] = style.attrib["id"]
+
+    # Repair references before a deleted ID can be allocated to a different style.
+    if remap:
+        _remap_style_references(root, remap)
+        for member, payload in payloads.items():
+            if member == "Contents/header.xml" or not member.lower().endswith(".xml"):
+                continue
+            member_root = ET.fromstring(payload)
+            if _remap_style_references(member_root, remap):
+                payloads[member] = ET.tostring(member_root, encoding="utf-8", xml_declaration=True)
 
     for name in REQUIRED_STYLE_NAMES:
         settings = style_config[name]
         style = next((node for node in list(styles) if node.attrib.get("name") == name), None)
         char_pr = _property_for_style(char_properties, styles, style, "charPrIDRef")
         para_pr = _property_for_style(para_properties, styles, style, "paraPrIDRef")
-        bullet_id = _bullet_for_para(bullets, para_pr, settings["bullet"]) if settings["bullet"] else None
+        bullet_id = _bullet_for_para(bullets, para_properties, para_pr, settings["bullet"]) if settings["bullet"] else None
         _apply_char_style(char_pr, settings, font_ids[settings["font_family"]])
         _apply_para_style(para_pr, settings, bullet_id)
         if style is None:
@@ -283,7 +320,7 @@ def register_named_styles(template: Path, output: Path, config: Dict[str, Any]) 
         if "Contents/header.xml" not in source.namelist():
             raise ValueError("HWPX에 Contents/header.xml이 없습니다.")
         payloads = {info.filename: source.read(info.filename) for info in infos}
-    payloads["Contents/header.xml"], mapping = _update_header(payloads["Contents/header.xml"], normalized)
+    payloads["Contents/header.xml"], mapping = _update_header(payloads["Contents/header.xml"], normalized, payloads)
 
     output.parent.mkdir(parents=True, exist_ok=True)
     handle, temporary_name = tempfile.mkstemp(suffix=".hwpx", dir=output.parent)
