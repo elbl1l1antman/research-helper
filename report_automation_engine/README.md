@@ -19,10 +19,12 @@
   - Excel 산출 시트를 헤더명 기반으로 읽어 `report_package.json`과 `preflight_report.json`을 생성합니다.
   - HWPX/PPTX 문서 생성 전 문장, 표, 차트, QA, 템플릿 상태를 `ready`, `ready_with_warnings`, `blocked`로 검증합니다.
   - QA warning을 `normal_review_warning`, `improvement_needed`, `info` bucket으로 분류합니다.
+  - `narrative_final`을 보존하며 줄바꿈과 지정된 기존 연결 경계를 `narrative_blocks`로 분리합니다. 첫 블록은 `보고서 본문1`, 모든 후속 블록은 `보고서 본문2`입니다.
 
 - `report_table_matrix.py`
   - `report_package.json`의 삽입표 데이터를 HWPX writer가 사용할 행/열 matrix 계약으로 정규화합니다.
   - 셀 역할, 표시값, 원본 값, 정렬, style hint, table matrix QA를 함께 생성합니다.
+  - `display_text`만 정리하고 변경 전 표시문자와 제거 기호, 원본 셀 주소 QA를 남깁니다.
 
 - `document_writer.py`
   - `report_package.json`을 읽어 PPTX 초본을 생성합니다.
@@ -34,6 +36,13 @@
   - 실패 시 `hwp_writer_report.json`에 실패 단계, COM action, placeholder 상태, 경고를 기록합니다.
   - `--dry-run`, `--max-sections`, `--render-plan-output`으로 실제 아래한글 실행 전 삽입 계획을 확인할 수 있습니다.
   - `--table-style-profile`로 템플릿에서 인식한 표 서식 profile을 읽고, v1에서는 대표 글자 크기를 우선 적용합니다.
+  - `--style-config`로 이름 있는 본문/표 스타일과 셀 외형을 적용합니다. 기존 profile의 대표 글자 크기는 표 생성 전 설정이며 셀 글꼴·문단 속성은 이름 있는 스타일 설정으로 적용합니다.
+
+- `hwp_style_config.py`, `config/default_hwp_style_config.json`
+  - `schema_version: "1.0"`의 HWP 서식 JSON을 검증하고 기본 `기본 보고서` 서식을 제공합니다. 문장 패턴용 `default_style_schema.json`과는 별도입니다.
+
+- `hwpx_style_registry.py`
+  - 원본을 보존한 작업용 HWPX의 `Contents/header.xml`에 고정 스타일 5개를 등록/갱신합니다. 같은 이름을 중복 등록하지 않고 기존 필수 이름의 중복도 정리합니다.
 
 - `hwp_direct_writer.py`
   - `report_package.json`과 `preflight_report.json`을 읽어 HWPX zip 패키지 내부의 `{{BODY}}` placeholder를 최소 XML payload로 치환합니다.
@@ -194,6 +203,7 @@ python -m report_automation_engine.hwp_com_writer `
   --output "C:\path\report_draft.hwpx" `
   --render-plan-output "C:\path\hwp_render_plan.json" `
   --table-style-profile "C:\path\hwp_table_style_profile.json" `
+  --style-config "C:\path\hwp_style_config.json" `
   --max-sections 1 `
   --visible false
 ```
@@ -220,10 +230,44 @@ python -m report_automation_engine.hwp_table_mapping `
 - `--dry-run`을 사용하면 아래한글을 열지 않고 `hwp_render_plan.json`과 writer report만 생성합니다.
 - `--max-sections 1` 또는 `--max-sections 3`으로 알파 검증용 짧은 초본을 생성할 수 있습니다.
 - `--table-style-profile`을 지정하면 render plan과 writer report에 style source, 대표 글자 크기, 배경색/선 요약이 기록됩니다.
-- 템플릿 사본을 출력 경로에 만든 뒤 사본만 수정합니다.
+- `--style-config`를 생략하면 `config/default_hwp_style_config.json`을 사용합니다. 지정 파일의 검증 실패는 `stage=style`, `action=load_style_config`로 기록하고 중단합니다.
+- 임시 HWPX 작업 사본에 스타일을 등록한 뒤 COM으로 엽니다. HWP 템플릿은 COM으로 임시 HWPX를 저장한 뒤 같은 등록/재열기 흐름을 사용하며 원본은 수정하지 않습니다. 등록 실패도 생성 중단 사유입니다.
 - `{{BODY}}`를 찾지 못하면 생성하지 않고 writer report에 실패 사유를 남깁니다.
-- HWP 표 객체 생성을 우선 시도하고, COM action이 실패하면 탭 구분 텍스트 표로 대체합니다.
+- 셀 계약이 있으면 Excel 범위 clipboard 삽입을 먼저 시도합니다. 사용할 수 없거나 붙여넣기 검증이 실패하면 matrix 기반 `TableCreate`/셀 병합으로 전환합니다. 표 생성 실패 시 텍스트 표를 성공 산출물로 저장하지 않고 중단합니다.
+- clipboard로 붙인 셀도 계약의 `display_text`로 다시 채우고 역할별 스타일과 외형을 적용합니다. 병합에 가려진 `covered_by` 셀은 건너뜁니다.
 - 차트는 v1에서 직접 삽입하지 않고 `[차트 삽입 필요]` 문구로 표시합니다.
+
+## HWP 서식 계약과 표시문자
+
+필수 스타일 이름은 `보고서 본문1`, `보고서 본문2`, `표보기`, `표배너`, `표숫자`로 고정입니다. 기본 글꼴은 모두 `맑은 고딕`이며 정확한 기본값은 다음과 같습니다.
+
+| 스타일 | 크기/굵게 | 줄간격 | 왼쪽/첫 줄 들여쓰기 | 정렬 | 글머리표 |
+| --- | --- | --- | --- | --- | --- |
+| 보고서 본문1 | 10pt/아니오 | 160% | 0/0mm | left | 없음 |
+| 보고서 본문2 | 10pt/아니오 | 160% | 5/-5mm | left | `-` |
+| 표보기 | 8.5pt/아니오 | 130% | 0/0mm | left | 없음 |
+| 표배너 | 8.5pt/예 | 130% | 0/0mm | center | 없음 |
+| 표숫자 | 8.5pt/아니오 | 130% | 0/0mm | center | 없음 |
+
+셀 역할 `banner_horizontal`, `base`, `header`, `title`은 `표배너`, `value`는 `표숫자`, 나머지(`blank`, `unknown` 포함)는 `표보기`로 매핑합니다. `table_cell_styles`의 기본 배경은 `표배너=E7E7E7`, 나머지 `FFFFFF`, 세로 정렬은 모두 `center`입니다. `table_border`는 내부선 0.12mm, 외곽선 0.4mm, 색 `000000`이며 두께는 한글 지원 값 중 가장 가까운 값으로 변환합니다. 배경·선·세로 정렬은 문단 스타일 외에 COM 셀 action으로 적용합니다.
+
+JSON 검증 범위는 글자 크기 6~30pt, 줄간격 80~300%, 두 들여쓰기 -30~100mm, 선 두께 0.1~5mm입니다. 색은 `#` 없는 6자리 RGB hex, 가로 정렬은 `left/center/right/justify`, 세로 정렬은 `top/center/bottom`입니다. 필수 스타일 누락/추가나 잘못된 값은 오류입니다.
+
+분석문의 CRLF/LF/CR과 `나타남다음으로`, `나타남그다음으로`, `나타남반면,` 경계를 분리해 각 블록을 `BreakPara`로 삽입합니다. 본문2 말머리는 실제 `BULLET` 스타일 속성이며 선택한 말머리와 공백/탭이 붙은 원문 접두어만 제거합니다. 말머리가 비어 있으면 접두어를 제거하지 않으며 `-3232` 같은 음수 문자열도 유지합니다.
+
+Excel 셀 계약의 `display_text`가 출력 기준이며 `raw_value`로 숫자 재변환하지 않습니다. `(3,232)`, 실제 음수 `-3232`, 빈칸, `0`, `-`를 구분합니다. package 생성 시 HTML entity를 해제하고 공백을 정리하되 구두점(괄호·쉼표·`%`·따옴표·`-`·`~` 등), 수학/통화 기호와 단위 `℃ ° ㎡ ㎢ ㎥ ㎏ ㎎ ㎞ ㎝ ㎜ ㏄`는 유지합니다. `● ■ ◆ ▶ ※`, 허용 단위 외 `So` 기호, Unicode `C` 범주 문자, variation selector와 emoji 피부색 modifier는 제거하고 제어 공백은 공백으로 바꿉니다.
+
+변경 셀에는 `original_display_text`, `removed_symbols`와 원본 셀 주소 QA warning을 남깁니다. 기호만 있던 셀은 빈 문자열로 출력하며 원시값으로 복원하지 않습니다. 값 영역 전체가 비면 별도의 QA error가 발생할 수 있습니다.
+
+GUI는 HWPX 옵션의 `서식`/`서식 설정`에서 선택·편집합니다. 내장 `기본 보고서`는 수정/삭제 불가, 저장 가능한 사용자 서식은 최대 3개이며 같은 이름은 명시적 덮어쓰기가 필요합니다. `새로 저장`/`덮어쓰기` 후 `선택 후 닫기`로 적용할 저장 서식을 선택합니다. 사용자 저장소 `%LOCALAPPDATA%\ResearchHelper\hwp_style_presets.json`이 손상되면 `.corrupt.<timestamp>.<id>.bak` 백업을 남기고 읽을 수 있는 유효 항목을 보존합니다. JSON을 읽을 수 없으면 내장 기본값으로 복구합니다.
+
+런처는 선택 설정을 package 옆 `hwp_style_config.json`으로 저장한 뒤 writer에 `--style-config`로 전달합니다. 런처 CLI에서 `--hwp-style-config <path>`를 주면 해당 JSON의 `preset_name`이 사용되고, 경로 없이 `--hwp-style-preset <name>`을 주면 저장소에서 해당 서식을 조회합니다. 옵션을 생략하면 내장 기본값을 사용합니다. 저장소 복구 경고와 백업 경로는 GUI 로그 또는 CLI 오류 출력에 표시합니다. 실행 기록의 `HwpStylePreset`/`HwpStyleConfig`와 writer report의 `style_preset_name`/`style_config_path`/`style_index_map`/`style_application_counts`를 확인합니다. counts는 제목·출처 등을 포함한 성공한 스타일 적용 호출 횟수이며 순수 분석문 문단 수와 같지 않습니다.
+
+본문 분리·표시값 보존·기호 정리·역할별 서식은 자동 테스트를 통과했습니다. 2026-10-01 실제 KISDI 3개 표를 clipboard 경로로 생성해 독립 표 3개, 표시문자 1,691개, 괄호형 값 99개, 병합 시작 셀 25개와 역할별 스타일을 XML로 대조하고 아래한글 재열기·PDF 내보내기를 확인했습니다. 결과와 근거는 로컬 `outputs/hwp_style_regression_20261001/`에 보관하며 원자료는 Git에 포함하지 않습니다. 표별 `insert_mode`, `style_status`, `fallback_reason`으로 실제 clipboard와 계약 기반 fallback 경로를 구분합니다. `--dry-run`은 COM 열기/스타일 등록/실제 표 생성 검증이 아닙니다.
+
+표 편집 후에는 현재 표의 앵커 바로 뒤로 복귀합니다. 문서 끝으로 이동하지 않으므로 템플릿의 QA/후속 내용 앞에서 section 순서를 유지합니다. 세로 병합 셀이 다시 나타나는 경우 이미 처리한 셀 목록을 건너뛰며 이동 반복/실패는 생성을 중단합니다. Undo 실패 또는 셀 편집 중 오류가 나면 중복 표를 만들 수 있는 fallback을 실행하지 않습니다.
+
+넓은 표의 자동 축소·가로 분할은 미지원입니다. Excel 열 너비가 그대로 붙어 본문 폭을 초과하면 PDF의 열이 잘릴 수 있습니다. 셀 폭 조정 시험은 병합 표 이동 오류로 정식 코드에 넣지 않았으며 데이터 충실도 검증을 인쇄 품질 완료로 해석하지 않습니다. 다음 우선순위는 본문 폭 측정과 보기/BASE 반복을 유지하는 가로 분할입니다.
 
 HWPX writer 회귀 확인은 다음 명령으로 실행합니다.
 

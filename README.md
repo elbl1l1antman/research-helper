@@ -36,6 +36,7 @@ Excel 집계표
 - 정보 카드형 헤더, owner-draw 탭, 문서형 그룹 패널 스타일 적용
 - HWPX writer render plan 생성과 문항 수 제한 실행
 - HWP 표 스타일 profile 연결, 대표 글자 크기 적용, 선/배경/여백 적용 계획 기록
+- 고정된 HWP 이름 있는 스타일 5종과 기본 서식/사용자 서식 최대 3개 선택 및 저장
 - disabled 버튼, command bar, 줄무늬 목록 행 등 런처 UI styling 보강
 - `report_package.json`, `preflight_report.json` 생성 결과 표시
 
@@ -107,6 +108,8 @@ Python 기반 보조 엔진입니다.
 - `dashboard_package.py`: 기업/기관 가로형 원자료를 대시보드 JSON 계약으로 변환하고 preflight 수행
 - `dashboard_writer.py`: 대시보드 JSON 계약을 세로형 A4/B5 PPTX로 생성
 - `hwp_com_writer.py`: 아래한글 COM으로 HWPX 템플릿 사본에 본문/표 초본 생성
+- `hwp_style_config.py`: 고정된 HWP 스타일 5종의 서식 JSON 검증
+- `hwpx_style_registry.py`: 작업용 HWPX에 이름 있는 스타일 등록/갱신
 - `hwp_template_probe.py`: HWP/HWPX 보고서틀의 표 구조와 결과표 후보 분석
 - `template_blueprint.py`: HWP/HWPX 보고서틀의 반복 결과 블록 후보 생성
 - `hwp_template_table_recognizer.py`: 사용자 제공 HWP/HWPX 템플릿의 자동화 표 후보와 표 스타일 프로필 인식
@@ -163,8 +166,53 @@ Python 기반 보조 엔진입니다.
   - `{{BODY}}` 위치에 제목, 분석문, 표, 출처를 반복 삽입
   - Excel 표시값, 원시값, 병합, 역할을 셀 계약으로 분리 보존
   - Excel 범위를 한글 표로 붙여넣고 표 객체와 크기를 검증한 뒤 실패 시 `TableCreate`로 전환
+  - 분석문을 문단별로 분리하고 이름 있는 본문/표 스타일과 셀 배경·테두리·정렬 적용
 
-계약 기반 fallback은 현재 병합이 없는 표를 지원합니다. 병합 표의 clipboard 삽입이 실패하면 잘못된 표를 저장하지 않고 writer 오류 리포트에 중단 사유를 기록합니다.
+계약 기반 fallback은 matrix의 `display_text`로 `TableCreate` 표를 채우고 `merged_ranges`의 셀 병합을 적용합니다. 표 생성 또는 필수 스타일 적용 실패 시 writer 오류 리포트에 중단 사유를 기록합니다.
+
+## HWP 보고서 서식
+
+기본값은 `report_automation_engine/config/default_hwp_style_config.json`의 `기본 보고서`입니다. 아래한글 스타일 이름은 다음 5개로 고정되며 이름을 바꾸거나 추가하지 않고 속성만 변경합니다. 모든 기본 글꼴은 `맑은 고딕`입니다.
+
+| 스타일 | 용도 | 크기 | 굵게 | 줄간격 | 왼쪽/첫 줄 들여쓰기 | 정렬 | 글머리표 |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| 보고서 본문1 | 첫 분석문 문단 | 10pt | 아니오 | 160% | 0/0mm | 왼쪽 | 없음 |
+| 보고서 본문2 | 모든 후속 분석문 문단 | 10pt | 아니오 | 160% | 5/-5mm | 왼쪽 | `-` |
+| 표보기 | 보기·세로 배너·주석 등 | 8.5pt | 아니오 | 130% | 0/0mm | 왼쪽 | 없음 |
+| 표배너 | 가로 배너·BASE·헤더·제목 셀 | 8.5pt | 예 | 130% | 0/0mm | 가운데 | 없음 |
+| 표숫자 | 값 셀 | 8.5pt | 아니오 | 130% | 0/0mm | 가운데 | 없음 |
+
+`보고서 본문2`의 `-`는 문장에 붙이는 문자열이 아니라 실제 스타일 글머리표입니다. 후속 문단에서 선택한 글머리표와 공백/탭이 붙은 접두어만 제거해 중복을 피합니다. 글머리표를 비워 두면 원문 접두어를 유지하고 실제 음수 `-3232`도 보존합니다. 분석문의 CRLF/LF/CR 줄바꿈을 별도 문단으로 만들고, 기존 문장에서 붙어 있는 `나타남다음으로`, `나타남그다음으로`, `나타남반면,` 경계도 복구합니다.
+
+표 셀 배경은 `표보기`/`표숫자`가 흰색 `FFFFFF`, `표배너`가 회색 `E7E7E7`이며 세로 정렬은 모두 가운데입니다. 기본 테두리는 검정 `000000`, 내부선 0.12mm, 외곽선 0.4mm입니다. 셀 배경·테두리·세로 정렬은 문단 스타일과 별도로 같은 프리셋에서 적용하며, 선 두께는 한글이 지원하는 가장 가까운 값으로 변환합니다.
+
+### GUI 선택과 저장
+
+1. 런처에서 Excel 집계표, HWP/HWPX 템플릿과 `HWPX 보고서` 출력을 선택합니다.
+2. HWPX 옵션의 `서식`에서 `기본 보고서` 또는 저장된 사용자 서식을 선택합니다. `서식 설정`에서 5개 스타일과 표 셀 배경·정렬·테두리를 편집할 수 있습니다.
+3. 다른 이름으로 `새로 저장`하거나 사용자 서식을 `덮어쓰기`한 뒤 `선택 후 닫기`를 누릅니다. 저장하지 않은 편집값은 선택만으로 적용되지 않습니다. `기본값으로 초기화`는 편집값을 기본값으로 되돌리며 저장된 서식은 별도로 저장해야 변경됩니다.
+4. 초본 문항 수를 `1개 검증`, `3개 검증`, `전체` 중 선택하고 실행합니다. Excel 작업 복사본과 package/preflight를 만든 뒤, 선택 서식을 `report_package.json`과 같은 폴더의 `hwp_style_config.json`으로 저장해 writer의 `--style-config`로 전달합니다.
+5. 결과 탭에서 HWPX와 writer report를 확인합니다. 실행 기록에는 `HwpStylePreset`, `HwpStyleConfig`, writer report에는 `style_preset_name`, `style_config_path`, `style_index_map`, `style_application_counts`가 남습니다. 적용 횟수에는 제목·출처 등의 본문 스타일 호출도 포함됩니다.
+
+내장 `기본 보고서`는 수정·덮어쓰기·삭제할 수 없으며 사용자 서식은 최대 3개입니다. 같은 이름은 명시적인 덮어쓰기 확인이 필요하고 네 번째 새 서식 저장은 거부됩니다. 사용자 서식만 `%LOCALAPPDATA%\ResearchHelper\hwp_style_presets.json`에 저장하며 내장 기본값은 로드할 때 합칩니다.
+
+저장소가 손상되거나 잘못된/중복/초과 항목이 있으면 원본을 `hwp_style_presets.json.corrupt.<timestamp>.<id>.bak`으로 백업하고 읽을 수 있는 유효한 사용자 서식 최대 3개를 보존해 복구합니다. JSON 자체를 읽을 수 없으면 사용자 서식 없이 내장 기본값으로 복구합니다. 복구 경고와 백업 경로는 GUI 실행 로그 또는 CLI 오류 출력에 표시합니다. 저장은 임시 파일을 쓴 뒤 교체하는 방식입니다.
+
+### 표 표시문자 정책
+
+`보고서_삽입표셀`의 `display_text`는 Excel `Range.Text`를 텍스트 형식으로 보존한 값이며 HWP 셀 출력의 기준입니다. `raw_value`와 분리해 `(3,232)`를 `-3232`로 재해석하지 않고 실제 표시값 `-3232`는 그대로 유지합니다.
+
+package 생성 시 HTML entity를 해제하고 공백을 정리합니다. 괄호, 쉼표, 마침표, `%`, `-`, `~`, 따옴표 등 구두점과 수학·통화 기호는 유지합니다. 단위 기호 `℃ ° ㎡ ㎢ ㎥ ㎏ ㎎ ㎞ ㎝ ㎜ ㏄`도 유지합니다. `● ■ ◆ ▶ ※`, 허용 단위 외 Unicode `So` 기호, 제어/형식 문자, variation selector와 emoji 피부색 modifier는 제거합니다. 제어 공백은 공백으로 바꿉니다.
+
+정리된 셀에는 `original_display_text`, `removed_symbols`와 원본 셀 주소를 포함한 QA warning을 남깁니다. 기호만 있던 셀은 빈 문자열이 되며 원시값으로 되채우지 않습니다. 값 영역 전체가 비면 별도의 QA error가 발생할 수 있습니다.
+
+### 검증 상태
+
+분석문 연결, 괄호 표시값 변환, 장식 기호 정리, 재사용 가능한 역할별 서식은 구현 및 자동 테스트를 마쳤습니다. 2026-10-01 실제 KISDI 3개 표(35×5, 36×36, 35×10)를 clipboard 경로로 생성하고 아래한글 재열기·XML 비교·PDF 내보내기를 검증했습니다. 병합 종속 셀을 제외한 1,691개 셀의 표시문자·병합·역할별 스타일과 독립 표 3개를 확인했으며 원본 Excel/템플릿은 변경하지 않았습니다.
+
+결과는 로컬 `outputs/hwp_style_regression_20261001/`의 `KISDI_three_tables_styled.hwpx`, `KISDI_three_tables_preview.pdf`, `hwp_writer_report.json`, `verification.json`에 보관합니다. 원자료와 결과 파일은 Git에 포함하지 않습니다. 표별 `table_results[].insert_mode`와 `fallback_reason`으로 clipboard와 계약 기반 fallback 경로를 구분하며, 특정 자료의 통과를 모든 Excel/한글 환경의 지원으로 확대하지 않습니다.
+
+**남은 레이아웃 제한:** 붙여넣기는 Excel의 열 너비를 유지합니다. 36열처럼 넓은 표는 본문 폭을 초과해 PDF에서 오른쪽 열이 잘릴 수 있으며 자동 축소·가로 분할은 아직 지원하지 않습니다. 셀별 폭 조정 시험에서는 병합 표의 이동이 중단되어 정식 경로에 적용하지 않았습니다. 현재 결과는 데이터·서식 검증용 초본이며 인쇄 완성본이 아닙니다.
 
 ## 아직 개발 중인 기능
 
@@ -328,12 +376,16 @@ python -m report_automation_engine.hwp_com_writer `
   --preflight "C:\path\preflight_report.json" `
   --template "C:\path\report_template.hwpx" `
   --output "C:\path\report_draft.hwpx" `
+  --style-config "C:\path\hwp_style_config.json" `
   --table-style-profile "C:\path\hwp_table_style_profile.json" `
   --dispatch-mode dispatch `
   --visible false
 ```
 
 HWPX writer는 아래한글 COM을 사용하므로 Windows와 아래한글 설치가 필요합니다. 실패 시 출력 파일 옆 또는 `--report-output` 경로에 `hwp_writer_report.json`을 남깁니다.
+writer의 `--style-config`를 생략하면 기본 JSON을 사용합니다. `--table-style-profile`은 기존 템플릿 표 속성 요약/적용 계획용이며 이름 있는 스타일 프리셋을 대신하지 않습니다. HWPX 작업 사본에 스타일을 등록/갱신하고 HWP 템플릿은 임시 HWPX로 변환해 같은 처리를 합니다. 설정 검증 또는 스타일 등록 실패 시 기본 서식으로 조용히 대체하지 않고 생성 실패를 기록합니다.
+
+런처 CLI에서는 `--output-type "HWPX 보고서" --hwp-template "C:\path\report_template.hwpx" --hwp-style-config "C:\path\custom_style.json"`을 기존 Excel 실행 인자에 추가합니다. 입력 JSON은 선택 실행 파일 `hwp_style_config.json`으로 정규화됩니다. `--hwp-style-preset`만으로 저장된 사용자 서식을 불러오지는 않으며 실제 설정 JSON의 `preset_name`이 우선합니다.
 실사용 환경에서 COM 실행이 지연되면 `writer_report.json`의 `stage`, `action`, `com.current_prog_id`, `com.steps`로 멈춘 지점을 확인합니다.
 
 아래한글 COM 환경만 먼저 확인할 수도 있습니다.
