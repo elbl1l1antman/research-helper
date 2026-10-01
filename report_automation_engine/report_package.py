@@ -23,30 +23,33 @@ except ImportError:
 
 
 def build_report_package(excel_path: str | Path, meta: Dict[str, Any] | None = None) -> Dict[str, Any]:
-    path = Path(excel_path)
+    path = Path(excel_path).resolve()
     wb = openpyxl.load_workbook(path, data_only=True, read_only=True)
-    qa = read_qa(wb)
-    sections = read_sections(wb, qa)
-    charts = read_rows(wb, "보고서_차트데이터")
-    decimal_places = int(str((meta or {}).get("decimal_places", "1") or "1"))
-    cell_rows = read_rows(wb, "보고서_삽입표셀")
-    tables = group_cell_rows(cell_rows) if cell_rows else group_table_rows(read_rows(wb, "보고서_삽입표"), decimal_places)
-    package = {
-        "schema_version": "1.0",
-        "meta": {
-            "source_workbook": str(path),
-            "source_file_name": path.name,
-            "created_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-            **(meta or {}),
-        },
-        "sections": sections,
-        "tables": tables,
-        "charts": normalize_charts(charts, qa),
-        "qa": qa,
-    }
-    add_contract_qa(package)
-    add_source_range_qa(package, wb)
-    return package
+    try:
+        qa = read_qa(wb)
+        sections = read_sections(wb, qa)
+        charts = read_rows(wb, "보고서_차트데이터")
+        decimal_places = int(str((meta or {}).get("decimal_places", "1") or "1"))
+        cell_rows = read_rows(wb, "보고서_삽입표셀")
+        tables = group_cell_rows(cell_rows) if cell_rows else group_table_rows(read_rows(wb, "보고서_삽입표"), decimal_places)
+        package = {
+            "schema_version": "1.0",
+            "meta": {
+                "source_workbook": str(path),
+                "source_file_name": path.name,
+                "created_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                **(meta or {}),
+            },
+            "sections": sections,
+            "tables": tables,
+            "charts": normalize_charts(charts, qa),
+            "qa": qa,
+        }
+        add_contract_qa(package)
+        add_source_range_qa(package, wb)
+        return package
+    finally:
+        wb.close()
 
 
 def latest_sheet(wb, prefix: str):

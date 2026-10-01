@@ -1,3 +1,4 @@
+import os
 from pathlib import Path
 
 import openpyxl
@@ -63,6 +64,13 @@ def test_package_tables_include_matrix(tmp_path):
     assert table["matrix"][1][1]["display_text"] == "63.3%"
     assert table["matrix"][1][1]["raw_value"] == 63.25
     assert table["roles"]["header"] == 4
+
+
+def test_package_resolves_workbook_path_before_export(tmp_path):
+    excel = tmp_path / "relative_source.xlsx"
+    make_cell_contract_workbook(excel)
+    package = build_report_package(Path(os.path.relpath(excel)))
+    assert Path(package["meta"]["source_workbook"]) == excel.resolve()
 
 
 def test_preflight_counts_table_matrix_warnings(tmp_path):
