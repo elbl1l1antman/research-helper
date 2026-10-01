@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import platform
 import shutil
 import sys
@@ -22,10 +23,12 @@ try:
     from .hwp_style_config import REQUIRED_STYLE_NAMES, load_hwp_style_config, style_name_for_cell_role
     from .hwpx_style_registry import register_named_styles
     from .report_package import split_narrative_blocks
+    from .hwp_table_layout import plan_table_parts, _text_units
 except ImportError:
     from hwp_style_config import REQUIRED_STYLE_NAMES, load_hwp_style_config, style_name_for_cell_role
     from hwpx_style_registry import register_named_styles
     from report_package import split_narrative_blocks
+    from hwp_table_layout import plan_table_parts, _text_units
 
 
 BODY_PLACEHOLDER = "{{BODY}}"
@@ -524,36 +527,19 @@ def write_body(
 
         table = tables_by_key.get(key)
         if table:
-            if style_indexes is not None:
-                apply_named_style(hwp, require_style_index(style_indexes, "보고서 본문1"), report, "보고서 본문1")
-            insert_text(hwp, str(table.get("title") or title), report)
-            run_action(hwp, "BreakPara", report, "body")
-            inserted = insert_clipboard_table(
-                hwp,
-                excel_workbook,
-                table,
-                report,
-                table_style_profile,
-                style_indexes,
-                style_config,
-            )
-            if not inserted:
-                inserted = insert_hwp_table(
-                    hwp,
-                    table_rows_for_hwp(table),
-                    report,
-                    table_style_profile,
-                    table.get("merged_ranges", []),
-                    table,
-                    style_indexes,
-                    style_config,
-                )
-                report["table_results"].append(
-                    table_result(table, "contract_fallback", "tbl" if inserted else "", "applied" if inserted else "failed", report.pop("clipboard_failure", ""))
-                )
-            if not inserted:
-                raise HwpWriterError("table", "TableCreate", f"HWP 표 생성에 실패했습니다: {key}")
-            run_action(hwp, "BreakPara", report, "body")
+            try:
+                width = current_body_width(hwp, report)
+                font_size = max(style_config["paragraph_styles"][name]["font_size_pt"] for name in ("표보기", "표배너", "표숫자")) if style_config else 9
+                parts = plan_table_parts(table, width, font_size) if table.get("matrix") else [table]
+            except ValueError as exc:
+                raise HwpWriterError("layout", "table_split", f"{key}: {exc}") from exc
+            report.setdefault("table_layouts", []).append({"table_key": key, "body_width_hwpunit": width,
+                "parts": [{name: part.get(name) for name in ("part_index", "part_count", "source_columns", "repeated_columns", "column_widths_hwpunit")} for part in parts]})
+            if len(parts) > 1:
+                report["warnings"].append(f"{key}: 본문 폭에 맞춰 {len(parts)}개 표로 가로 분할했습니다. 보기/BASE 열은 반복됩니다.")
+            for part in parts:
+                write_table_part(hwp, part, title, report, table_style_profile, excel_workbook, style_indexes, style_config)
+            report["source_tables_written"] = report.get("source_tables_written", 0) + 1
         else:
             report["warnings"].append(f"삽입표 데이터 없음: {key}")
 
@@ -570,6 +556,49 @@ def write_body(
         run_action(hwp, "BreakPara", report, "body")
         run_action(hwp, "BreakPara", report, "body")
         report["sections_written"] += 1
+
+
+def write_table_part(hwp, table, title, report, profile, workbook, style_indexes, style_config):
+    if int(table.get("part_index") or 1) > 1:
+        run_action(hwp, "BreakPage", report, "body")
+    if style_indexes is not None:
+        apply_named_style(hwp, require_style_index(style_indexes, "보고서 본문1"), report, "보고서 본문1")
+    caption = str(table.get("title") or title)
+    if int(table.get("part_count") or 1) > 1:
+        caption += f" [{table['part_index']}/{table['part_count']}]"
+    insert_text(hwp, caption, report)
+    run_action(hwp, "BreakPara", report, "body")
+    inserted = insert_clipboard_table(hwp, workbook, table, report, profile, style_indexes, style_config)
+    if not inserted:
+        inserted = insert_hwp_table(hwp, table_rows_for_hwp(table), report, profile,
+                                    table.get("merged_ranges", []), table, style_indexes, style_config)
+        report["table_results"].append(table_result(table, "contract_fallback", "tbl" if inserted else "",
+            "applied" if inserted else "failed", report.pop("clipboard_failure", "")))
+    if not inserted:
+        raise HwpWriterError("table", "TableCreate", f"HWP 표 생성에 실패했습니다: {table.get('table_key')}")
+    run_action(hwp, "BreakPara", report, "body")
+
+
+def current_body_width(hwp, report):
+    """Read the active section, not an assumed A4 page or a template's first page."""
+    try:
+        params = hwp.HParameterSet.HSecDef
+        hwp.HAction.GetDefault("PageSetup", params.HSet)
+        page = params.PageDef
+        width = page.PaperHeight if page.Landscape else page.PaperWidth
+        width -= page.LeftMargin + page.RightMargin
+        if page.GutterType != 2:
+            width -= page.GutterLen
+        action = hwp.CreateAction("MultiColumn")
+        columns = action.CreateSet()
+        action.GetDefault(columns)
+        if int(columns.Item("Count")) != 1:
+            raise ValueError("다단 본문은 지원하지 않습니다. 한 단 템플릿으로 변경해 주세요.")
+        if width <= 0:
+            raise ValueError("본문 가용 폭이 없습니다.")
+        return int(width)
+    except Exception as exc:
+        raise HwpWriterError("layout", "PageSetup", f"본문 폭 검사 실패: {exc}") from exc
 
 
 def insert_narrative_blocks(
@@ -678,6 +707,18 @@ def insert_hwp_table(
             params.HeightType = 1
         except Exception:
             pass
+        if table and table.get("column_widths_hwpunit"):
+            widths = table["column_widths_hwpunit"]
+            properties = params.TableProperties
+            margin = int(properties.CellMarginLeft) + int(properties.CellMarginRight)
+            properties.CellSpacing = 0
+            params.WidthValue = sum(widths)
+            params.CreateItemArray("ColWidth", len(widths))
+            for index, width in enumerate(widths):
+                # TableCreate adds the default left/right padding to each ColWidth.
+                if width <= margin:
+                    raise HwpWriterError("layout", "TableCreate", "열 폭이 셀 안쪽 여백보다 작습니다.")
+                params.ColWidth.SetItem(index, width - margin)
         if not hwp.HAction.Execute("TableCreate", params.HSet):
             return False
         control = hwp.ParentCtrl
@@ -701,6 +742,7 @@ def insert_hwp_table(
                 if not (row_idx == len(rows) - 1 and col_idx == len(row) - 1):
                     run_action(hwp, "TableRightCell", report, "table")
         apply_table_merges(hwp, merged_ranges or [], len(rows), report)
+        verify_table_width(control, table or {})
         leave_hwp_table(hwp, control, report)
         report["tables_written"] += 1
         return True
@@ -1105,8 +1147,19 @@ def apply_cell_appearance(
     try:
         run_action(hwp, "TableCellBlock", report, "style")
         params = hwp.HParameterSet.HCellBorderFill
+        # CellFill can restore the imported borders. Apply borders after the fill.
+        hwp.HAction.GetDefault("CellFill", params.HSet)
+        fill = params.FillAttr
+        set_parameter_item(fill, "Type", 1)
+        set_parameter_item(fill, "WinBrushFaceColor", hwp_color(hwp, cell_style["fill_color"]))
+        set_parameter_item(fill, "WinBrushHatchColor", 0)
+        set_parameter_item(fill, "WinBrushFaceStyle", -1)
+        set_parameter_item(fill, "WindowsBrush", 1)
+        if not hwp.HAction.Execute("CellFill", params.HSet):
+            raise RuntimeError("CellFill action returned False")
         hwp.HAction.GetDefault("CellBorderFill", params.HSet)
         set_parameter_item(params, "ApplyTo", 0)
+        selected = params.SelCellsBorderFill
         color = hwp_color(hwp, border["color"])
         solid = hwp.HwpLineType("Solid")
         for side, width in {
@@ -1115,21 +1168,12 @@ def apply_cell_appearance(
             "Top": outer if row_index == 0 else inner,
             "Bottom": outer if row_index + rowspan == row_count else inner,
         }.items():
-            set_parameter_item(params, f"BorderType{side}", solid)
-            set_parameter_item(params, f"BorderWidth{side}", width)
-            set_parameter_item(params, f"BorderColor{side}", color)
+            for target in (params, selected):
+                set_parameter_item(target, f"BorderType{side}", solid)
+                set_parameter_item(target, f"BorderWidth{side}", width)
+                set_parameter_item(target, f"BorderColor{side}", color)
         if not hwp.HAction.Execute("CellBorderFill", params.HSet):
             raise RuntimeError("CellBorderFill action returned False")
-        fill_params = hwp.HParameterSet.HCellBorderFill
-        hwp.HAction.GetDefault("CellFill", fill_params.HSet)
-        fill = fill_params.FillAttr
-        set_parameter_item(fill, "Type", 1)
-        set_parameter_item(fill, "WinBrushFaceColor", hwp_color(hwp, cell_style["fill_color"]))
-        set_parameter_item(fill, "WinBrushHatchColor", 0)
-        set_parameter_item(fill, "WinBrushFaceStyle", -1)
-        set_parameter_item(fill, "WindowsBrush", 1)
-        if not hwp.HAction.Execute("CellFill", fill_params.HSet):
-            raise RuntimeError("CellFill action returned False")
         run_action(hwp, "Cancel", report, "style")
         horizontal = str(config["paragraph_styles"][style_name]["alignment"]).title()
         vertical = str(cell_style["vertical_alignment"]).title()
@@ -1166,6 +1210,24 @@ def same_hwp_control(left: Any, right: Any) -> bool:
     left_id = control_instance_id(left)
     right_id = control_instance_id(right)
     return left_id == right_id if left_id and right_id else left is right
+
+
+def snapshot_hwp_controls(hwp):
+    """Capture scalar IDs: LastCtrl may belong to an unchanged template footer."""
+    controls = {}
+    try:
+        control = hwp.HeadCtrl
+        while control is not None:
+            key = control_instance_id(control)
+            if key in controls or (not key and str(control.CtrlID).strip().lower() in {"tbl", "gso"}):
+                raise ValueError("문서 개체 ID를 안전하게 구분할 수 없습니다.")
+            # Section/column controls (secd/cold) do not expose an instance ID.
+            if key:
+                controls[key] = control
+            control = control.Next
+        return controls
+    except Exception as exc:
+        raise HwpWriterError("table", "control_snapshot", f"문서 개체 목록 검증 실패: {exc}") from exc
 
 
 def open_excel_clipboard_source(package: Dict[str, Any], package_file: Path, report: Dict[str, Any]):
@@ -1223,9 +1285,14 @@ def insert_clipboard_table(
         report["clipboard_failure"] = "Excel source unavailable" if table.get("cell_contract") else "legacy table contract"
         return False
     editing_started = False
+    scratch = None
     try:
-        worksheet = workbook.Worksheets(str(table.get("source_sheet") or ""))
-        source_range = worksheet.Range(str(table.get("source_range") or ""))
+        if table.get("layout_prepared"):
+            scratch = workbook.Application.Workbooks.Add()
+            source_range = prepare_layout_range(scratch, table, style_config)
+        else:
+            worksheet = workbook.Worksheets(str(table.get("source_sheet") or ""))
+            source_range = worksheet.Range(str(table.get("source_range") or ""))
         last_error = None
         for _ in range(3):
             try:
@@ -1238,20 +1305,23 @@ def insert_clipboard_table(
         if last_error is not None:
             raise last_error
 
-        previous_control = last_hwp_control(hwp)
+        before = snapshot_hwp_controls(hwp)
         disable_picture_paste(hwp, report)
         paste_result = run_action(hwp, "Paste", report, "table")
         time.sleep(0.5)
-        control = last_hwp_control(hwp)
-        if not is_hwp_table_control(control):
-            control = find_hwp_table_control(hwp)
-        if not is_hwp_table_control(control):
+        after = snapshot_hwp_controls(hwp)
+        added = set(after) - set(before)
+        if set(before) - set(after):
+            raise HwpWriterError("table", "Paste", "붙여넣기 중 기존 개체가 사라져 대체 표 생성을 차단합니다.")
+        if not added:
+            if paste_result:
+                raise HwpWriterError("table", "Paste", "붙여넣기 변경 상태가 불명확하여 Undo 및 대체 표 생성을 차단합니다.")
+            raise RuntimeError("Paste가 실행되지 않았습니다. 기존 문서는 되돌리지 않습니다.")
+        if not paste_result or len(added) != 1 or not is_hwp_table_control(after[next(iter(added))]):
             rollback_clipboard_paste(hwp, report)
             detail = "Paste returned False; " if not paste_result else ""
-            raise RuntimeError(detail + "붙여넣기 결과가 HWP 표 객체가 아닙니다.")
-        if same_hwp_control(previous_control, control):
-            rollback_clipboard_paste(hwp, report)
-            raise RuntimeError("붙여넣기 전후 HWP 컨트롤이 같아 새 표 생성을 확인할 수 없습니다.")
+            raise RuntimeError(detail + "붙여넣기 결과가 단일 신규 HWP 표 객체가 아닙니다.")
+        control = after[next(iter(added))]
 
         rows, cols = hwp_table_dimensions(control)
         expected_rows = int(table.get("row_count") or 0)
@@ -1259,6 +1329,7 @@ def insert_clipboard_table(
         if rows and cols and (rows != expected_rows or cols != expected_cols):
             rollback_clipboard_paste(hwp, report)
             raise RuntimeError(f"붙여넣기 표 크기가 다릅니다: {rows}x{cols}, expected {expected_rows}x{expected_cols}")
+        verify_table_width(control, table)
 
         # Paste leaves the cursor outside the object; select its anchor before editing cells.
         try:
@@ -1294,6 +1365,76 @@ def insert_clipboard_table(
         report["clipboard_failure"] = str(exc)
         report["warnings"].append(f"Excel clipboard 표 삽입 실패, contract fallback을 사용합니다: {table.get('table_key')}: {exc}")
         return False
+    finally:
+        if scratch is not None:
+            try:
+                scratch.Close(False)
+            except Exception as exc:
+                report["warnings"].append(f"표 폭 조정 임시 통합문서 닫기 실패: {exc}")
+
+
+def prepare_layout_range(workbook, table, style_config):
+    """Use a disposable Excel grid; original workbook values and widths stay untouched."""
+    sheet = workbook.Worksheets.Item(1)
+    rows, cols = table["row_count"], table["col_count"]
+    area = sheet.Range(sheet.Cells(1, 1), sheet.Cells(rows, cols))
+    area.NumberFormat = "@"  # Parenthesized BASE counts must remain strings, not negative numbers.
+    area.Value2 = tuple(tuple(row) for row in table_rows_for_hwp(table))
+    font_size = max(style_config["paragraph_styles"][name]["font_size_pt"] for name in ("표보기", "표배너", "표숫자")) if style_config else 9
+    area.Font.Name = style_config["paragraph_styles"]["표보기"]["font_family"] if style_config else "맑은 고딕"
+    area.Font.Size = font_size
+    area.WrapText = True
+    widths = table["column_widths_hwpunit"]
+    for index, width in enumerate(widths, 1):
+        column = sheet.Columns.Item(index)
+        low, high = 0.1, 255
+        # Excel column units depend on the Normal font. Measure actual points instead.
+        for _ in range(12):
+            middle = (low + high) / 2
+            column.ColumnWidth = middle
+            if column.Width <= width / 100:
+                low = middle
+            else:
+                high = middle
+        column.ColumnWidth = low
+    for merged in table.get("merged_ranges", []):
+        row, col = merged["row"], merged["col"]
+        sheet.Range(sheet.Cells(row, col), sheet.Cells(row + merged["rowspan"] - 1, col + merged["colspan"] - 1)).Merge()
+    heights = [15.0] * rows
+    for row in table["matrix"]:
+        for cell in row:
+            if cell.get("covered_by"):
+                continue
+            first = cell["col"] - 1
+            available = sum(widths[first:first + cell["colspan"]]) / 100 - 6
+            if available <= 0:
+                raise ValueError("셀 너비가 여백보다 작습니다.")
+            lines = max(1, math.ceil(_text_units(cell.get("display_text", "")) * font_size / available))
+            height = (lines * font_size * 1.6 + 4) / cell["rowspan"]
+            if height > 409:
+                raise ValueError("셀 내용이 Excel 임시 표의 최대 행 높이를 초과합니다.")
+            for index in range(cell["row"] - 1, cell["row"] - 1 + cell["rowspan"]):
+                heights[index] = max(heights[index], height)
+    for index, height in enumerate(heights, 1):
+        sheet.Rows.Item(index).RowHeight = height
+    return area
+
+
+def verify_table_width(control, table):
+    if not table.get("layout_prepared"):
+        return
+    try:
+        actual = int(control.Properties.Item("Width"))
+        if actual <= 0 or actual > int(table["body_width_hwpunit"]):
+            raise ValueError(f"표 폭 {actual}이 본문 폭 {table['body_width_hwpunit']}을 초과합니다.")
+        # Anchor to the column, not an indented narrative paragraph.
+        properties = control.Properties
+        for key, value in (("TreatAsChar", 0), ("HorzRelTo", 2), ("HorzAlign", 0), ("HorzOffset", 0)):
+            properties.SetItem(key, value)
+        control.Properties = properties
+        table["actual_width_hwpunit"] = actual
+    except Exception as exc:
+        raise HwpWriterError("layout", "table_width", f"표 너비 검증 실패: {exc}") from exc
 
 
 def rollback_clipboard_paste(hwp, report: Dict[str, Any]) -> None:
@@ -1430,6 +1571,11 @@ def table_result(table: Dict[str, Any], insert_mode: str, ctrl_id: str, style_st
         "cols": int(table.get("col_count") or max((len(row) for row in table.get("matrix", [])), default=0)),
         "style_status": style_status,
         "fallback_reason": fallback_reason,
+        "part_index": table.get("part_index", 1),
+        "part_count": table.get("part_count", 1),
+        "source_columns": table.get("source_columns", []),
+        "body_width_hwpunit": table.get("body_width_hwpunit"),
+        "actual_width_hwpunit": table.get("actual_width_hwpunit"),
     }
 
 

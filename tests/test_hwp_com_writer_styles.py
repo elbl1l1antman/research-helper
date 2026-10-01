@@ -18,6 +18,8 @@ from report_automation_engine.hwp_com_writer import (
     insert_hwp_table,
     insert_narrative_blocks,
     leave_hwp_table,
+    current_body_width,
+    verify_table_width,
     write_body,
     write_hwp_document,
 )
@@ -47,7 +49,7 @@ class FakeAction:
             self.owner.events.append(("text", params.Text))
             self.owner.contents[self.owner.list_id] = params.Text
         elif action == "CellBorderFill":
-            border = params
+            border = params.SelCellsBorderFill
             self.owner.events.append(("border_type", border.BorderTypeLeft, border.BorderTypeRight, border.BorderTypeTop, border.BorderTypeBottom))
             self.owner.events.append(
                 (
@@ -83,6 +85,7 @@ class FakeHwp:
         self.contents = {}
         self.position = (2, 0, 0)
         self.ParentCtrl = None
+        self.HeadCtrl = None
         style = SimpleNamespace(Apply=None)
         insert_text = SimpleNamespace(Text="")
         table_creation = SimpleNamespace(Rows=0, Cols=0)
@@ -110,6 +113,7 @@ class FakeHwp:
         )
         for params in (style, insert_text, table_creation, cell_border_fill):
             params.HSet = params
+        cell_border_fill.SelCellsBorderFill = copy.deepcopy(cell_border_fill)
         self.HParameterSet = SimpleNamespace(
             HStyle=style,
             HInsertText=insert_text,
@@ -149,6 +153,7 @@ class FakeHwp:
 class FakeTableControl:
     CtrlID = "tbl"
     Properties = SimpleNamespace(Rows=1, Cols=3)
+    Next = None
 
     @staticmethod
     def GetCtrlInstID():
@@ -185,6 +190,7 @@ def insert_fake_clipboard_table(table):
         result = original_run(action)
         if action == "Paste":
             hwp.LastCtrl = FakeTableControl()
+            hwp.HeadCtrl = hwp.LastCtrl
         elif action == "ShapeObjTableSelCell":
             hwp.ParentCtrl = hwp.LastCtrl
             hwp.position = (hwp.list_id, 0, 0)
@@ -213,6 +219,100 @@ def insert_fake_clipboard_table(table):
 
 
 class HwpComWriterStyleTests(unittest.TestCase):
+    def test_clipboard_noop_does_not_undo_caption_or_edit_existing_table(self):
+        table = {"table_key": "T1", "cell_contract": True, "source_sheet": "S", "source_range": "A1:C1", "row_count": 1, "col_count": 3}
+        hwp = FakeHwp()
+        existing = FakeTableControl()
+        hwp.HeadCtrl = hwp.LastCtrl = hwp.ParentCtrl = existing
+        hwp.EngineProperties = SimpleNamespace(SetItem=lambda *_args: None)
+        original = hwp.HAction.Run
+        hwp.HAction.Run = lambda name: False if name == "Paste" else original(name)
+        report = {"warnings": [], "tables_written": 0, "table_results": []}
+        with patch("report_automation_engine.hwp_com_writer.time.sleep"):
+            self.assertFalse(insert_clipboard_table(hwp, FakeWorkbook(), table, report, None))
+        self.assertNotIn(("run", "Undo"), hwp.events)
+        self.assertFalse(any(event[0] == "text" for event in hwp.events))
+
+    def test_clipboard_accepts_new_table_before_unchanged_template_tail(self):
+        original_run = FakeAction.Run
+        tail = FakeTableControl()
+        tail.GetCtrlInstID = lambda: 9
+        def run(action, name):
+            result = original_run(action, name)
+            if name == "Paste":
+                action.owner.HeadCtrl = FakeTableControl()
+                action.owner.HeadCtrl.Next = tail
+                action.owner.LastCtrl = tail
+            elif name == "ShapeObjTableSelCell":
+                action.owner.ParentCtrl = action.owner.HeadCtrl
+            return result
+        table = {"table_key": "T1", "cell_contract": True, "source_sheet": "S", "source_range": "A1:C1", "row_count": 1, "col_count": 3}
+        hwp = FakeHwp()
+        hwp.HeadCtrl = hwp.LastCtrl = tail
+        hwp.EngineProperties = SimpleNamespace(SetItem=lambda *_args: None)
+        report = {"warnings": [], "tables_written": 0, "table_results": []}
+        with patch.object(FakeAction, "Run", run), patch("report_automation_engine.hwp_com_writer.time.sleep"):
+            self.assertTrue(insert_clipboard_table(hwp, FakeWorkbook(), table, report, None))
+        self.assertNotIn(("run", "Undo"), hwp.events)
+        def replaced_control(action, name):
+            result = run(action, name)
+            if name == "Paste":
+                action.owner.HeadCtrl.Next = None
+            return result
+        hwp.HeadCtrl = hwp.LastCtrl = tail
+        with patch.object(FakeAction, "Run", replaced_control), patch("report_automation_engine.hwp_com_writer.time.sleep"):
+            with self.assertRaisesRegex(HwpWriterError, "기존 개체"):
+                insert_clipboard_table(hwp, FakeWorkbook(), table, report, None)
+
+    def test_clipboard_scratch_workbook_closes_after_preparation_failure(self):
+        from unittest.mock import Mock
+        scratch = Mock()
+        book = SimpleNamespace(Application=SimpleNamespace(Workbooks=SimpleNamespace(Add=lambda: scratch)))
+        report = {"warnings": []}
+        with patch("report_automation_engine.hwp_com_writer.prepare_layout_range", side_effect=ValueError("too tall")):
+            self.assertFalse(insert_clipboard_table(FakeHwp(), book, {"cell_contract": True, "layout_prepared": True}, report, None))
+        scratch.Close.assert_called_once_with(False)
+
+
+    def test_fallback_column_width_excludes_default_cell_margins(self):
+        hwp = FakeHwp()
+        params = hwp.HParameterSet.HTableCreation
+        params.TableProperties = SimpleNamespace(CellMarginLeft=510, CellMarginRight=510, CellSpacing=0)
+        params.CreateItemArray = lambda name, count: setattr(params, name, SimpleNamespace(SetItem=lambda index, value: widths.__setitem__(index, value)))
+        widths = [0, 0, 0]
+        report = {"warnings": [], "tables_written": 0}
+        table = {"column_widths_hwpunit": [7000, 13000, 10000]}
+        self.assertTrue(insert_hwp_table(hwp, [["A", "B", "C"]], report, table=table))
+        self.assertEqual(widths, [5980, 11980, 8980])
+        self.assertEqual(params.WidthValue, 30000)
+
+    def test_actual_table_width_blocks_overflow(self):
+        table = {"layout_prepared": True, "body_width_hwpunit": 40000}
+        position = {}
+        control = SimpleNamespace(Properties=SimpleNamespace(Item=lambda _: 45000, SetItem=position.__setitem__))
+        with self.assertRaisesRegex(HwpWriterError, "초과"):
+            verify_table_width(control, table)
+        control.Properties.Item = lambda _: 39500
+        verify_table_width(control, table)
+        self.assertEqual(table["actual_width_hwpunit"], 39500)
+        self.assertEqual(position, {"TreatAsChar": 0, "HorzRelTo": 2, "HorzAlign": 0, "HorzOffset": 0})
+
+    def test_body_width_respects_page_direction_margins_and_binding(self):
+        hwp = FakeHwp()
+        page = SimpleNamespace(PaperWidth=60000, PaperHeight=84000, Landscape=0,
+                               LeftMargin=8000, RightMargin=8000, GutterLen=1000, GutterType=0)
+        section = SimpleNamespace(PageDef=page)
+        section.HSet = section
+        hwp.HParameterSet.HSecDef = section
+        columns = SimpleNamespace(Item=lambda name: 1 if name == "Count" else 0)
+        hwp.CreateAction = lambda _: SimpleNamespace(CreateSet=lambda: columns, GetDefault=lambda _: None)
+        self.assertEqual(current_body_width(hwp, {"warnings": []}), 43000)
+        page.Landscape = 1
+        self.assertEqual(current_body_width(hwp, {"warnings": []}), 67000)
+        columns.Item = lambda name: 2 if name == "Count" else 0
+        with self.assertRaisesRegex(HwpWriterError, "다단"):
+            current_body_width(hwp, {"warnings": []})
+
     def test_direct_script_help_does_not_require_package_import(self):
         script = Path(__file__).resolve().parents[1] / "report_automation_engine" / "hwp_com_writer.py"
         with tempfile.TemporaryDirectory() as directory:
@@ -322,6 +422,7 @@ class HwpComWriterStyleTests(unittest.TestCase):
         self.assertIn(("border_type", 1, 1, 1, 1), hwp.events)
         borders = [event for event in hwp.events if event[0] == "border"]
         self.assertEqual(borders, [("border", 6, 6, 6, 6)])  # 0.4 mm outer border enum.
+        self.assertLess(next(i for i, event in enumerate(hwp.events) if event[0] == "fill"), next(i for i, event in enumerate(hwp.events) if event[0] == "border"))
         table = {
             "table_key": "T001", "cell_contract": True,
             "source_sheet": "Sheet1", "source_range": "A1:C1", "row_count": 1, "col_count": 3,
