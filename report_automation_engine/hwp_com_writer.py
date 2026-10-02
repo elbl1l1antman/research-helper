@@ -25,12 +25,14 @@ try:
     from .report_package import split_narrative_blocks
     from .report_table_matrix import resolve_table_metadata
     from .hwp_table_layout import plan_table_parts, prepare_report_table, _text_units
+    from .hwp_page_setup import normalize_page_setup, apply_page_setup
 except ImportError:
     from hwp_style_config import REQUIRED_STYLE_NAMES, load_hwp_style_config, style_name_for_cell_role
     from hwpx_style_registry import register_named_styles
     from report_package import split_narrative_blocks
     from report_table_matrix import resolve_table_metadata
     from hwp_table_layout import plan_table_parts, prepare_report_table, _text_units
+    from hwp_page_setup import normalize_page_setup, apply_page_setup
 
 
 BODY_PLACEHOLDER = "{{BODY}}"
@@ -68,6 +70,7 @@ def write_hwp_document(
     keep_open_after_save: bool = False,
     dispatch_mode: str = "ensure_dispatch",
     style_config_path: str | Path | None = None,
+    page_setup_path: str | Path | None = None,
 ) -> Path:
     """Write a report draft and always write a companion JSON report."""
 
@@ -92,6 +95,14 @@ def write_hwp_document(
         package = load_json(package_file)
         preflight = load_json(preflight_file)
         validate_preflight(preflight)
+        page_setup = None
+        if page_setup_path:
+            writer_report["page_setup_path"] = str(Path(page_setup_path).resolve())
+            try:
+                page_setup = normalize_page_setup(load_json(page_setup_path))
+            except (ValueError, OSError) as exc:
+                raise HwpWriterError("validate", "PageSetup", str(exc)) from exc
+            writer_report["page_setup"] = {"requested": page_setup, "applied": False, "scope": "body_section"}
         style_config = load_writer_style_config(style_config_file, writer_report)
         table_style_profile = load_table_style_profile(table_style_profile_file, writer_report)
         render_plan = build_render_plan(package, max_sections, table_style_profile)
@@ -147,6 +158,14 @@ def write_hwp_document(
         writer_report["placeholders"]["body_found"] = True
         run_action(hwp, "Delete", writer_report, "template")
         write_json(report_file, writer_report)
+
+        if page_setup is not None:
+            writer_report["stage"], writer_report["action"] = "page_setup", "PageSetup"
+            write_json(report_file, writer_report)
+            try:
+                writer_report["page_setup"].update(apply_page_setup(hwp, page_setup))
+            except Exception as exc:
+                raise HwpWriterError("page_setup", "PageSetup", str(exc)) from exc
 
         write_body(
             hwp,
@@ -1767,6 +1786,8 @@ def new_report(package_file: Path, preflight_file: Path, template_file: Path, ou
         "table_style_apply_plan": {"loaded": False, "steps": []},
         "table_style_applied": {},
         "style_config_path": "",
+        "page_setup_path": "",
+        "page_setup": {"applied": False, "mode": "template"},
         "style_preset_name": "",
         "style_index_map": {},
         "style_application_counts": {},
@@ -1831,6 +1852,7 @@ def run_cli(argv: List[str] | None = None) -> int:
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--table-style-profile")
     parser.add_argument("--style-config")
+    parser.add_argument("--page-setup", help="Optional mm page settings JSON; applied to the BODY section only.")
     parser.add_argument("--keep-open-after-save", action="store_true")
     parser.add_argument("--dispatch-mode", choices=DISPATCH_MODES, default="ensure_dispatch")
     parser.add_argument("--check-environment", action="store_true")
@@ -1867,6 +1889,7 @@ def run_cli(argv: List[str] | None = None) -> int:
             args.keep_open_after_save,
             args.dispatch_mode,
             args.style_config,
+            args.page_setup,
         )
         print(str(output))
         return 0

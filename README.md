@@ -37,6 +37,7 @@ Excel 집계표
 - HWPX writer render plan 생성과 문항 수 제한 실행
 - HWP 표 스타일 profile 연결, 대표 글자 크기 적용, 선/배경/여백 적용 계획 기록
 - 고정된 HWP 이름 있는 스타일 5종과 기본 서식/사용자 서식 최대 3개 선택 및 저장
+- 생성 전 편집용지 크기·방향·7개 여백 지정 또는 템플릿 설정 유지 (`{{BODY}}`가 있는 본문 구역에 적용)
 - disabled 버튼, command bar, 줄무늬 목록 행 등 런처 UI styling 보강
 - `report_package.json`, `preflight_report.json` 생성 결과 표시
 
@@ -108,6 +109,7 @@ Python 기반 보조 엔진입니다.
 - `dashboard_package.py`: 기업/기관 가로형 원자료를 대시보드 JSON 계약으로 변환하고 preflight 수행
 - `dashboard_writer.py`: 대시보드 JSON 계약을 세로형 A4/B5 PPTX로 생성
 - `hwp_com_writer.py`: 아래한글 COM으로 HWPX 템플릿 사본에 본문/표 초본 생성
+- `hwp_page_setup.py`: 편집용지 mm 설정 검증·본문 구역 적용·실제 적용값 확인 ([설정 안내](docs/hwp_page_setup.md))
 - `hwp_style_config.py`: 고정된 HWP 스타일 5종의 서식 JSON 검증
 - `hwpx_style_registry.py`: 작업용 HWPX에 이름 있는 스타일 등록/갱신
 - `hwp_template_probe.py`: HWP/HWPX 보고서틀의 표 구조와 결과표 후보 분석

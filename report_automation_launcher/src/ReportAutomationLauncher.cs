@@ -31,6 +31,12 @@ namespace ReportAutomationLauncher
         {
             try
             {
+                if (HasFlag(args, "self-check-hwp-page-setup"))
+                {
+                    EngineRunner.RunHwpPageSetupSelfCheck();
+                    Console.WriteLine("HWP page setup self-check passed.");
+                    return 0;
+                }
                 if (HasFlag(args, "self-check-hwp-style-presets"))
                 {
                     HwpStylePresetStore.RunSelfCheck();
@@ -451,7 +457,7 @@ namespace ReportAutomationLauncher
             return backup;
         }
 
-        private static void AtomicWrite(string outputPath, string json)
+        internal static void AtomicWrite(string outputPath, string json)
         {
             string directory = Path.GetDirectoryName(outputPath);
             if (!string.IsNullOrWhiteSpace(directory)) Directory.CreateDirectory(directory);
@@ -561,6 +567,254 @@ namespace ReportAutomationLauncher
             try { action(); }
             catch { return; }
             throw new InvalidOperationException("Self-check failed: " + message);
+        }
+    }
+
+    internal static class HwpPageSetup
+    {
+        internal static readonly string[] NumberKeys =
+        {
+            "paper_width_mm", "paper_height_mm", "top_mm", "bottom_mm", "left_mm", "right_mm",
+            "gutter_mm", "header_mm", "footer_mm"
+        };
+
+        internal static Dictionary<string, object> DefaultConfig()
+        {
+            return new Dictionary<string, object>
+            {
+                { "paper_width_mm", 210.0 }, { "paper_height_mm", 297.0 }, { "orientation", "portrait" },
+                { "top_mm", 20.0 }, { "bottom_mm", 15.0 }, { "left_mm", 24.7 }, { "right_mm", 25.0 },
+                { "gutter_mm", 0.0 }, { "header_mm", 10.0 }, { "footer_mm", 15.0 }
+            };
+        }
+
+        internal static Dictionary<string, object> Normalize(Dictionary<string, object> config)
+        {
+            if (config == null || config.Count != NumberKeys.Length + 1 || !config.ContainsKey("orientation")
+                || NumberKeys.Any(key => !config.ContainsKey(key)))
+                throw new InvalidOperationException("편집용지 설정의 필수 키가 없거나 알 수 없는 키가 있습니다.");
+            string orientation = config["orientation"] as string;
+            if (orientation != "portrait" && orientation != "landscape")
+                throw new InvalidOperationException("orientation은 portrait 또는 landscape여야 합니다.");
+            var copy = new Dictionary<string, object> { { "orientation", orientation } };
+            var units = new Dictionary<string, double>();
+            foreach (string key in NumberKeys)
+            {
+                object value = config[key];
+                TypeCode type = value == null ? TypeCode.Empty : Type.GetTypeCode(value.GetType());
+                if (type < TypeCode.SByte || type > TypeCode.Decimal)
+                    throw new InvalidOperationException(key + " 값은 숫자여야 합니다.");
+                double number = Convert.ToDouble(value, System.Globalization.CultureInfo.InvariantCulture);
+                bool size = key == "paper_width_mm" || key == "paper_height_mm";
+                if (double.IsNaN(number) || double.IsInfinity(number) || (size ? number <= 0 : number < 0))
+                    throw new InvalidOperationException(key + " 값은 유한한 " + (size ? "양수" : "0 이상의 수") + "여야 합니다.");
+                copy[key] = number;
+                // Match the writer's signed-I4 HWPUNIT boundary and per-field rounding.
+                double rounded = Math.Round(number * 7200.0 / 25.4);
+                if (rounded > int.MaxValue)
+                    throw new InvalidOperationException(key + " 값이 HWPUNIT 범위를 초과합니다.");
+                units[key] = rounded;
+            }
+            // Store base sheet dimensions; only the effective landscape dimensions are swapped.
+            double width = (double)copy[orientation == "landscape" ? "paper_height_mm" : "paper_width_mm"];
+            double height = (double)copy[orientation == "landscape" ? "paper_width_mm" : "paper_height_mm"];
+            if (width - (double)copy["left_mm"] - (double)copy["right_mm"] - (double)copy["gutter_mm"] <= 0
+                || height - (double)copy["top_mm"] - (double)copy["bottom_mm"] <= 0)
+                throw new InvalidOperationException("여백을 제외한 본문 너비와 높이는 0보다 커야 합니다.");
+            if (units[orientation == "landscape" ? "paper_height_mm" : "paper_width_mm"] - units["left_mm"] - units["right_mm"] - units["gutter_mm"] <= 0
+                || units[orientation == "landscape" ? "paper_width_mm" : "paper_height_mm"] - units["top_mm"] - units["bottom_mm"] <= 0)
+                throw new InvalidOperationException("HWPUNIT 변환 후 본문 너비와 높이는 0보다 커야 합니다.");
+            // Header/footer live inside top/bottom margins, not additional body deductions.
+            if ((double)copy["header_mm"] > (double)copy["top_mm"] || (double)copy["footer_mm"] > (double)copy["bottom_mm"])
+                throw new InvalidOperationException("머리말은 위쪽 여백, 꼬리말은 아래쪽 여백 이하여야 합니다.");
+            return copy;
+        }
+
+        internal static Dictionary<string, object> Load(string path)
+        {
+            return Normalize(new JavaScriptSerializer().DeserializeObject(
+                File.ReadAllText(path, System.Text.Encoding.UTF8)) as Dictionary<string, object>);
+        }
+
+        internal static void WriteConfig(string path, Dictionary<string, object> config)
+        {
+            HwpStylePresetStore.AtomicWrite(path, new JavaScriptSerializer().Serialize(Normalize(config)));
+        }
+    }
+
+    internal sealed class HwpPageSetupDialog : Form
+    {
+        private readonly CheckBox overrideCheck = new CheckBox();
+        private readonly ComboBox paperCombo = new ComboBox();
+        private readonly ComboBox orientationCombo = new ComboBox();
+        private readonly TableLayoutPanel editor = new TableLayoutPanel();
+        private readonly Dictionary<string, NumericUpDown> numbers = new Dictionary<string, NumericUpDown>();
+        // B5 uses ISO dimensions. Presets never change orientation or margins.
+        private static readonly decimal[,] PaperSizes = { { 210M, 297M }, { 176M, 250M }, { 297M, 420M }, { 215.9M, 279.4M } };
+        private bool loadingPaper;
+        internal Dictionary<string, object> SelectedConfig { get; private set; }
+
+        internal HwpPageSetupDialog(Dictionary<string, object> config)
+        {
+            Text = "HWP 편집용지";
+            StartPosition = FormStartPosition.CenterParent;
+            MinimizeBox = false;
+            MaximizeBox = false;
+            LauncherUi.ApplyToForm(this);
+            MinimumSize = new Size(640, 440);
+            Size = MinimumSize;
+
+            var root = new TableLayoutPanel { Dock = DockStyle.Fill, Padding = new Padding(16), ColumnCount = 1, RowCount = 4 };
+            root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+            root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+            root.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+            root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+            Controls.Add(root);
+            overrideCheck.Text = "템플릿 대신 편집용지 설정 적용";
+            overrideCheck.AutoSize = true;
+            overrideCheck.CheckedChanged += delegate { editor.Enabled = overrideCheck.Checked; };
+            root.Controls.Add(overrideCheck, 0, 0);
+            var scope = new FlowLayoutPanel { Dock = DockStyle.Fill, AutoSize = true };
+            scope.Controls.Add(new Label { Text = "현재 본문 구역", AutoSize = true });
+            scope.Controls.Add(new Label { Text = "원본 템플릿 유지", AutoSize = true, Margin = new Padding(16, 0, 0, 0) });
+            root.Controls.Add(scope, 0, 1);
+
+            editor.Dock = DockStyle.Fill;
+            editor.ColumnCount = 4;
+            editor.RowCount = 6;
+            for (int column = 0; column < 4; column++) editor.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 25));
+            for (int row = 0; row < 6; row++) editor.RowStyles.Add(new RowStyle(SizeType.Percent, 100F / 6));
+            root.Controls.Add(editor, 0, 2);
+            paperCombo.DropDownStyle = ComboBoxStyle.DropDownList;
+            paperCombo.Items.AddRange(new object[] { "A4", "B5 (ISO)", "A3", "Letter", "사용자 지정" });
+            orientationCombo.DropDownStyle = ComboBoxStyle.DropDownList;
+            orientationCombo.Items.AddRange(new object[] { "세로", "가로" });
+            AddField("용지", paperCombo, 0, 0);
+            AddField("방향", orientationCombo, 2, 0);
+            string[] labels = { "기본 너비 (mm)", "기본 높이 (mm)", "위쪽 (mm)", "아래쪽 (mm)", "왼쪽 (mm)", "오른쪽 (mm)", "제본 (mm)", "머리말 (mm)", "꼬리말 (mm)" };
+            for (int i = 0; i < HwpPageSetup.NumberKeys.Length; i++)
+            {
+                string key = HwpPageSetup.NumberKeys[i];
+                var number = new NumericUpDown { DecimalPlaces = 2, Increment = 0.1M, Minimum = 0, Maximum = 10000M, AccessibleName = labels[i] };
+                numbers.Add(key, number);
+                int row = i < 7 ? 1 + i / 2 : 5;
+                int column = i < 7 ? (i % 2) * 2 : (i - 7) * 2;
+                AddField(labels[i], number, column, row);
+            }
+            var buttons = new FlowLayoutPanel { Dock = DockStyle.Fill, AutoSize = true, FlowDirection = FlowDirection.RightToLeft };
+            var apply = new Button { Text = "적용", Width = 96 };
+            var cancel = new Button { Text = "취소", Width = 96, DialogResult = DialogResult.Cancel };
+            apply.Click += delegate
+            {
+                try
+                {
+                    SelectedConfig = ReadEditor();
+                    DialogResult = DialogResult.OK;
+                }
+                catch (Exception ex) { MessageBox.Show(this, ex.Message, Text, MessageBoxButtons.OK, MessageBoxIcon.Warning); }
+            };
+            buttons.Controls.Add(apply);
+            buttons.Controls.Add(cancel);
+            root.Controls.Add(buttons, 0, 3);
+            AcceptButton = apply;
+            CancelButton = cancel;
+            // ApplyTree sizes nested TextBoxes; NumericUpDown must retain its native edit height.
+            LauncherUi.StyleButton(apply, LauncherButtonKind.Secondary);
+            LauncherUi.StyleButton(cancel, LauncherButtonKind.Ghost);
+
+            Dictionary<string, object> initial = HwpPageSetup.Normalize(config ?? HwpPageSetup.DefaultConfig());
+            loadingPaper = true;
+            foreach (string key in HwpPageSetup.NumberKeys) numbers[key].Value = Convert.ToDecimal(initial[key]);
+            orientationCombo.SelectedIndex = (string)initial["orientation"] == "landscape" ? 1 : 0;
+            paperCombo.SelectedIndex = 4;
+            for (int i = 0; i < PaperSizes.GetLength(0); i++)
+                if (numbers["paper_width_mm"].Value == PaperSizes[i, 0] && numbers["paper_height_mm"].Value == PaperSizes[i, 1]) paperCombo.SelectedIndex = i;
+            loadingPaper = false;
+            paperCombo.SelectedIndexChanged += delegate
+            {
+                int index = paperCombo.SelectedIndex;
+                if (loadingPaper || index < 0 || index >= PaperSizes.GetLength(0)) return;
+                loadingPaper = true;
+                numbers["paper_width_mm"].Value = PaperSizes[index, 0];
+                numbers["paper_height_mm"].Value = PaperSizes[index, 1];
+                loadingPaper = false;
+            };
+            numbers["paper_width_mm"].ValueChanged += MarkCustomPaper;
+            numbers["paper_height_mm"].ValueChanged += MarkCustomPaper;
+            overrideCheck.Checked = config != null;
+            editor.Enabled = overrideCheck.Checked;
+        }
+
+        private void AddField(string text, Control control, int column, int row)
+        {
+            editor.Controls.Add(new Label { Text = text, AutoSize = true, Anchor = AnchorStyles.Left, Margin = new Padding(3, 6, 3, 6) }, column, row);
+            control.Dock = DockStyle.Top;
+            control.Margin = new Padding(3, 6, 8, 6);
+            editor.Controls.Add(control, column + 1, row);
+        }
+
+        private void MarkCustomPaper(object sender, EventArgs e)
+        {
+            if (!loadingPaper) paperCombo.SelectedIndex = 4;
+        }
+
+        internal Dictionary<string, object> ReadEditor()
+        {
+            if (!overrideCheck.Checked) return null;
+            var config = new Dictionary<string, object>();
+            foreach (string key in HwpPageSetup.NumberKeys)
+            {
+                numbers[key].Validate();
+                config[key] = Convert.ToDouble(numbers[key].Value);
+            }
+            config["orientation"] = orientationCombo.SelectedIndex == 1 ? "landscape" : "portrait";
+            return HwpPageSetup.Normalize(config);
+        }
+
+        internal static void RunSelfCheck()
+        {
+            using (var dialog = new HwpPageSetupDialog(null))
+            {
+                if (dialog.ReadEditor() != null || dialog.editor.Enabled) throw new InvalidOperationException("Self-check failed: dialog preserve default");
+                dialog.overrideCheck.Checked = true;
+                if (!dialog.editor.Enabled || new JavaScriptSerializer().Serialize(dialog.ReadEditor()) != new JavaScriptSerializer().Serialize(HwpPageSetup.Normalize(HwpPageSetup.DefaultConfig())))
+                    throw new InvalidOperationException("Self-check failed: dialog override defaults");
+                dialog.orientationCombo.SelectedIndex = 1;
+                for (int i = 0; i < PaperSizes.GetLength(0); i++)
+                {
+                    dialog.paperCombo.SelectedIndex = i;
+                    if (dialog.numbers["paper_width_mm"].Value != PaperSizes[i, 0] || dialog.numbers["paper_height_mm"].Value != PaperSizes[i, 1]
+                        || (string)dialog.ReadEditor()["orientation"] != "landscape")
+                        throw new InvalidOperationException("Self-check failed: paper preset/base dimensions");
+                }
+                dialog.numbers["paper_width_mm"].Value = 220M;
+                if (dialog.paperCombo.SelectedIndex != 4) throw new InvalidOperationException("Self-check failed: custom dimensions");
+                dialog.overrideCheck.Checked = false;
+                if (dialog.ReadEditor() != null || dialog.editor.Enabled) throw new InvalidOperationException("Self-check failed: dialog preserve after override");
+                dialog.Size = dialog.MinimumSize;
+                dialog.CreateControl();
+                CheckLayout(dialog);
+                dialog.overrideCheck.Checked = true;
+                CheckLayout(dialog);
+                Console.WriteLine("Minimum-size page setup layout passed: " + dialog.ClientSize);
+            }
+        }
+
+        private static void CheckLayout(Control parent)
+        {
+            parent.PerformLayout();
+            foreach (Control child in parent.Controls)
+            {
+                if (!parent.ClientRectangle.Contains(child.Bounds)) throw new InvalidOperationException("Self-check failed: page setup control clipped: " + child.Text);
+                if ((child is Label || child is CheckBox || child is Button) && (child.Width < child.PreferredSize.Width || child.Height < child.PreferredSize.Height))
+                    throw new InvalidOperationException("Self-check failed: page setup text clipped: " + child.Text);
+                for (int i = 0; i < parent.Controls.Count; i++)
+                {
+                    Control other = parent.Controls[i];
+                    if (other != child && child.Bounds.IntersectsWith(other.Bounds)) throw new InvalidOperationException("Self-check failed: page setup controls overlap");
+                }
+                CheckLayout(child);
+            }
         }
     }
 
@@ -1173,6 +1427,8 @@ namespace ReportAutomationLauncher
         private readonly ComboBox hwpDispatchModeCombo = new ComboBox();
         private readonly ComboBox hwpStylePresetCombo = new ComboBox();
         private readonly Button hwpStyleSettingsButton = new Button();
+        private readonly Button hwpPageSetupButton = new Button();
+        private Dictionary<string, object> hwpPageSetup;
         private readonly Button hwpEnvironmentCheckButton = new Button();
         private readonly TextBox bannerText = new TextBox();
         private readonly CheckedListBox bannerList = new CheckedListBox();
@@ -1750,6 +2006,15 @@ namespace ReportAutomationLauncher
             hwpStyleSettingsButton.Text = "서식 설정";
             hwpStyleSettingsButton.Width = 85;
             hwpStyleSettingsButton.Click += HwpStyleSettingsButton_Click;
+            hwpPageSetupButton.Text = "편집용지";
+            hwpPageSetupButton.Width = 85;
+            hwpPageSetupButton.Click += delegate
+            {
+                using (var dialog = new HwpPageSetupDialog(hwpPageSetup))
+                {
+                    if (dialog.ShowDialog(this) == DialogResult.OK) hwpPageSetup = dialog.SelectedConfig;
+                }
+            };
             hwpOptions.Controls.Add(hwpVisibleCheck);
             hwpOptions.Controls.Add(hwpKeepOpenOnErrorCheck);
             hwpOptions.Controls.Add(hwpLimitLabel);
@@ -1760,6 +2025,7 @@ namespace ReportAutomationLauncher
             hwpOptions.Controls.Add(hwpStyleLabel);
             hwpOptions.Controls.Add(hwpStylePresetCombo);
             hwpOptions.Controls.Add(hwpStyleSettingsButton);
+            hwpOptions.Controls.Add(hwpPageSetupButton);
             AddLabel(grid, 6, "HWPX 옵션");
             grid.Controls.Add(hwpOptions, 1, 6);
             grid.SetColumnSpan(hwpOptions, 2);
@@ -4620,6 +4886,7 @@ namespace ReportAutomationLauncher
                 ? HwpStylePresetStore.BuiltInName
                 : hwpStylePresetCombo.SelectedItem.ToString();
             options.HwpStyleConfig = hwpStylePresetStore.Get(options.HwpStylePresetName);
+            options.HwpPageSetup = hwpPageSetup == null ? null : HwpPageSetup.Normalize(hwpPageSetup);
             options.TableRangeOverrides = string.Join(Environment.NewLine, currentTablePreviews
                 .Where(table => table.IsManual)
                 .Select(table => table.TableKey + "=" + table.SheetName + "!" + table.FinalRange)
@@ -4742,6 +5009,8 @@ namespace ReportAutomationLauncher
         public string HwpStylePresetName = HwpStylePresetStore.BuiltInName;
         public string HwpStyleConfigPath;
         public Dictionary<string, object> HwpStyleConfig;
+        public Dictionary<string, object> HwpPageSetup;
+        public string HwpPageSetupPath;
         public string BannerSetting = "전체";
         public string TitlePrefixes = "";
         public int DecimalPlaces = 1;
@@ -4820,6 +5089,10 @@ namespace ReportAutomationLauncher
                 HwpStyleConfig = HwpStylePresetStore.Normalize(HwpStyleConfig);
                 HwpStylePresetName = Convert.ToString(HwpStyleConfig["preset_name"]);
             }
+            if (HwpPageSetup != null)
+                HwpPageSetup = ReportAutomationLauncher.HwpPageSetup.Normalize(HwpPageSetup);
+            else
+                HwpPageSetupPath = null;
             if (OutputType.IndexOf("HWP", StringComparison.OrdinalIgnoreCase) >= 0)
             {
                 if (string.IsNullOrWhiteSpace(HwpTemplatePath))
@@ -4907,6 +5180,16 @@ namespace ReportAutomationLauncher
             options.HwpTableStyleProfilePath = Get(values, "hwp-table-style-profile", "");
             options.HwpStyleConfigPath = Get(values, "hwp-style-config", "");
             options.HwpStylePresetName = Get(values, "hwp-style-preset", HwpStylePresetStore.BuiltInName);
+            if (flags.Contains("hwp-page-setup"))
+                throw new InvalidOperationException("--hwp-page-setup <path> 값을 지정하세요.");
+            options.HwpPageSetupPath = Get(values, "hwp-page-setup", "");
+            if (values.ContainsKey("hwp-page-setup"))
+            {
+                if (string.IsNullOrWhiteSpace(options.HwpPageSetupPath))
+                    throw new InvalidOperationException("--hwp-page-setup <path> 값을 지정하세요.");
+                options.HwpPageSetupPath = Path.GetFullPath(options.HwpPageSetupPath);
+                options.HwpPageSetup = ReportAutomationLauncher.HwpPageSetup.Load(options.HwpPageSetupPath);
+            }
             options.BannerSetting = Get(values, "banner", "전체");
             options.TitlePrefixes = Get(values, "prefixes", "");
             options.DecimalPlaces = GetInt(values, "decimal-places", 1);
@@ -5212,6 +5495,7 @@ namespace ReportAutomationLauncher
                 writer.WriteLine("HwpTableStyleProfile=" + options.HwpTableStyleProfilePath);
                 writer.WriteLine("HwpStylePreset=" + options.HwpStylePresetName);
                 writer.WriteLine("HwpStyleConfig=" + options.HwpStyleConfigPath);
+                writer.WriteLine("HwpPageSetup=" + (options.HwpPageSetup == null ? "" : options.HwpPageSetupPath));
                 writer.WriteLine("BannerSetting=" + options.BannerSetting);
                 writer.WriteLine("TitlePrefixes=" + options.TitlePrefixes);
                 writer.WriteLine("DecimalPlaces=" + options.DecimalPlaces);
@@ -5289,6 +5573,167 @@ namespace ReportAutomationLauncher
 
     internal static class EngineRunner
     {
+        internal static void RunHwpPageSetupSelfCheck()
+        {
+            Dictionary<string, object> defaults = HwpPageSetup.Normalize(HwpPageSetup.DefaultConfig());
+            double[] expectedDefaults = { 210, 297, 20, 15, 24.7, 25, 0, 10, 15 };
+            CheckPageSetup(defaults.Count == 10 && (string)defaults["orientation"] == "portrait", "exact default schema");
+            for (int i = 0; i < HwpPageSetup.NumberKeys.Length; i++)
+                CheckPageSetup((double)defaults[HwpPageSetup.NumberKeys[i]] == expectedDefaults[i], "default " + HwpPageSetup.NumberKeys[i]);
+            foreach (string key in HwpPageSetup.NumberKeys)
+            {
+                foreach (object bad in new object[] { null, true, "1", double.NaN, double.PositiveInfinity, double.NegativeInfinity, -0.1 })
+                {
+                    var invalid = new Dictionary<string, object>(defaults);
+                    invalid[key] = bad;
+                    RejectPageSetup(delegate { HwpPageSetup.Normalize(invalid); }, "invalid " + key);
+                }
+            }
+            foreach (string key in new[] { "paper_width_mm", "paper_height_mm" })
+            {
+                var invalid = new Dictionary<string, object>(defaults);
+                invalid[key] = 0.0;
+                RejectPageSetup(delegate { HwpPageSetup.Normalize(invalid); }, "zero " + key);
+            }
+            var changed = new Dictionary<string, object>(defaults);
+            changed.Remove("top_mm");
+            RejectPageSetup(delegate { HwpPageSetup.Normalize(changed); }, "missing key");
+            changed = new Dictionary<string, object>(defaults);
+            changed["scope"] = "body";
+            RejectPageSetup(delegate { HwpPageSetup.Normalize(changed); }, "extra key");
+            foreach (object bad in new object[] { null, true, "Landscape", "" })
+            {
+                changed = new Dictionary<string, object>(defaults);
+                changed["orientation"] = bad;
+                RejectPageSetup(delegate { HwpPageSetup.Normalize(changed); }, "invalid orientation");
+            }
+            changed = new Dictionary<string, object>(defaults);
+            changed["header_mm"] = 20.0;
+            CheckPageSetup(HwpPageSetup.Normalize(changed) != null, "header/footer equality accepted");
+            changed["header_mm"] = 20.01;
+            RejectPageSetup(delegate { HwpPageSetup.Normalize(changed); }, "header exceeds top");
+            changed["header_mm"] = 20.0;
+            changed["footer_mm"] = 15.01;
+            RejectPageSetup(delegate { HwpPageSetup.Normalize(changed); }, "footer exceeds bottom");
+            changed = new Dictionary<string, object>(defaults);
+            changed["paper_height_mm"] = 36.0;
+            CheckPageSetup(HwpPageSetup.Normalize(changed) != null, "header/footer not subtracted twice");
+            changed["paper_height_mm"] = 35.0;
+            RejectPageSetup(delegate { HwpPageSetup.Normalize(changed); }, "zero body height");
+            changed["paper_height_mm"] = 34.0;
+            RejectPageSetup(delegate { HwpPageSetup.Normalize(changed); }, "negative body height");
+            changed = new Dictionary<string, object>(defaults);
+            changed["left_mm"] = 100.0;
+            changed["right_mm"] = 100.0;
+            changed["gutter_mm"] = 10.0;
+            RejectPageSetup(delegate { HwpPageSetup.Normalize(changed); }, "gutter consumes body width");
+            changed["gutter_mm"] = 11.0;
+            RejectPageSetup(delegate { HwpPageSetup.Normalize(changed); }, "negative body width");
+            changed["left_mm"] = 200.0;
+            changed["right_mm"] = 50.0;
+            changed["gutter_mm"] = 0.0;
+            changed["orientation"] = "landscape";
+            Dictionary<string, object> landscape = HwpPageSetup.Normalize(changed);
+            CheckPageSetup((double)landscape["paper_width_mm"] == 210 && (double)landscape["paper_height_mm"] == 297, "landscape retains base dimensions");
+            changed["orientation"] = "portrait";
+            RejectPageSetup(delegate { HwpPageSetup.Normalize(changed); }, "orientation swaps effective width");
+            changed = new Dictionary<string, object>(defaults);
+            changed["top_mm"] = 110.0;
+            changed["bottom_mm"] = 110.0;
+            CheckPageSetup(HwpPageSetup.Normalize(changed) != null, "portrait effective height");
+            changed["orientation"] = "landscape";
+            RejectPageSetup(delegate { HwpPageSetup.Normalize(changed); }, "orientation swaps effective height");
+            changed = new Dictionary<string, object>(defaults);
+            foreach (string key in HwpPageSetup.NumberKeys.Skip(2)) changed[key] = 0.0;
+            CheckPageSetup(HwpPageSetup.Normalize(changed) != null, "all margins may be zero");
+            changed = new Dictionary<string, object>(defaults);
+            changed["paper_width_mm"] = 49.700001;
+            RejectPageSetup(delegate { HwpPageSetup.Normalize(changed); }, "rounded body width is zero");
+            changed = new Dictionary<string, object>(defaults);
+            changed["paper_height_mm"] = 35.000001;
+            RejectPageSetup(delegate { HwpPageSetup.Normalize(changed); }, "rounded body height is zero");
+            foreach (string key in HwpPageSetup.NumberKeys)
+            {
+                changed = new Dictionary<string, object>(defaults);
+                changed[key] = (int.MaxValue + 1.0) * 25.4 / 7200.0;
+                RejectPageSetup(delegate { HwpPageSetup.Normalize(changed); }, "signed-I4 overflow " + key);
+            }
+            changed = new Dictionary<string, object>(defaults);
+            changed["paper_width_mm"] = int.MaxValue * 25.4 / 7200.0;
+            CheckPageSetup(HwpPageSetup.Normalize(changed) != null, "signed-I4 equality accepted");
+
+            string directory = Path.Combine(Path.GetTempPath(), "ResearchHelper PageSetup Check " + Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(directory);
+            try
+            {
+                var options = new LauncherOptions { LastReportPackagePath = Path.Combine(directory, "report_package.json") };
+                string emitted = Path.Combine(directory, "hwp_page_setup.json");
+                PrepareHwpPageSetup(options);
+                CheckPageSetup(options.HwpPageSetup == null && options.HwpPageSetupPath == null && !File.Exists(emitted), "fresh preserve mode does not emit JSON");
+                options.HwpPageSetup = defaults;
+                PrepareHwpPageSetup(options);
+                CheckPageSetup(options.HwpPageSetupPath == emitted && File.Exists(emitted), "config next to package");
+                var serializer = new JavaScriptSerializer();
+                CheckPageSetup(serializer.Serialize(HwpPageSetup.Load(emitted)) == serializer.Serialize(defaults), "default save/load roundtrip");
+                options.HwpPageSetup = landscape;
+                PrepareHwpPageSetup(options);
+                CheckPageSetup(serializer.Serialize(HwpPageSetup.Load(emitted)) == serializer.Serialize(landscape), "landscape overwrite roundtrip");
+                CheckPageSetup(BuildHwpWriterArguments("writer.py", options, "output.hwpx", "report.json", "plan.json").Contains(" --page-setup " + Quote(emitted)), "quoted writer argument");
+
+                string input = Path.Combine(directory, "input setup.json");
+                HwpPageSetup.WriteConfig(input, defaults);
+                string workbook = Path.Combine(directory, "workbook.xlsx");
+                string addin = Path.Combine(directory, "addin.xlam");
+                File.WriteAllText(workbook, "non-COM validation fixture");
+                File.WriteAllText(addin, "non-COM validation fixture");
+                var args = new[] { "--workbook", workbook, "--addin", addin, "--hwp-page-setup", input };
+                LauncherOptions loaded = LauncherOptions.FromArgs(args);
+                CheckPageSetup(loaded.GenerateDraftText && loaded.HwpPageSetupPath == input && serializer.Serialize(loaded.HwpPageSetup) == serializer.Serialize(defaults), "CLI loads config for draft-enabled run");
+                loaded.LastReportPackagePath = options.LastReportPackagePath;
+                PrepareHwpPageSetup(loaded);
+                CheckPageSetup(BuildHwpWriterArguments("writer.py", loaded, "output.hwpx", "report.json", "plan.json").Contains(" --page-setup " + Quote(emitted)), "CLI config copied and forwarded");
+                loaded = LauncherOptions.FromArgs(args.Concat(new[] { "--no-draft" }).ToArray());
+                CheckPageSetup(!loaded.GenerateDraftText && loaded.HwpPageSetup != null, "new run options retain page setup without TXT draft");
+                RejectPageSetup(delegate { LauncherOptions.FromArgs(new[] { "--hwp-page-setup" }); }, "missing CLI path");
+                RejectPageSetup(delegate { LauncherOptions.FromArgs(new[] { "--hwp-page-setup", "" }); }, "empty CLI path");
+                HwpStylePresetStore.AtomicWrite(input, "{\"orientation\":\"portrait\"}");
+                RejectPageSetup(delegate { LauncherOptions.FromArgs(args); }, "CLI rejects malformed schema");
+
+                string saved = File.ReadAllText(emitted);
+                options.HwpPageSetup = null;
+                CheckPageSetup(!BuildHwpWriterArguments("writer.py", options, "output.hwpx", "report.json", "plan.json").Contains(" --page-setup "), "stale path never forwarded before preparation");
+                PrepareHwpPageSetup(options);
+                CheckPageSetup(options.HwpPageSetupPath == null && File.ReadAllText(emitted) == saved, "preserve clears path without rewriting old JSON");
+                LauncherOptions preserved = LauncherOptions.FromArgs(new[] { "--workbook", workbook, "--addin", addin });
+                preserved.HwpPageSetupPath = emitted;
+                preserved.Validate();
+                CheckPageSetup(preserved.HwpPageSetup == null && preserved.HwpPageSetupPath == null, "validation cannot revive stale config");
+                CheckPageSetup(!BuildHwpWriterArguments("writer.py", preserved, "output.hwpx", "report.json", "plan.json").Contains(" --page-setup "), "CLI preserve mode omits argument");
+                preserved.HwpPageSetupPath = emitted;
+                AutomationRunner.WriteLauncherConfig(workbook, preserved);
+                CheckPageSetup(File.ReadAllLines(Path.Combine(directory, "workbook_launcher_config.txt")).Contains("HwpPageSetup="), "preserve config log omits stale path");
+                HwpPageSetupDialog.RunSelfCheck();
+                using (var dialog = new HwpPageSetupDialog(landscape))
+                    CheckPageSetup(serializer.Serialize(dialog.ReadEditor()) == serializer.Serialize(landscape), "configured dialog reopen");
+            }
+            finally
+            {
+                Directory.Delete(directory, true);
+            }
+        }
+
+        private static void CheckPageSetup(bool condition, string message)
+        {
+            if (!condition) throw new InvalidOperationException("Self-check failed: " + message);
+        }
+
+        private static void RejectPageSetup(Action action, string message)
+        {
+            try { action(); }
+            catch (InvalidOperationException) { return; }
+            throw new InvalidOperationException("Self-check failed: accepted " + message);
+        }
+
         internal static void RunHwpStyleCliSelfCheck()
         {
             string directory = Path.Combine(Path.GetTempPath(), "ResearchHelperStyleCliCheck_" + Guid.NewGuid().ToString("N"));
@@ -5503,6 +5948,8 @@ namespace ReportAutomationLauncher
 
                 PrepareHwpStyleConfig(options);
                 log("HWP 서식 설정 저장: " + options.HwpStyleConfigPath);
+                PrepareHwpPageSetup(options);
+                if (options.HwpPageSetup != null) log("HWP 편집용지 설정 저장: " + options.HwpPageSetupPath);
 
                 string directory = Path.GetDirectoryName(options.LastGeneratedWorkbookPath);
                 string stem = Path.GetFileNameWithoutExtension(options.LastGeneratedWorkbookPath);
@@ -5588,8 +6035,19 @@ namespace ReportAutomationLauncher
                    " --max-sections " + Quote(options.HwpMaxSections.ToString()) +
                    " --dispatch-mode " + Quote(options.HwpDispatchMode) +
                    " --style-config " + Quote(options.HwpStyleConfigPath) +
+                   (options.HwpPageSetup == null ? "" : OptionalArgument(" --page-setup ", options.HwpPageSetupPath)) +
                    OptionalArgument(" --table-style-profile ", options.HwpTableStyleProfilePath) +
                    (options.HwpKeepOpenOnError ? " --keep-open-on-error" : "");
+        }
+
+        private static void PrepareHwpPageSetup(LauncherOptions options)
+        {
+            // Null is authoritative: never reuse a previous run's file in template-preserve mode.
+            options.HwpPageSetupPath = null;
+            if (options.HwpPageSetup == null) return;
+            string path = Path.Combine(Path.GetDirectoryName(options.LastReportPackagePath), "hwp_page_setup.json");
+            HwpPageSetup.WriteConfig(path, options.HwpPageSetup);
+            options.HwpPageSetupPath = path;
         }
 
         public static string TryRunHwpEnvironmentDiagnostics(LauncherOptions options, string outputReportPath, Action<string> log)
