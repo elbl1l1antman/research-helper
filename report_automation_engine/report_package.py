@@ -9,35 +9,53 @@ from pathlib import Path
 from typing import Any, Dict, Iterable, List
 
 import openpyxl
+from openpyxl.utils.cell import range_boundaries
 
 try:
     from .template_inspector import inspect_template
 except ImportError:
     from template_inspector import inspect_template
 
+try:
+    from .report_table_matrix import build_table_matrix, build_table_matrix_from_cells, resolve_table_metadata
+except ImportError:
+    from report_table_matrix import build_table_matrix, build_table_matrix_from_cells, resolve_table_metadata
+
 
 def build_report_package(excel_path: str | Path, meta: Dict[str, Any] | None = None) -> Dict[str, Any]:
-    path = Path(excel_path)
+    path = Path(excel_path).resolve()
     wb = openpyxl.load_workbook(path, data_only=True, read_only=True)
-    qa = read_qa(wb)
-    sections = read_sections(wb, qa)
-    charts = read_rows(wb, "보고서_차트데이터")
-    tables = group_table_rows(read_rows(wb, "보고서_삽입표"))
-    package = {
-        "schema_version": "1.0",
-        "meta": {
-            "source_workbook": str(path),
-            "source_file_name": path.name,
-            "created_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-            **(meta or {}),
-        },
-        "sections": sections,
-        "tables": tables,
-        "charts": normalize_charts(charts, qa),
-        "qa": qa,
-    }
-    add_contract_qa(package)
-    return package
+    try:
+        qa = read_qa(wb)
+        sections = read_sections(wb, qa)
+        charts = read_rows(wb, "보고서_차트데이터")
+        decimal_places = int(str((meta or {}).get("decimal_places", "1") or "1"))
+        cell_rows = read_rows(wb, "보고서_삽입표셀")
+        tables = group_cell_rows(cell_rows) if cell_rows else group_table_rows(read_rows(wb, "보고서_삽입표"), decimal_places)
+        table_list = {clean(row.get("table_key")): row for row in read_rows(wb, "보고서_표목록")}
+        for table in tables:
+            table.update(resolve_table_metadata(table, table_list.get(table["table_key"])))
+            for field, label in (("base_label", "BASE 조건"), ("unit", "단위")):
+                if table[field] == "확인 필요":
+                    table.setdefault("qa", []).append({"severity": "warning", "message": f"표 {label} 확인 필요: 보고서_표목록의 {field}를 지정하세요."})
+        package = {
+            "schema_version": "1.0",
+            "meta": {
+                "source_workbook": str(path),
+                "source_file_name": path.name,
+                "created_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                **(meta or {}),
+            },
+            "sections": sections,
+            "tables": tables,
+            "charts": normalize_charts(charts, qa),
+            "qa": qa,
+        }
+        add_contract_qa(package)
+        add_source_range_qa(package, wb)
+        return package
+    finally:
+        wb.close()
 
 
 def latest_sheet(wb, prefix: str):
@@ -89,6 +107,7 @@ def read_sections(wb, qa: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
                 "table_key": table_key,
                 "title": clean(row.get("문항/표 제목")),
                 "narrative_final": narrative,
+                "narrative_blocks": split_narrative_blocks(narrative),
                 "narrative_source": narrative_source(row),
                 "summary": clean(row.get("주요 수치 요약")),
                 "review_status": clean(row.get("검토 상태")),
@@ -96,6 +115,17 @@ def read_sections(wb, qa: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
             }
         )
     return sections
+
+
+def split_narrative_blocks(text: str) -> List[Dict[str, str]]:
+    normalized = str(text or "").replace("\r\n", "\n").replace("\r", "\n")
+    for boundary in ("다음으로", "그다음으로", "반면,"):
+        normalized = normalized.replace(f"나타남{boundary}", f"나타남\n{boundary}")
+    lines = [line.strip() for line in normalized.split("\n") if line.strip()]
+    return [
+        {"style": "보고서 본문1" if index == 0 else "보고서 본문2", "text": line}
+        for index, line in enumerate(lines)
+    ]
 
 
 def first_text(row: Dict[str, Any], *keys: str) -> str:
@@ -149,7 +179,7 @@ def normalize_charts(rows: List[Dict[str, Any]], qa: List[Dict[str, Any]]) -> Li
     return charts
 
 
-def group_table_rows(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+def group_table_rows(rows: List[Dict[str, Any]], decimal_places: int = 1) -> List[Dict[str, Any]]:
     grouped: Dict[str, Dict[str, Any]] = {}
     for row in rows:
         table_key = clean(row.get("table_key"))
@@ -166,15 +196,27 @@ def group_table_rows(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
                 "source_cell": clean(row.get("source_cell")),
             }
         )
-    return list(grouped.values())
+    return [build_table_matrix(table, decimal_places) for table in grouped.values()]
+
+
+def group_cell_rows(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    grouped: Dict[str, List[Dict[str, Any]]] = {}
+    for row in rows:
+        table_key = clean(row.get("table_key"))
+        if table_key:
+            grouped.setdefault(table_key, []).append(row)
+    return [build_table_matrix_from_cells(table_rows) for table_rows in grouped.values()]
 
 
 def add_contract_qa(package: Dict[str, Any]) -> None:
     seen = set()
+    table_keys = {clean(table.get("table_key")) for table in package["tables"]}
     for section in package["sections"]:
         key = section["table_key"]
         if not key:
             package["qa"].append(issue("", "contract", "error", "section table_key가 비어 있습니다."))
+        elif key not in table_keys:
+            package["qa"].append(issue(key, "contract", "error", "section에 대응되는 삽입표 데이터가 없습니다."))
         if key in seen:
             package["qa"].append(issue(key, "contract", "error", "section table_key가 중복되었습니다."))
         seen.add(key)
@@ -183,8 +225,40 @@ def add_contract_qa(package: Dict[str, Any]) -> None:
     if not package["sections"]:
         package["qa"].append(issue("", "contract", "error", "보고서_분석문 산출 시트가 없거나 비어 있습니다."))
     for table in package["tables"]:
-        if not table["rows"]:
+        if not table.get("cell_contract") and not table["rows"]:
             package["qa"].append(issue(table["table_key"], "contract", "error", "삽입표 rows가 비어 있습니다."))
+        for qa_item in table.get("qa", []):
+            package["qa"].append(
+                issue(table["table_key"], "table_matrix", qa_item.get("severity", "warning"), qa_item.get("message", ""))
+            )
+
+
+def add_source_range_qa(package: Dict[str, Any], wb) -> None:
+    for table in package["tables"]:
+        if not table.get("cell_contract"):
+            continue
+        key = table.get("table_key", "")
+        sheet_name = clean(table.get("source_sheet"))
+        source_range = clean(table.get("source_range")).replace("$", "")
+        if sheet_name not in wb.sheetnames:
+            package["qa"].append(issue(key, "table_matrix", "error", f"source sheet를 찾을 수 없습니다: {sheet_name}"))
+            continue
+        try:
+            min_col, min_row, max_col, max_row = range_boundaries(source_range)
+        except ValueError:
+            package["qa"].append(issue(key, "table_matrix", "error", f"source range가 올바르지 않습니다: {source_range}"))
+            continue
+        source_rows = max_row - min_row + 1
+        source_cols = max_col - min_col + 1
+        if source_rows != table.get("row_count") or source_cols != table.get("col_count"):
+            package["qa"].append(
+                issue(
+                    key,
+                    "table_matrix",
+                    "error",
+                    f"source range 크기({source_rows}x{source_cols})와 matrix 크기({table.get('row_count')}x{table.get('col_count')})가 다릅니다.",
+                )
+            )
 
 
 def build_preflight(package: Dict[str, Any], templates: Iterable[tuple[str, str, str]]) -> Dict[str, Any]:
@@ -202,7 +276,7 @@ def build_preflight(package: Dict[str, Any], templates: Iterable[tuple[str, str,
                 warnings.append(issue("", "template", "warning", f"{label} 템플릿 권장 필드가 부족합니다."))
 
     chart_candidates = [row for row in package["charts"] if row.get("include_chart")]
-    table_rows = sum(len(table["rows"]) for table in package["tables"])
+    table_rows = sum(int(table.get("row_count") or len(table.get("rows", []))) for table in package["tables"])
     for section in package["sections"]:
         if section["qa_flags"]:
             warnings.append(issue(section["table_key"], "sentence", "warning", ", ".join(section["qa_flags"])))
@@ -212,6 +286,8 @@ def build_preflight(package: Dict[str, Any], templates: Iterable[tuple[str, str,
     status = "blocked" if errors else "ready_with_warnings" if warnings else "ready"
     warning_buckets = count_by(warnings, "review_bucket")
     warning_categories = count_by(warnings, "category")
+    table_matrix_warnings = [q for q in warnings if clean(q.get("type")) == "table_matrix"]
+    table_matrix_errors = [q for q in errors if clean(q.get("type")) == "table_matrix"]
     return {
         "schema_version": "1.0",
         "status": status,
@@ -223,6 +299,8 @@ def build_preflight(package: Dict[str, Any], templates: Iterable[tuple[str, str,
             "table_row_count": table_rows,
             "qa_warning_count": len(warnings),
             "qa_error_count": len(errors),
+            "table_matrix_warning_count": len(table_matrix_warnings),
+            "table_matrix_error_count": len(table_matrix_errors),
             "qa_warning_buckets": warning_buckets,
             "qa_warning_categories": warning_categories,
         },

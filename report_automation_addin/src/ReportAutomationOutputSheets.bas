@@ -64,6 +64,8 @@ Public Sub ReportAutomation_WriteSettingsSheet(ByVal ws As Worksheet, ByVal wb A
         End If
     Next i
 
+    ReportAutomation_CopyTableRangeSettings priorSettingsWs, ws
+
     ws.Columns("A:C").AutoFit
     ws.Range("A3:A" & UBound(labels) + 3).Font.Bold = True
     ReportAutomation_StyleHeader ws.Range("A1:C1")
@@ -115,7 +117,7 @@ End Sub
 ' ============================================================
 Public Sub ReportAutomation_WriteMetaSheet(ByVal ws As Worksheet, ByVal wb As Workbook, ByVal dataWs As Worksheet, ByVal tables As Collection, _
                                             ByVal wsSettings As Worksheet, ByVal wsList As Worksheet, ByVal wsNarr As Worksheet, _
-                                            ByVal wsChart As Worksheet, ByVal wsInsert As Worksheet)
+                                            ByVal wsChart As Worksheet, ByVal wsInsert As Worksheet, ByVal wsInsertCells As Worksheet)
     ws.Range("A1:B1").Value = Array("key", "value")
     ReportAutomation_StyleHeader ws.Range("A1:B1")
 
@@ -130,6 +132,7 @@ Public Sub ReportAutomation_WriteMetaSheet(ByVal ws As Worksheet, ByVal wb As Wo
     ReportAutomation_WriteMetaKV ws, rowNo, "narrative_sheet", wsNarr.Name
     ReportAutomation_WriteMetaKV ws, rowNo, "chart_data_sheet", wsChart.Name
     ReportAutomation_WriteMetaKV ws, rowNo, "insert_table_sheet", wsInsert.Name
+    ReportAutomation_WriteMetaKV ws, rowNo, "insert_table_cells_sheet", wsInsertCells.Name
     ReportAutomation_WriteMetaKV ws, rowNo, "style_profile", "formal_korean_research"
     ReportAutomation_WriteMetaKV ws, rowNo, "number_format", "percent_1_decimal"
     ReportAutomation_WriteMetaKV ws, rowNo, "hwp_chart_paste_mode", "metafile_preferred"

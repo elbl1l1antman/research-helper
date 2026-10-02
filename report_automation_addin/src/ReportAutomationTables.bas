@@ -79,13 +79,15 @@ Public Function ReportAutomation_CollectTables(ByVal ws As Worksheet) As Collect
     Dim tables As New Collection
     Dim i As Long
     For i = 1 To titleRows.Count
-        Dim startRow As Long, endRow As Long, lastCol As Long
+        Dim startRow As Long, endRow As Long, blockLimitRow As Long, lastCol As Long
         startRow = CLng(titleRows(i))
         If i < titleRows.Count Then
-            endRow = CLng(titleRows(i + 1)) - 1
+            blockLimitRow = CLng(titleRows(i + 1)) - 1
         Else
-            endRow = ReportAutomation_LastNonEmptyRowInBlock(ws, startRow, lastRow)
+            blockLimitRow = lastRow
         End If
+        ' 표 사이의 빈 구분행은 HWP 표에 포함하지 않는다.
+        endRow = ReportAutomation_LastNonEmptyRowInBlock(ws, startRow, blockLimitRow)
         lastCol = ReportAutomation_LastNonEmptyColInBlock(ws, startRow, endRow)
 
         ' 제목 문자열에서 표번호, 분석 제목, 기준 문구를 분리한다.

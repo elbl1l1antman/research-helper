@@ -1,0 +1,287 @@
+from __future__ import annotations
+
+from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
+import html
+import re
+from typing import Any, Dict, List
+import unicodedata
+
+
+HEADER_LABELS = ["항목", "비율", "가중 N", "원 N"]
+ALLOWED_ROLES = {"title", "base", "banner_horizontal", "banner_vertical", "stub", "value", "note", "source", "blank", "unknown"}
+LONG_TEXT_LIMIT = 40
+MANY_COLUMNS_LIMIT = 8
+ALLOWED_UNIT_SYMBOLS = set("℃°㎡㎢㎥㎏㎎㎞㎝㎜㏄")
+DECORATIVE_SYMBOLS = set("●■◆▶※")
+
+
+def resolve_table_metadata(table: Dict[str, Any], metadata: Dict[str, Any] | None = None) -> Dict[str, str]:
+    """Read explicit conditions/units first; never assume that an N count means people."""
+    labels = [str(cell.get("display_text") or "") for row in table.get("matrix", []) for cell in row
+              if not cell.get("covered_by") and cell.get("role") in {"base", "header", "banner_horizontal", "note"}]
+    supplied = metadata or {}
+    base = str(supplied.get("base_label") or table.get("base_label") or "").strip()
+    unit = str(supplied.get("unit") or table.get("unit") or "").strip()
+    for label in ([base] if base else labels):
+        match = re.search(r"BASE\s*[:：]\s*(.*?)(?=\s*(?:[,|]\s*)?단위\s*[:：]|\]|$)", label, re.I)
+        if match:
+            base = match.group(1).strip(" ,|")
+            break
+    if not unit:
+        units = []
+        for label in labels:
+            match = re.search(r"단위\s*[:：]\s*([^\]]+)", label)
+            if match:
+                unit = match.group(1).rstrip(" )]| ").strip()
+                break
+            text = label.strip()
+            if re.fullmatch(r"명|개|건|원|천원|만원|억원|점|%", text):
+                units.append(text)
+            elif re.search(r"\d+\s*점\s*(?:평균|척도)", text):
+                units.append("점")
+        if not unit:
+            units.extend(str(row.get("unit") or "").strip() for row in table.get("rows", []))
+            unit = ", ".join(dict.fromkeys(value for value in units if value))
+    return {"base_label": sanitize_table_display_text(base).strip("[] ") or "확인 필요",
+            "unit": sanitize_table_display_text(unit).strip("[] ") or "확인 필요"}
+
+
+def sanitize_table_display_text(value: Any) -> str:
+    return _clean_table_display_text(value)[0]
+
+
+def _clean_table_display_text(value: Any) -> tuple[str, str]:
+    decoded = html.unescape("" if value is None else str(value))
+    kept: List[str] = []
+    removed: List[str] = []
+    for character in decoded:
+        category = unicodedata.category(character)
+        codepoint = ord(character)
+        if category.startswith("C"):
+            if character.isspace():
+                kept.append(" ")
+            removed.append(character)
+        elif (
+            character in DECORATIVE_SYMBOLS
+            or (category == "So" and character not in ALLOWED_UNIT_SYMBOLS)
+            or 0xFE00 <= codepoint <= 0xFE0F
+            or 0xE0100 <= codepoint <= 0xE01EF
+            or 0x1F3FB <= codepoint <= 0x1F3FF
+        ):
+            removed.append(character)
+        else:
+            kept.append(character)
+    return " ".join("".join(kept).split()), "".join(removed)
+
+
+def _display_text_fields(value: Any) -> Dict[str, str]:
+    original = "" if value is None else str(value)
+    cleaned, removed = _clean_table_display_text(value)
+    fields = {"display_text": cleaned}
+    if cleaned != original:
+        fields.update(original_display_text=original, removed_symbols=removed)
+    return fields
+
+
+def build_table_matrix(table: Dict[str, Any], decimal_places: int = 1) -> Dict[str, Any]:
+    rows = list(table.get("rows", []))
+    matrix: List[List[Dict[str, Any]]] = [header_row()]
+    for row_index, source in enumerate(rows, start=2):
+        unit = str(source.get("unit") or "")
+        matrix.append(
+            [
+                make_cell(row_index, 1, "stub", source.get("category"), source.get("category"), "", source.get("source_cell"), "left"),
+                make_cell(row_index, 2, "value", format_display_value(source.get("percent"), unit, decimal_places), source.get("percent"), "0.0", source.get("source_cell"), "right"),
+                make_cell(row_index, 3, "value", format_display_value(source.get("weighted_n"), "", decimal_places), source.get("weighted_n"), "#,##0", source.get("source_cell"), "right"),
+                make_cell(row_index, 4, "value", format_display_value(source.get("raw_n"), "", decimal_places), source.get("raw_n"), "#,##0", source.get("source_cell"), "right"),
+            ]
+        )
+
+    cells = [cell for row in matrix for cell in row]
+    result = {
+        **table,
+        "source_sheet": table.get("source_sheet", "보고서_삽입표"),
+        "source_range": table.get("source_range", ""),
+        "row_count": len(matrix),
+        "col_count": max((len(row) for row in matrix), default=0),
+        "matrix": matrix,
+        "cells": cells,
+        "merged_ranges": list(table.get("merged_ranges", [])),
+        "roles": role_counts(cells),
+        "style_hints": {
+            "table_width": "body",
+            "wrap_text": True,
+            "header_fill": "#E7E7E7",
+            "font_size_pt": 9,
+        },
+    }
+    result["qa"] = table_matrix_qa(result)
+    return result
+
+
+def build_table_matrix_from_cells(rows: List[Dict[str, Any]]) -> Dict[str, Any]:
+    first = rows[0]
+    row_count = max(as_positive_int(row.get("row")) + as_positive_int(row.get("rowspan")) - 1 for row in rows)
+    col_count = max(as_positive_int(row.get("col")) + as_positive_int(row.get("colspan")) - 1 for row in rows)
+    matrix = [[empty_cell(r, c) for c in range(1, col_count + 1)] for r in range(1, row_count + 1)]
+    merged_ranges: List[Dict[str, int]] = []
+
+    for source in rows:
+        row = as_positive_int(source.get("row"))
+        col = as_positive_int(source.get("col"))
+        rowspan = as_positive_int(source.get("rowspan"))
+        colspan = as_positive_int(source.get("colspan"))
+        role = str(source.get("role") or "unknown").strip()
+        if role not in ALLOWED_ROLES:
+            role = "unknown"
+        raw_value = source.get("raw_value")
+        matrix[row - 1][col - 1] = {
+            "row": row,
+            "col": col,
+            "rowspan": rowspan,
+            "colspan": colspan,
+            "role": role,
+            **_display_text_fields(source.get("display_text")),
+            "raw_value": raw_value,
+            "number_format": str(source.get("number_format") or ""),
+            "source_cell": str(source.get("source_cell") or ""),
+            "align": str(source.get("horizontal_align") or ""),
+            "vertical_align": str(source.get("vertical_align") or ""),
+            "covered_by": str(source.get("covered_by") or ""),
+            "is_numeric": is_number(raw_value),
+        }
+        if rowspan > 1 or colspan > 1:
+            merged_ranges.append({"row": row, "col": col, "rowspan": rowspan, "colspan": colspan})
+
+    cells = [cell for matrix_row in matrix for cell in matrix_row]
+    result = {
+        "table_key": str(first.get("table_key") or ""),
+        "title": str(first.get("title") or ""),
+        "rows": [],
+        "source_sheet": str(first.get("source_sheet") or ""),
+        "source_range": str(first.get("source_range") or ""),
+        "row_count": row_count,
+        "col_count": col_count,
+        "matrix": matrix,
+        "cells": cells,
+        "merged_ranges": merged_ranges,
+        "roles": role_counts(cells),
+        "style_hints": {"table_width": "body", "wrap_text": True, "header_fill": "#E7E7E7", "font_size_pt": 9},
+        "cell_contract": True,
+    }
+    for field in ("base_label", "unit"):
+        if first.get(field):
+            result[field] = str(first[field])
+    result["qa"] = table_matrix_qa(result)
+    return result
+
+
+def header_row() -> List[Dict[str, Any]]:
+    return [
+        make_cell(1, index, "header", label, label, "", "", "center")
+        for index, label in enumerate(HEADER_LABELS, start=1)
+    ]
+
+
+def make_cell(row: int, col: int, role: str, display_text: Any, raw_value: Any, number_format: str, source_cell: Any, align: str) -> Dict[str, Any]:
+    return {
+        "row": row,
+        "col": col,
+        "rowspan": 1,
+        "colspan": 1,
+        "role": role,
+        **_display_text_fields(display_text),
+        "raw_value": raw_value,
+        "number_format": number_format,
+        "source_cell": "" if source_cell is None else str(source_cell),
+        "align": align,
+        "is_numeric": is_number(raw_value),
+    }
+
+
+def empty_cell(row: int, col: int) -> Dict[str, Any]:
+    return make_cell(row, col, "blank", "", None, "", "", "") | {"vertical_align": "", "covered_by": ""}
+
+
+def as_positive_int(value: Any) -> int:
+    try:
+        return max(int(value), 1)
+    except (TypeError, ValueError):
+        return 1
+
+
+def format_display_value(value: Any, unit: str = "", decimal_places: int = 1) -> str:
+    if value in (None, ""):
+        return ""
+    try:
+        parsed = Decimal(str(value).replace(",", "").replace("%", "").strip())
+    except (InvalidOperation, TypeError, ValueError):
+        return str(value).strip()
+    if parsed == parsed.to_integral_value():
+        text = f"{parsed:,.0f}"
+    else:
+        places = max(decimal_places, 0)
+        rounded = parsed.quantize(Decimal("1").scaleb(-places), rounding=ROUND_HALF_UP)
+        text = f"{rounded:,.{places}f}"
+    return text + (unit or "")
+
+
+def table_matrix_qa(table_matrix: Dict[str, Any]) -> List[Dict[str, str]]:
+    qa: List[Dict[str, str]] = []
+    if int(table_matrix.get("row_count") or 0) == 0 or int(table_matrix.get("col_count") or 0) == 0:
+        qa.append(issue("error", "표 matrix가 비어 있습니다."))
+    if int(table_matrix.get("col_count") or 0) > MANY_COLUMNS_LIMIT:
+        qa.append(issue("warning", "열 수가 많아 HWPX 본문 폭을 초과할 수 있습니다."))
+    if not str(table_matrix.get("title") or "").strip():
+        qa.append(issue("warning", "표 제목이 없습니다."))
+    if not str(table_matrix.get("source_range") or "").strip():
+        qa.append(issue("error" if table_matrix.get("cell_contract") else "warning", "표 source_range가 없습니다."))
+    value_cells = [cell for cell in table_matrix.get("cells", []) if cell.get("role") == "value"]
+    if value_cells and all(not str(cell.get("display_text") or "").strip() for cell in value_cells):
+        qa.append(issue("error", "값 영역이 모두 비어 있습니다."))
+    for cell in table_matrix.get("cells", []):
+        display_text = str(cell.get("display_text") or "")
+        if "original_display_text" in cell:
+            location = str(cell.get("source_cell") or f"{cell.get('row')}행 {cell.get('col')}열")
+            qa.append(issue("warning", f"{location} 표시문자를 정리했습니다."))
+        if not display_text.strip() and cell.get("raw_value") not in (None, "") and "original_display_text" not in cell:
+            qa.append(issue("error", f"{cell.get('row')}행 {cell.get('col')}열 display_text가 없습니다."))
+        if display_text and set(display_text.strip()) == {"#"}:
+            qa.append(issue("error", f"{cell.get('row')}행 {cell.get('col')}열 표시값이 ###입니다."))
+        if cell.get("role") == "unknown":
+            qa.append(issue("warning", f"{cell.get('row')}행 {cell.get('col')}열 역할을 판정하지 못했습니다."))
+        if len(display_text) > LONG_TEXT_LIMIT:
+            qa.append(issue("warning", f"{cell.get('row')}행 {cell.get('col')}열 텍스트가 길어 줄바꿈됩니다."))
+    occupied: Dict[tuple[int, int], tuple[int, int]] = {}
+    for merged in table_matrix.get("merged_ranges", []):
+        anchor = (merged["row"], merged["col"])
+        for row in range(merged["row"], merged["row"] + merged["rowspan"]):
+            for col in range(merged["col"], merged["col"] + merged["colspan"]):
+                previous = occupied.get((row, col))
+                if previous and previous != anchor:
+                    qa.append(issue("error", f"{row}행 {col}열 병합 범위가 충돌합니다."))
+                    return qa
+                occupied[(row, col)] = anchor
+    return qa
+
+
+def role_counts(cells: List[Dict[str, Any]]) -> Dict[str, int]:
+    counts: Dict[str, int] = {}
+    for cell in cells:
+        role = str(cell.get("role") or "unknown")
+        counts[role] = counts.get(role, 0) + 1
+    return counts
+
+
+def is_number(value: Any) -> bool:
+    if value in (None, ""):
+        return False
+    try:
+        float(str(value).replace(",", "").replace("%", "").strip())
+        return True
+    except (TypeError, ValueError):
+        return False
+
+
+def issue(severity: str, message: str) -> Dict[str, str]:
+    return {"type": "table_matrix", "severity": severity, "message": message}
