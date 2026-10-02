@@ -337,11 +337,21 @@ RA_DASH_CHART_4_TITLE
 report_automation_launcher/bin/ReportAutomationLauncher.exe
 ```
 
+배포용 런처는 이 **EXE 한 개**입니다. Python 런타임, 엔진, Excel 추가기능,
+기본 설정과 PPTX 템플릿을 내장하므로 다른 폴더로 옮겨도 저장소나 Python 설치가
+필요하지 않습니다. Windows x64, Excel과 HWPX 출력용 아래한글은 별도 설치해야 합니다.
+EXE는 매번 같은 이름으로 갱신하며 버전별 실행 파일을 따로 보관하지 않습니다.
+첫 실행 시 사용자 로컬 캐시에 실행 구성요소를 준비합니다.
+[독립 실행·빌드 안내](docs/standalone_launcher.md)
+
 빌드:
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File .\report_automation_launcher\scripts\build_report_automation_launcher.ps1
 ```
+
+빌드에는 의존성이 설치된 `.venv`가 필요하지만 최종 사용자에게는 필요하지 않습니다.
+배포 빌드는 내장 Python의 독립 실행 검증을 통과한 후에만 기존 EXE를 교체합니다.
 
 ## CLI 예시
 
@@ -421,7 +431,7 @@ python -m report_automation_engine.hwp_direct_writer `
   --output "C:\path\report_draft.hwpx"
 ```
 
-Python 의존성 설치 예:
+개발·빌드 환경용 Python 의존성 설치 예:
 
 ```powershell
 python -m venv .venv
@@ -429,7 +439,8 @@ python -m venv .venv
 .\.venv\Scripts\python.exe -m pip install -r requirements.txt
 ```
 
-런처는 저장소 루트의 `.venv\Scripts\python.exe`를 우선 사용합니다. 아래한글 COM writer를 사용할 때는 이 가상환경에 `pywin32`가 설치되어 있어야 합니다.
+배포용 런처는 내장 Python과 `pywin32`를 사용합니다. `-DevelopmentOnly`로 빌드한
+개발용 런처만 환경변수와 저장소의 `.venv\Scripts\python.exe`를 참조합니다.
 
 ```powershell
 python -m pip install -r requirements.txt

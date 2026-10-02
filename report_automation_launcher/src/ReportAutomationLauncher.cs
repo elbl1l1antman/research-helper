@@ -16,6 +16,13 @@ namespace ReportAutomationLauncher
         [STAThread]
         private static int Main(string[] args)
         {
+            try { StandaloneBundle.Initialize(); }
+            catch (Exception ex)
+            {
+                if (args.Length == 0) MessageBox.Show("실행 구성요소 준비 실패: " + ex.Message, "ReportAutomation", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                else Console.Error.WriteLine(ex.Message);
+                return 1;
+            }
             if (args.Length > 0)
             {
                 return RunCommandLine(args);
@@ -31,6 +38,11 @@ namespace ReportAutomationLauncher
         {
             try
             {
+                if (HasFlag(args, "self-check-standalone"))
+                {
+                    StandaloneBundle.SelfCheck(GetArgValue(args, "out"));
+                    return 0;
+                }
                 if (HasFlag(args, "self-check-hwp-page-setup"))
                 {
                     EngineRunner.RunHwpPageSetupSelfCheck();
@@ -3486,6 +3498,7 @@ namespace ReportAutomationLauncher
             startInfo.StandardOutputEncoding = System.Text.Encoding.UTF8;
             startInfo.StandardErrorEncoding = System.Text.Encoding.UTF8;
 
+            StandaloneBundle.ConfigurePythonProcess(startInfo);
             using (Process process = Process.Start(startInfo))
             {
                 if (!process.WaitForExit(timeoutMs))
@@ -4576,6 +4589,7 @@ namespace ReportAutomationLauncher
             startInfo.RedirectStandardError = true;
             startInfo.StandardOutputEncoding = System.Text.Encoding.UTF8;
             startInfo.StandardErrorEncoding = System.Text.Encoding.UTF8;
+            StandaloneBundle.ConfigurePythonProcess(startInfo);
             using (Process process = Process.Start(startInfo))
             {
                 if (!process.WaitForExit(timeoutMs))
@@ -5818,6 +5832,7 @@ namespace ReportAutomationLauncher
                 startInfo.StandardErrorEncoding = System.Text.Encoding.UTF8;
 
                 log("Python 문장 초안을 생성합니다.");
+                StandaloneBundle.ConfigurePythonProcess(startInfo);
                 using (Process process = Process.Start(startInfo))
                 {
                     if (!process.WaitForExit(120000))
@@ -5889,6 +5904,7 @@ namespace ReportAutomationLauncher
                 startInfo.StandardErrorEncoding = System.Text.Encoding.UTF8;
 
                 log("report package와 preflight를 생성합니다.");
+                StandaloneBundle.ConfigurePythonProcess(startInfo);
                 using (Process process = Process.Start(startInfo))
                 {
                     if (!process.WaitForExit(120000))
@@ -5974,6 +5990,7 @@ namespace ReportAutomationLauncher
                 startInfo.StandardErrorEncoding = System.Text.Encoding.UTF8;
 
                 log("아래한글 COM으로 HWPX 초본을 생성합니다.");
+                StandaloneBundle.ConfigurePythonProcess(startInfo);
                 using (Process process = Process.Start(startInfo))
                 {
                     if (!process.WaitForExit(180000))
@@ -6143,6 +6160,7 @@ namespace ReportAutomationLauncher
             startInfo.StandardErrorEncoding = System.Text.Encoding.UTF8;
             HashSet<int> hwpBefore = SnapshotProcessIds("Hwp");
 
+            StandaloneBundle.ConfigurePythonProcess(startInfo);
             using (Process process = Process.Start(startInfo))
             {
                 if (!process.WaitForExit(15000))
@@ -6313,6 +6331,7 @@ namespace ReportAutomationLauncher
             startInfo.StandardErrorEncoding = System.Text.Encoding.UTF8;
 
             log("아래한글 COM 환경을 확인합니다.");
+            StandaloneBundle.ConfigurePythonProcess(startInfo);
             using (Process process = Process.Start(startInfo))
             {
                 if (!process.WaitForExit(60000))
@@ -6891,6 +6910,7 @@ namespace ReportAutomationLauncher
     {
         public static string ResolveDefaultAddinPath()
         {
+            if (StandaloneBundle.Root != null) return StandaloneBundle.Find("report_automation_addin/dev/ReportAutomationAddin_dev.xlam");
             string env = Environment.GetEnvironmentVariable("REPORT_AUTOMATION_ADDIN");
             if (!string.IsNullOrWhiteSpace(env) && File.Exists(env))
             {
@@ -6917,6 +6937,7 @@ namespace ReportAutomationLauncher
 
         public static string ResolvePythonPath()
         {
+            if (StandaloneBundle.Root != null) return StandaloneBundle.Find("runtime/python.exe");
             string env = Environment.GetEnvironmentVariable("REPORT_AUTOMATION_PYTHON");
             if (!string.IsNullOrWhiteSpace(env) && File.Exists(env))
             {
@@ -6947,6 +6968,7 @@ namespace ReportAutomationLauncher
 
         public static string ResolveExcelEnginePath()
         {
+            if (StandaloneBundle.Root != null) return StandaloneBundle.Find("report_automation_engine/excel_report_generator.py");
             string env = Environment.GetEnvironmentVariable("REPORT_AUTOMATION_ENGINE");
             if (!string.IsNullOrWhiteSpace(env) && File.Exists(env))
             {

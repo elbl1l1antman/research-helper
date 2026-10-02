@@ -99,21 +99,25 @@ try {
         slides_path = Path(tmp) / "slides.json"
         script_path.write_text(script, encoding="utf-8")
         slides_path.write_text(json.dumps(slides, ensure_ascii=False), encoding="utf-8")
-        result = subprocess.run(
-            [
-                "powershell",
-                "-NoProfile",
-                "-ExecutionPolicy",
-                "Bypass",
-                "-File",
-                str(script_path),
-                str(path),
-                str(slides_path),
-            ],
-            capture_output=True,
-            text=True,
-            timeout=120,
-        )
+        try:
+            result = subprocess.run(
+                [
+                    "powershell",
+                    "-NoProfile",
+                    "-ExecutionPolicy",
+                    "Bypass",
+                    "-File",
+                    str(script_path),
+                    str(path),
+                    str(slides_path),
+                ],
+                capture_output=True,
+                text=True,
+                timeout=120,
+            )
+        except FileNotFoundError:
+            # PowerPoint is optional; a missing PowerShell host uses the existing XML writer.
+            return False
     return result.returncode == 0 and path.exists()
 
 

@@ -8,6 +8,13 @@
 
 - `bin/ReportAutomationLauncher.exe`
 
+배포 파일은 이 EXE 하나이며 Python 런타임, 엔진, 기본 설정/템플릿과 Excel 추가기능을
+내장합니다. EXE를 다른 폴더에 옮겨도 실행할 수 있으며 Python을 설치할 필요가 없습니다.
+Windows x64, Excel, HWPX 생성에 사용하는 아래한글은 별도 설치가 필요합니다.
+첫 실행 시 `%LOCALAPPDATA%\ResearchHelper\bundles`에 실행 구성요소를 준비합니다.
+사용자 서식 저장 위치는 기존과 동일하고 API 키나 원자료는 내장하지 않습니다.
+[독립 실행 안내](../docs/standalone_launcher.md)
+
 GUI에서 집계표 Excel 파일과 자동화 추가기능(`.xlam`)을 선택하면 표 목록과 배너 목록을 먼저 확인할 수 있습니다. 이후 실행하면 선택한 통합문서에 보고서 산출 시트를 생성하고, 선택 시 Python 보조 엔진으로 문장 초안 TXT도 함께 생성합니다. 생성된 초안은 결과 탭에서 미리보기, 문장별 수정, QA 경고 확인, 열기, 복사, 검토본 저장을 할 수 있습니다.
 
 현재 알파에서 실제 실행되는 출력은 `Excel 산출 시트`, `문장 초안 TXT`, `report_package.json`, `preflight_report.json`, HWPX 초본입니다. HWPX 초본은 Windows에서 아래한글 COM 객체를 사용할 수 있을 때 생성하며, PowerPoint 보고서 출력은 아직 선택/검증 중심입니다.
@@ -31,9 +38,8 @@ GUI에서 집계표 Excel 파일과 자동화 추가기능(`.xlam`)을 선택하
 - `편집용지`에서 용지 크기·세로/가로와 위/아래/좌/우/제본/머리말/꼬리말 여백을 mm로 지정할 수 있습니다. 기본은 템플릿 유지이며 직접 지정 시 BODY 구역에 먼저 적용하고 표 너비를 계산합니다. 설정은 `hwp_page_setup.json`으로 기록됩니다. [자세한 안내](../docs/hwp_page_setup.md)
 - QA 경고 탭에서는 출처 없음, 제목 없음, 문장 짧음, 수치 없음, 종결 표현 확인 항목을 필터링해 검토할 수 있습니다.
 - 실행 설정은 산출 파일 옆에 `*_launcher_config.txt`로 기록됩니다.
-- `REPORT_AUTOMATION_ADDIN` 환경변수를 지정하면 기본 추가기능 경로로 사용합니다.
-- `REPORT_AUTOMATION_PYTHON` 환경변수를 지정하면 문장 초안 생성에 사용할 Python 경로로 사용합니다.
-- `REPORT_AUTOMATION_ENGINE` 환경변수를 지정하면 `excel_report_generator.py` 경로로 사용합니다.
+- 배포 빌드는 내장 Python/엔진/추가기능 경로를 우선 사용합니다.
+- `-DevelopmentOnly` 개발 빌드에서만 `REPORT_AUTOMATION_ADDIN`, `REPORT_AUTOMATION_PYTHON`, `REPORT_AUTOMATION_ENGINE` 환경변수로 외부 개발 경로를 지정할 수 있습니다.
 
 ## 템플릿 도구
 
@@ -60,7 +66,10 @@ GUI에서 집계표 Excel 파일과 자동화 추가기능(`.xlam`)을 선택하
 powershell -NoProfile -ExecutionPolicy Bypass -File .\report_automation_launcher\scripts\build_report_automation_launcher.ps1
 ```
 
-빌드에는 Windows .NET Framework의 `csc.exe`를 사용합니다.
+기본 빌드는 독립 실행형이며 의존성이 설치된 저장소 `.venv`와 Windows .NET Framework의
+`csc.exe`를 사용합니다. 검증·컴파일 실패 시 기존 EXE는 유지합니다.
+빠른 개발용 빌드가 필요할 때만 `-DevelopmentOnly`를 지정하며 배포 전 기본 빌드로 다시 생성합니다.
+산출 이름은 항상 `ReportAutomationLauncher.exe`이고 코드 버전은 Git으로 관리합니다.
 
 ## CLI 검증
 
