@@ -23,12 +23,14 @@ try:
     from .hwp_style_config import REQUIRED_STYLE_NAMES, load_hwp_style_config, style_name_for_cell_role
     from .hwpx_style_registry import register_named_styles
     from .report_package import split_narrative_blocks
-    from .hwp_table_layout import plan_table_parts, _text_units
+    from .report_table_matrix import resolve_table_metadata
+    from .hwp_table_layout import plan_table_parts, prepare_report_table, _text_units
 except ImportError:
     from hwp_style_config import REQUIRED_STYLE_NAMES, load_hwp_style_config, style_name_for_cell_role
     from hwpx_style_registry import register_named_styles
     from report_package import split_narrative_blocks
-    from hwp_table_layout import plan_table_parts, _text_units
+    from report_table_matrix import resolve_table_metadata
+    from hwp_table_layout import plan_table_parts, prepare_report_table, _text_units
 
 
 BODY_PLACEHOLDER = "{{BODY}}"
@@ -530,7 +532,17 @@ def write_body(
             try:
                 width = current_body_width(hwp, report)
                 font_size = max(style_config["paragraph_styles"][name]["font_size_pt"] for name in ("표보기", "표배너", "표숫자")) if style_config else 9
-                parts = plan_table_parts(table, width, font_size) if table.get("matrix") else [table]
+                if table.get("matrix"):
+                    # Resolve metadata before splitting so every fragment carries the same unit.
+                    metadata = resolve_table_metadata(table)
+                    source = {**table, "base_label": metadata["base_label"], "unit": metadata["unit"]}
+                    parts = [prepare_report_table(part) for part in plan_table_parts(source, width, font_size)]
+                    if "확인 필요" in (metadata["base_label"], metadata["unit"]):
+                        report["warnings"].append(f"{key}: BASE 조건 또는 단위를 확인해 주세요.")
+                    for warning in dict.fromkeys(part["header_repeat_warning"] for part in parts if part.get("header_repeat_warning")):
+                        report["warnings"].append(f"{key}: {warning}")
+                else:
+                    parts = [table]
             except ValueError as exc:
                 raise HwpWriterError("layout", "table_split", f"{key}: {exc}") from exc
             report.setdefault("table_layouts", []).append({"table_key": key, "body_width_hwpunit": width,
@@ -722,13 +734,14 @@ def insert_hwp_table(
         if not hwp.HAction.Execute("TableCreate", params.HSet):
             return False
         control = hwp.ParentCtrl
+        final_cell_styles = bool(table and "header_row_count" in table and style_config and style_indexes)
         for row_idx, row in enumerate(rows):
             for col_idx, value in enumerate(row):
                 style_name = style_name_for_cell_role(table_cell_role(table or {}, row_idx, col_idx))
-                if style_indexes is not None:
+                if style_indexes is not None and not final_cell_styles:
                     apply_named_style(hwp, require_style_index(style_indexes, style_name), report, style_name)
                 insert_text(hwp, value, report)
-                if style_config is not None:
+                if style_config is not None and not final_cell_styles:
                     apply_cell_appearance(
                         hwp,
                         style_config,
@@ -743,6 +756,9 @@ def insert_hwp_table(
                     run_action(hwp, "TableRightCell", report, "table")
         apply_table_merges(hwp, merged_ranges or [], len(rows), report)
         verify_table_width(control, table or {})
+        if final_cell_styles:
+            # Merging can discard cell header flags; style the surviving anchors once.
+            apply_table_matrix_styles(hwp, table, style_indexes, style_config, report)
         leave_hwp_table(hwp, control, report)
         report["tables_written"] += 1
         return True
@@ -1137,6 +1153,8 @@ def apply_cell_appearance(
     report: Dict[str, Any],
     rowspan: int = 1,
     colspan: int = 1,
+    cell_role: str = "",
+    data_start_row: int = 0,
 ) -> None:
     cell_style = config["table_cell_styles"][style_name]
     border = config["table_border"]
@@ -1151,7 +1169,8 @@ def apply_cell_appearance(
         hwp.HAction.GetDefault("CellFill", params.HSet)
         fill = params.FillAttr
         set_parameter_item(fill, "Type", 1)
-        set_parameter_item(fill, "WinBrushFaceColor", hwp_color(hwp, cell_style["fill_color"]))
+        metadata = cell_role == "metadata"
+        set_parameter_item(fill, "WinBrushFaceColor", hwp_color(hwp, "FFFFFF" if metadata else cell_style["fill_color"]))
         set_parameter_item(fill, "WinBrushHatchColor", 0)
         set_parameter_item(fill, "WinBrushFaceStyle", -1)
         set_parameter_item(fill, "WindowsBrush", 1)
@@ -1159,23 +1178,36 @@ def apply_cell_appearance(
             raise RuntimeError("CellFill action returned False")
         hwp.HAction.GetDefault("CellBorderFill", params.HSet)
         set_parameter_item(params, "ApplyTo", 0)
+        # Keep the metadata borderless, but retain both owners of ordinary shared lines.
+        # Repeated headers need their own bottom edge on continuation pages.
+        set_parameter_item(params, "NoNeighborCell", int(metadata or row_index == data_start_row))
         selected = params.SelCellsBorderFill
         color = hwp_color(hwp, border["color"])
         solid = hwp.HwpLineType("Solid")
+        # BorderFill writes the fill too; selected-cell defaults can erase CellFill.
+        for target in (params, selected):
+            fill = target.FillAttr
+            set_parameter_item(fill, "Type", 1)
+            set_parameter_item(fill, "WinBrushFaceColor", hwp_color(hwp, "FFFFFF" if metadata else cell_style["fill_color"]))
+            set_parameter_item(fill, "WinBrushHatchColor", 0)
+            set_parameter_item(fill, "WinBrushFaceStyle", -1)
+            set_parameter_item(fill, "WindowsBrush", 1)
         for side, width in {
             "Left": outer if col_index == 0 else inner,
             "Right": outer if col_index + colspan == col_count else inner,
-            "Top": outer if row_index == 0 else inner,
+            "Top": outer if row_index == data_start_row else inner,
             "Bottom": outer if row_index + rowspan == row_count else inner,
         }.items():
             for target in (params, selected):
-                set_parameter_item(target, f"BorderType{side}", solid)
+                outside = (side == "Left" and col_index == 0) or (side == "Right" and col_index + colspan == col_count)
+                hidden = metadata or (outside and not border.get("show_side_borders", False))
+                set_parameter_item(target, f"BorderType{side}", 0 if hidden else solid)
                 set_parameter_item(target, f"BorderWidth{side}", width)
                 set_parameter_item(target, f"BorderColor{side}", color)
         if not hwp.HAction.Execute("CellBorderFill", params.HSet):
             raise RuntimeError("CellBorderFill action returned False")
         run_action(hwp, "Cancel", report, "style")
-        horizontal = str(config["paragraph_styles"][style_name]["alignment"]).title()
+        horizontal = "Right" if metadata else str(config["paragraph_styles"][style_name]["alignment"]).title()
         vertical = str(cell_style["vertical_alignment"]).title()
         if not run_action(hwp, f"TableCellAlign{horizontal}{vertical}", report, "style"):
             raise RuntimeError(f"cell alignment action returned False: {horizontal}/{vertical}")
@@ -1183,6 +1215,18 @@ def apply_cell_appearance(
         raise
     except Exception as exc:
         raise HwpWriterError("style", "CellBorderFill", f"HWP 표 셀 서식 적용 실패: {style_name}: {exc}") from exc
+
+
+def apply_cell_header(hwp, is_header, report):
+    """Header flags belong to merged cells, not their paragraph/banner styles."""
+    try:
+        params = hwp.HParameterSet.HShapeObject
+        hwp.HAction.GetDefault("TablePropertyDialog", params.HSet)
+        params.ShapeTableCell.Header = int(is_header)
+        if not hwp.HAction.Execute("TablePropertyDialog", params.HSet):
+            raise RuntimeError("TablePropertyDialog returned False")
+    except Exception as exc:
+        raise HwpWriterError("style", "TablePropertyDialog", f"제목 행 반복 설정 실패: {exc}") from exc
 
 
 def is_hwp_table_control(control: Any) -> bool:
@@ -1431,6 +1475,9 @@ def verify_table_width(control, table):
         properties = control.Properties
         for key, value in (("TreatAsChar", 0), ("HorzRelTo", 2), ("HorzAlign", 0), ("HorzOffset", 0)):
             properties.SetItem(key, value)
+        if "header_row_count" in table:
+            properties.SetItem("RepeatHeader", 1)
+            properties.SetItem("PageBreak", 1)
         control.Properties = properties
         table["actual_width_hwpunit"] = actual
     except Exception as exc:
@@ -1548,7 +1595,11 @@ def apply_table_matrix_styles(
             report,
             rowspan=rowspan,
             colspan=colspan,
+            cell_role=table_cell_role(table, row_index, col_index),
+            data_start_row=int(table.get("data_start_row", 0)),
         )
+        if "header_row_count" in table:
+            apply_cell_header(hwp, row_index + rowspan <= table["header_row_count"], report)
         if position < len(cells) - 1:
             # Vertical merges can revisit the same cell list on the next logical row.
             for _ in range(len(rows) * max(len(row) for row in rows)):
@@ -1576,6 +1627,9 @@ def table_result(table: Dict[str, Any], insert_mode: str, ctrl_id: str, style_st
         "source_columns": table.get("source_columns", []),
         "body_width_hwpunit": table.get("body_width_hwpunit"),
         "actual_width_hwpunit": table.get("actual_width_hwpunit"),
+        "base_label": table.get("base_label", ""),
+        "unit": table.get("unit", ""),
+        "header_row_count": table.get("header_row_count", 0),
     }
 
 

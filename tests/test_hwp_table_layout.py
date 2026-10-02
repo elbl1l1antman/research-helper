@@ -24,6 +24,14 @@ def sample_table():
 
 
 class TableLayoutTests(unittest.TestCase):
+    def test_header_only_merged_banner_keeps_existing_split_behavior(self):
+        table = sample_table()
+        table["matrix"] = table["matrix"][:1]
+        table["row_count"] = 1
+        parts = plan_table_parts(table, 18000, 8.5)
+        self.assertEqual(len(parts), 3)
+        self.assertEqual([col for part in parts for col in part["source_columns"]], list(range(1, 11)))
+
     def test_mixed_header_repeats_vertical_label_and_clips_horizontal_banner(self):
         table = sample_table()
         table["matrix"][0][0].update(role="banner_vertical", rowspan=3, display_text="Category")

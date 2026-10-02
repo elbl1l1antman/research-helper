@@ -4,9 +4,52 @@ import copy
 import math
 import unicodedata
 
+try:
+    from .report_table_matrix import resolve_table_metadata
+except ImportError:
+    from report_table_matrix import resolve_table_metadata
+
 
 def _text_units(text):
     return sum(1 if unicodedata.east_asian_width(char) in {"W", "F"} else 0.55 for char in str(text))
+
+
+def _header_row_count(matrix):
+    for index, row in enumerate(matrix):
+        roles = {cell.get("role") for cell in row if not cell.get("covered_by")}
+        if "value" in roles or (roles & {"stub", "banner_vertical"} and "banner_horizontal" not in roles):
+            return index
+    return len(matrix)
+
+
+def prepare_report_table(table):
+    """Add a render-only merged metadata row; Excel/source coordinates stay intact."""
+    result = copy.deepcopy(table)
+    matrix = result["matrix"]
+    headers = _header_row_count(matrix)
+    crosses_body = any(not cell.get("covered_by") and row_index < headers and row_index + int(cell.get("rowspan") or 1) > headers
+                       for row_index, row in enumerate(matrix) for cell in row)
+    if crosses_body:
+        headers = 0
+        result["header_repeat_warning"] = "헤더 병합이 본문까지 이어져 BASE 행만 반복합니다."
+    metadata = resolve_table_metadata(table)
+    result.update(metadata)
+    cols = len(matrix[0])
+    note = []
+    for col in range(1, cols + 1):
+        note.append({"row": 1, "col": col, "rowspan": 1, "colspan": cols if col == 1 else 1,
+                     "role": "metadata" if col == 1 else "blank", "display_text": f"[BASE : {metadata['base_label']} | 단위 : {metadata['unit']}]" if col == 1 else "",
+                     "raw_value": None, "covered_by": "" if col == 1 else "RA_METADATA", "source_cell": "", "is_numeric": False})
+    for row in matrix:
+        for cell in row:
+            cell["row"] = int(cell["row"]) + 1
+    for merged in result.get("merged_ranges", []):
+        merged["row"] += 1
+    if cols > 1:
+        result.setdefault("merged_ranges", []).insert(0, {"row": 1, "col": 1, "rowspan": 1, "colspan": cols})
+    matrix.insert(0, note)
+    result.update(row_count=len(matrix), cells=[cell for row in matrix for cell in row], header_row_count=headers + 1, data_start_row=1)
+    return result
 
 
 def plan_table_parts(table, body_width, font_size_pt):
@@ -21,12 +64,7 @@ def plan_table_parts(table, body_width, font_size_pt):
     if not matrix or not matrix[0] or any(len(row) != len(matrix[0]) for row in matrix):
         raise ValueError("표 matrix가 비어 있거나 행별 열 수가 다릅니다.")
     count = len(matrix[0])
-    header_rows = len(matrix)
-    for index, row in enumerate(matrix):
-        roles = {cell.get("role") for cell in row if not cell.get("covered_by")}
-        if "value" in roles or (roles & {"stub", "banner_vertical"} and "banner_horizontal" not in roles):
-            header_rows = index
-            break
+    header_rows = _header_row_count(matrix)
     prefix = max((col + 1 for row in matrix for col, cell in enumerate(row) if cell.get("role") in {"stub", "banner_vertical"} and not cell.get("covered_by")), default=0)
     while prefix < count and any(row[prefix].get("role") == "base" for row in matrix):
         prefix += 1

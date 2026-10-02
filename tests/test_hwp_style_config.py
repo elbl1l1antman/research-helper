@@ -65,7 +65,7 @@ class HwpStyleConfigTests(unittest.TestCase):
         )
         self.assertEqual(
             DEFAULT_HWP_STYLE_CONFIG["table_border"],
-            {"inner_width_mm": 0.12, "outer_width_mm": 0.4, "color": "000000"},
+            {"inner_width_mm": 0.12, "outer_width_mm": 0.4, "color": "000000", "show_side_borders": False},
         )
 
         expected = {
@@ -151,6 +151,14 @@ class HwpStyleConfigTests(unittest.TestCase):
             path = Path(temp_dir) / "style.json"
             path.write_text(json.dumps(custom, ensure_ascii=False), encoding="utf-8")
             self.assertEqual(load_hwp_style_config(path)["preset_name"], "사용자 1")
+
+    def test_old_presets_default_to_open_sides_and_reject_nonboolean(self):
+        config = copy.deepcopy(DEFAULT_HWP_STYLE_CONFIG)
+        config["table_border"].pop("show_side_borders", None)
+        self.assertFalse(validate_hwp_style_config(config)["table_border"]["show_side_borders"])
+        config["table_border"]["show_side_borders"] = "false"
+        with self.assertRaisesRegex(ValueError, "show_side_borders"):
+            validate_hwp_style_config(config)
 
 
 if __name__ == "__main__":

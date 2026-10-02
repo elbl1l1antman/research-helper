@@ -12,6 +12,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from report_automation_engine.hwp_com_writer import (
     HwpWriterError,
     apply_cell_appearance,
+    apply_table_matrix_styles,
     apply_named_style,
     finalize_hwp_resources,
     insert_clipboard_table,
@@ -64,6 +65,8 @@ class FakeAction:
             self.owner.events.append(("fill", params.FillAttr.WinBrushFaceColor))
         elif action == "TableCreate":
             self.owner.ParentCtrl = FakeTableControl()
+        elif action == "TablePropertyDialog":
+            self.owner.events.append(("header", params.ShapeTableCell.Header))
         return True
 
     def Run(self, action):
@@ -119,8 +122,10 @@ class FakeHwp:
             HInsertText=insert_text,
             HTableCreation=table_creation,
             HCellBorderFill=cell_border_fill,
+            HShapeObject=SimpleNamespace(HSet=None, ShapeTableCell=SimpleNamespace(Header=0)),
         )
         self.HAction = FakeAction(self)
+        self.HParameterSet.HShapeObject.HSet = self.HParameterSet.HShapeObject
 
     @staticmethod
     def RGBColor(red, green, blue):
@@ -219,6 +224,26 @@ def insert_fake_clipboard_table(table):
 
 
 class HwpComWriterStyleTests(unittest.TestCase):
+    def test_body_adds_one_metadata_row_per_fragment_without_mutating_package(self):
+        from tests.test_hwp_table_layout import sample_table
+        table = sample_table()
+        table.update(base_label="전체", unit="명")
+        for row in table["matrix"]:
+            for cell in row:
+                cell.pop("row")
+        package = {"tables": [table], "sections": [{"table_key": "T1", "title": "Test", "narrative_final": "Text"}]}
+        before = copy.deepcopy(package)
+        report = {"warnings": [], "sections_written": 0}
+        with patch("report_automation_engine.hwp_com_writer.current_body_width", return_value=18000), patch("report_automation_engine.hwp_com_writer.write_table_part") as write_part:
+            write_body(FakeHwp(), package, report)
+        self.assertEqual(write_part.call_count, 3)
+        for call in write_part.call_args_list:
+            part = call.args[1]
+            self.assertEqual(part["row_count"], 4)
+            self.assertEqual(part["header_row_count"], 2)
+            self.assertEqual(part["matrix"][0][0]["display_text"], "[BASE : 전체 | 단위 : 명]")
+        self.assertEqual(package, before)
+
     def test_clipboard_noop_does_not_undo_caption_or_edit_existing_table(self):
         table = {"table_key": "T1", "cell_contract": True, "source_sheet": "S", "source_range": "A1:C1", "row_count": 1, "col_count": 3}
         hwp = FakeHwp()
@@ -419,9 +444,10 @@ class HwpComWriterStyleTests(unittest.TestCase):
     def test_merged_cell_uses_solid_borders_and_span_outer_edges(self):
         hwp = FakeHwp()
         apply_cell_appearance(hwp, DEFAULT_HWP_STYLE_CONFIG, "표배너", 0, 0, 2, 3, {"warnings": []}, rowspan=2, colspan=3)
-        self.assertIn(("border_type", 1, 1, 1, 1), hwp.events)
+        self.assertIn(("border_type", 0, 0, 1, 1), hwp.events)
         borders = [event for event in hwp.events if event[0] == "border"]
         self.assertEqual(borders, [("border", 6, 6, 6, 6)])  # 0.4 mm outer border enum.
+        self.assertEqual(hwp.HParameterSet.HCellBorderFill.SelCellsBorderFill.FillAttr.WinBrushFaceColor, 0xE7E7E7)
         self.assertLess(next(i for i, event in enumerate(hwp.events) if event[0] == "fill"), next(i for i, event in enumerate(hwp.events) if event[0] == "border"))
         table = {
             "table_key": "T001", "cell_contract": True,
@@ -434,6 +460,40 @@ class HwpComWriterStyleTests(unittest.TestCase):
         pasted, _report, inserted = insert_fake_clipboard_table(table)
         self.assertTrue(inserted)
         self.assertIn(("border", 6, 6, 6, 6), pasted.events)
+
+    def test_metadata_is_borderless_white_right_aligned_and_header_top_is_outer(self):
+        hwp = FakeHwp()
+        config = copy.deepcopy(DEFAULT_HWP_STYLE_CONFIG)
+        config["table_cell_styles"]["표보기"]["fill_color"] = "FF0000"
+        apply_cell_appearance(hwp, config, "표보기", 0, 0, 4, 3, {"warnings": []},
+                              colspan=3, cell_role="metadata", data_start_row=1)
+        self.assertIn(("border_type", 0, 0, 0, 0), hwp.events)
+        self.assertIn(("fill", 0xFFFFFF), hwp.events)
+        self.assertIn(("run", "TableCellAlignRightCenter"), hwp.events)
+        self.assertEqual(hwp.HParameterSet.HCellBorderFill.NoNeighborCell, 1)
+        apply_cell_appearance(hwp, config, "표배너", 1, 1, 4, 3, {"warnings": []}, data_start_row=1)
+        self.assertEqual([event for event in hwp.events if event[0] == "border"][-1], ("border", 1, 1, 6, 1))
+        config["table_border"]["show_side_borders"] = True
+        apply_cell_appearance(hwp, config, "표숫자", 3, 0, 4, 3, {"warnings": []}, colspan=3)
+        self.assertEqual([event for event in hwp.events if event[0] == "border_type"][-1], ("border_type", 1, 1, 1, 1))
+        self.assertEqual(hwp.HParameterSet.HCellBorderFill.NoNeighborCell, 0)
+
+    def test_header_flags_apply_to_surviving_anchors_not_banner_style(self):
+        hwp = FakeHwp()
+        hwp.ParentCtrl = FakeTableControl()
+        table = {"header_row_count": 2, "data_start_row": 1, "matrix": [
+            [{"role": "metadata", "display_text": "BASE", "colspan": 2}, {"covered_by": "META"}],
+            [{"role": "header", "display_text": "구분"}, {"role": "base", "display_text": "N"}],
+            [{"role": "base", "display_text": "전체"}, {"role": "value", "display_text": "100"}],
+        ]}
+        apply_table_matrix_styles(hwp, table, STYLE_INDEXES, DEFAULT_HWP_STYLE_CONFIG,
+                                  {"warnings": [], "style_application_counts": {}})
+        self.assertEqual([event[1] for event in hwp.events if event[0] == "header"], [1, 1, 1, 0, 0])
+        original = FakeAction.Execute
+        with patch.object(FakeAction, "Execute", lambda action, name, params: False if name == "TablePropertyDialog" else original(action, name, params)):
+            with self.assertRaisesRegex(HwpWriterError, "반복 설정"):
+                apply_table_matrix_styles(hwp, table, STYLE_INDEXES, DEFAULT_HWP_STYLE_CONFIG,
+                                          {"warnings": [], "style_application_counts": {}})
 
     def test_clipboard_table_replaces_each_cell_after_applying_style(self):
         table = {

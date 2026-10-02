@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 import html
+import re
 from typing import Any, Dict, List
 import unicodedata
 
@@ -12,6 +13,37 @@ LONG_TEXT_LIMIT = 40
 MANY_COLUMNS_LIMIT = 8
 ALLOWED_UNIT_SYMBOLS = set("℃°㎡㎢㎥㎏㎎㎞㎝㎜㏄")
 DECORATIVE_SYMBOLS = set("●■◆▶※")
+
+
+def resolve_table_metadata(table: Dict[str, Any], metadata: Dict[str, Any] | None = None) -> Dict[str, str]:
+    """Read explicit conditions/units first; never assume that an N count means people."""
+    labels = [str(cell.get("display_text") or "") for row in table.get("matrix", []) for cell in row
+              if not cell.get("covered_by") and cell.get("role") in {"base", "header", "banner_horizontal", "note"}]
+    supplied = metadata or {}
+    base = str(supplied.get("base_label") or table.get("base_label") or "").strip()
+    unit = str(supplied.get("unit") or table.get("unit") or "").strip()
+    for label in ([base] if base else labels):
+        match = re.search(r"BASE\s*[:：]\s*(.*?)(?=\s*(?:[,|]\s*)?단위\s*[:：]|\]|$)", label, re.I)
+        if match:
+            base = match.group(1).strip(" ,|")
+            break
+    if not unit:
+        units = []
+        for label in labels:
+            match = re.search(r"단위\s*[:：]\s*([^\]]+)", label)
+            if match:
+                unit = match.group(1).rstrip(" )]| ").strip()
+                break
+            text = label.strip()
+            if re.fullmatch(r"명|개|건|원|천원|만원|억원|점|%", text):
+                units.append(text)
+            elif re.search(r"\d+\s*점\s*(?:평균|척도)", text):
+                units.append("점")
+        if not unit:
+            units.extend(str(row.get("unit") or "").strip() for row in table.get("rows", []))
+            unit = ", ".join(dict.fromkeys(value for value in units if value))
+    return {"base_label": sanitize_table_display_text(base).strip("[] ") or "확인 필요",
+            "unit": sanitize_table_display_text(unit).strip("[] ") or "확인 필요"}
 
 
 def sanitize_table_display_text(value: Any) -> str:
@@ -137,6 +169,9 @@ def build_table_matrix_from_cells(rows: List[Dict[str, Any]]) -> Dict[str, Any]:
         "style_hints": {"table_width": "body", "wrap_text": True, "header_fill": "#E7E7E7", "font_size_pt": 9},
         "cell_contract": True,
     }
+    for field in ("base_label", "unit"):
+        if first.get(field):
+            result[field] = str(first[field])
     result["qa"] = table_matrix_qa(result)
     return result
 

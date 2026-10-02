@@ -61,6 +61,7 @@
   "table_border": {
     "inner_width_mm": 0.12,
     "outer_width_mm": 0.4,
-    "color": "000000"
+    "color": "000000",
+    "show_side_borders": false
   }
 }

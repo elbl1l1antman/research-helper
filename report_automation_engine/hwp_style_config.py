@@ -93,6 +93,9 @@ def validate_hwp_style_config(config: Dict[str, Any]) -> Dict[str, Any]:
     border["inner_width_mm"] = _number(border.get("inner_width_mm"), "table_border.inner_width_mm", 0.1, 5.0)
     border["outer_width_mm"] = _number(border.get("outer_width_mm"), "table_border.outer_width_mm", 0.1, 5.0)
     border["color"] = _color(border.get("color"), "table_border.color")
+    border.setdefault("show_side_borders", False)
+    if not isinstance(border["show_side_borders"], bool):
+        raise ValueError("table_border.show_side_borders: expected boolean")
     return normalized
 
 

@@ -17,9 +17,9 @@ except ImportError:
     from template_inspector import inspect_template
 
 try:
-    from .report_table_matrix import build_table_matrix, build_table_matrix_from_cells
+    from .report_table_matrix import build_table_matrix, build_table_matrix_from_cells, resolve_table_metadata
 except ImportError:
-    from report_table_matrix import build_table_matrix, build_table_matrix_from_cells
+    from report_table_matrix import build_table_matrix, build_table_matrix_from_cells, resolve_table_metadata
 
 
 def build_report_package(excel_path: str | Path, meta: Dict[str, Any] | None = None) -> Dict[str, Any]:
@@ -32,6 +32,12 @@ def build_report_package(excel_path: str | Path, meta: Dict[str, Any] | None = N
         decimal_places = int(str((meta or {}).get("decimal_places", "1") or "1"))
         cell_rows = read_rows(wb, "보고서_삽입표셀")
         tables = group_cell_rows(cell_rows) if cell_rows else group_table_rows(read_rows(wb, "보고서_삽입표"), decimal_places)
+        table_list = {clean(row.get("table_key")): row for row in read_rows(wb, "보고서_표목록")}
+        for table in tables:
+            table.update(resolve_table_metadata(table, table_list.get(table["table_key"])))
+            for field, label in (("base_label", "BASE 조건"), ("unit", "단위")):
+                if table[field] == "확인 필요":
+                    table.setdefault("qa", []).append({"severity": "warning", "message": f"표 {label} 확인 필요: 보고서_표목록의 {field}를 지정하세요."})
         package = {
             "schema_version": "1.0",
             "meta": {

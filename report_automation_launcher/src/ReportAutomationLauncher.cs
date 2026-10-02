@@ -260,6 +260,9 @@ namespace ReportAutomationLauncher
             border["inner_width_mm"] = Number(border, "inner_width_mm", 0.1, 5.0, "table_border");
             border["outer_width_mm"] = Number(border, "outer_width_mm", 0.1, 5.0, "table_border");
             border["color"] = ColorValue(border, "color", "table_border");
+            if (!border.ContainsKey("show_side_borders")) border["show_side_borders"] = false;
+            if (!(border["show_side_borders"] is bool))
+                throw new InvalidOperationException("table_border.show_side_borders 값은 부울이어야 합니다.");
             return copy;
         }
 
@@ -283,7 +286,7 @@ namespace ReportAutomationLauncher
                 },
                 { "table_border", new Dictionary<string, object>
                     {
-                        { "inner_width_mm", 0.12 }, { "outer_width_mm", 0.4 }, { "color", "000000" }
+                        { "inner_width_mm", 0.12 }, { "outer_width_mm", 0.4 }, { "color", "000000" }, { "show_side_borders", false }
                     }
                 }
             };
@@ -306,6 +309,9 @@ namespace ReportAutomationLauncher
                 var store = new HwpStylePresetStore(file, warnings.Add);
                 Assert(store.LoadAll().Count == 1, "default loading");
                 Assert(warnings.Count == 0 && string.IsNullOrWhiteSpace(store.RecoveryWarning), "no warning for missing store");
+                object showSideBorders;
+                Assert(Map(store.Get(BuiltInName)["table_border"], "table_border").TryGetValue("show_side_borders", out showSideBorders)
+                    && showSideBorders is bool && !(bool)showSideBorders, "side borders default off");
                 for (int i = 1; i <= 3; i++)
                 {
                     Dictionary<string, object> preset = DefaultConfig();
@@ -313,19 +319,34 @@ namespace ReportAutomationLauncher
                     store.Save(preset, false);
                 }
                 Assert(store.LoadAll().Count == 4, "three user presets");
+                var checkSerializer = new JavaScriptSerializer();
+                Dictionary<string, object> legacy = checkSerializer.DeserializeObject(File.ReadAllText(file, System.Text.Encoding.UTF8)) as Dictionary<string, object>;
+                foreach (object item in (object[])legacy["presets"])
+                    Map(Map(item, "preset")["table_border"], "table_border").Remove("show_side_borders");
+                string legacyJson = checkSerializer.Serialize(legacy);
+                File.WriteAllText(file, legacyJson, System.Text.Encoding.UTF8);
+                Assert(store.LoadAll().Count == 4, "three legacy presets retained");
+                for (int i = 1; i <= 3; i++)
+                    Assert(!(bool)Map(store.Get("사용자 " + i)["table_border"], "table_border")["show_side_borders"], "legacy side borders default off");
+                Assert(warnings.Count == 0 && string.IsNullOrWhiteSpace(store.RecoveryWarning)
+                    && File.ReadAllText(file, System.Text.Encoding.UTF8) == legacyJson, "legacy loading without recovery or rewrite");
                 Dictionary<string, object> fourth = DefaultConfig();
                 fourth["preset_name"] = "사용자 4";
                 AssertThrows(delegate { store.Save(fourth, false); }, "fourth-preset rejection");
                 Dictionary<string, object> duplicate = DefaultConfig();
                 duplicate["preset_name"] = "사용자 1";
+                Map(duplicate["table_border"], "table_border")["show_side_borders"] = true;
                 Map(Map(duplicate["paragraph_styles"], "paragraph_styles")["보고서 본문1"], "보고서 본문1")["font_size_pt"] = 11.0;
                 AssertThrows(delegate { store.Save(duplicate, false); }, "duplicate rejection");
                 store.Save(duplicate, true);
                 Assert(Convert.ToDouble(Map(Map(store.Get("사용자 1")["paragraph_styles"], "paragraph_styles")["보고서 본문1"], "보고서 본문1")["font_size_pt"]) == 11.0, "duplicate overwrite");
+                Assert((bool)Map(store.Get("사용자 1")["table_border"], "table_border")["show_side_borders"], "side borders true roundtrip");
+                Map(duplicate["table_border"], "table_border")["show_side_borders"] = false;
+                store.Save(duplicate, true);
+                Assert(!(bool)Map(store.Get("사용자 1")["table_border"], "table_border")["show_side_borders"], "side borders false roundtrip");
                 store.Delete("사용자 3");
                 Assert(store.LoadAll().Count == 3, "deletion");
 
-                var checkSerializer = new JavaScriptSerializer();
                 Dictionary<string, object> partial = checkSerializer.DeserializeObject(File.ReadAllText(file, System.Text.Encoding.UTF8)) as Dictionary<string, object>;
                 object[] stored = (object[])partial["presets"];
                 Map(Map(Map(stored[1], "preset")["paragraph_styles"], "paragraph_styles")["보고서 본문1"], "보고서 본문1").Remove("font_family");
@@ -349,6 +370,12 @@ namespace ReportAutomationLauncher
                 Assert(quietStore.LoadAll().Count == 1 && !string.IsNullOrWhiteSpace(quietStore.RecoveryWarning), "recovery without interactive logging");
                 AssertThrows(delegate { store.Delete(BuiltInName); }, "immutable default");
 
+                foreach (object invalid in new object[] { "false", 0, null })
+                {
+                    Dictionary<string, object> invalidBoolean = DefaultConfig();
+                    Map(invalidBoolean["table_border"], "table_border")["show_side_borders"] = invalid;
+                    AssertThrows(delegate { Normalize(invalidBoolean); }, "strict side borders boolean validation");
+                }
                 Dictionary<string, object> invalidText = DefaultConfig();
                 Map(Map(invalidText["paragraph_styles"], "paragraph_styles")["보고서 본문1"], "보고서 본문1")["font_family"] = 123;
                 AssertThrows(delegate { Normalize(invalidText); }, "strict string validation");
@@ -836,6 +863,7 @@ namespace ReportAutomationLauncher
         private readonly NumericUpDown innerBorder = new NumericUpDown();
         private readonly NumericUpDown outerBorder = new NumericUpDown();
         private readonly TextBox borderColor = new TextBox();
+        private readonly CheckBox showSideBorders = new CheckBox();
 
         internal string SelectedPresetName { get; private set; }
 
@@ -902,6 +930,10 @@ namespace ReportAutomationLauncher
             borderPanel.Controls.Add(new Label { Text = "선 색상(RGB)", AutoSize = true, Margin = new Padding(16, 8, 6, 0) });
             borderColor.Width = 90;
             borderPanel.Controls.Add(borderColor);
+            showSideBorders.Text = "좌우 외곽선 표시";
+            showSideBorders.AutoSize = true;
+            showSideBorders.Margin = new Padding(16, 6, 0, 0);
+            borderPanel.Controls.Add(showSideBorders);
             root.Controls.Add(borderPanel, 0, 4);
 
             var buttons = new FlowLayoutPanel { Dock = DockStyle.Fill, AutoSize = true, FlowDirection = FlowDirection.RightToLeft };
@@ -1001,6 +1033,7 @@ namespace ReportAutomationLauncher
             innerBorder.Value = Convert.ToDecimal(border["inner_width_mm"]);
             outerBorder.Value = Convert.ToDecimal(border["outer_width_mm"]);
             borderColor.Text = Convert.ToString(border["color"]);
+            showSideBorders.Checked = (bool)border["show_side_borders"];
         }
 
         private Dictionary<string, object> ReadEditor()
@@ -1037,7 +1070,8 @@ namespace ReportAutomationLauncher
                     {
                         { "inner_width_mm", Convert.ToDouble(innerBorder.Value) },
                         { "outer_width_mm", Convert.ToDouble(outerBorder.Value) },
-                        { "color", borderColor.Text.Trim() }
+                        { "color", borderColor.Text.Trim() },
+                        { "show_side_borders", showSideBorders.Checked }
                     }
                 }
             });
@@ -5272,6 +5306,23 @@ namespace ReportAutomationLauncher
                 string arguments = BuildHwpWriterArguments("writer.py", options, "output.hwpx", "writer_report.json", "render_plan.json");
                 if (arguments.IndexOf(" --style-config " + Quote(expected), StringComparison.Ordinal) < 0)
                     throw new InvalidOperationException("Self-check failed: --style-config forwarding");
+                using (var dialog = new HwpStylePresetDialog(new HwpStylePresetStore(Path.Combine(directory, "presets.json")), HwpStylePresetStore.BuiltInName))
+                {
+                    dialog.Size = dialog.MinimumSize;
+                    dialog.PerformLayout();
+                    var root = (TableLayoutPanel)dialog.Controls[0];
+                    root.PerformLayout();
+                    var borderPanel = (FlowLayoutPanel)root.GetControlFromPosition(0, 4);
+                    borderPanel.PerformLayout();
+                    foreach (Control control in borderPanel.Controls)
+                        if (!borderPanel.ClientRectangle.Contains(control.Bounds))
+                            throw new InvalidOperationException("Self-check failed: border control clipped at minimum dialog size");
+                    CheckBox checkbox = borderPanel.Controls.OfType<CheckBox>().Single();
+                    if (checkbox.Width < checkbox.PreferredSize.Width || checkbox.Height < checkbox.PreferredSize.Height
+                        || root.GetRowHeights()[4] < borderPanel.Height + borderPanel.Margin.Vertical)
+                        throw new InvalidOperationException("Self-check failed: side borders checkbox or row clipped");
+                    Console.WriteLine("Minimum-size border layout passed: " + borderPanel.ClientSize + ", checkbox " + checkbox.Bounds);
+                }
             }
             finally
             {
