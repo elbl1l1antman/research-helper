@@ -88,10 +88,10 @@ Public Sub ReportAutomation_WriteTableList(ByVal ws As Worksheet, ByVal tables A
         ws.Cells(i + 1, 5).Value = rec(IDX_BASIS)
         ws.Cells(i + 1, 6).Value = rec(IDX_BASE_LABEL)
         ws.Cells(i + 1, 7).Value = dataWs.Name
-        ws.Cells(i + 1, 8).Value = dataWs.Range(dataWs.Cells(CLng(rec(IDX_START_ROW)), 1), dataWs.Cells(CLng(rec(IDX_END_ROW)), CLng(rec(IDX_LAST_COL)))).Address(False, False)
+        ws.Cells(i + 1, 8).Value = dataWs.Range(dataWs.Cells(CLng(rec(IDX_START_ROW)), ReportAutomation_FirstCol(rec)), dataWs.Cells(CLng(rec(IDX_END_ROW)), CLng(rec(IDX_LAST_COL)))).Address(False, False)
         ws.Cells(i + 1, 9).Value = rec(IDX_TABLE_TYPE)
         ws.Cells(i + 1, 10).Value = CLng(rec(IDX_END_ROW)) - CLng(rec(IDX_START_ROW)) + 1
-        ws.Cells(i + 1, 11).Value = CLng(rec(IDX_LAST_COL))
+        ws.Cells(i + 1, 11).Value = CLng(rec(IDX_LAST_COL)) - ReportAutomation_FirstCol(rec) + 1
         ws.Cells(i + 1, 12).Value = rec(IDX_WARNING)
     Next i
 

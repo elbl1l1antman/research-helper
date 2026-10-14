@@ -33,10 +33,10 @@ Public Function ReportAutomation_TableSourceRange(ByVal dataWs As Worksheet, ByV
     Dim defaultRange As Range
     ' 표 제목은 HWP writer가 별도 문단으로 입력하므로 셀 계약에는 BASE/배너/값 영역만 포함한다.
     Dim dataStartRow As Long
-    dataStartRow = CLng(tableRec(IDX_START_ROW)) + 1
+    dataStartRow = ReportAutomation_SourceRowIndex(tableRec)
     If dataStartRow > CLng(tableRec(IDX_END_ROW)) Then dataStartRow = CLng(tableRec(IDX_START_ROW))
     Set defaultRange = dataWs.Range( _
-        dataWs.Cells(dataStartRow, 1), _
+        dataWs.Cells(dataStartRow, ReportAutomation_FirstCol(tableRec)), _
         dataWs.Cells(CLng(tableRec(IDX_END_ROW)), CLng(tableRec(IDX_LAST_COL))))
 
     Dim overrideText As String
@@ -92,7 +92,7 @@ Private Sub ReportAutomation_WriteTableRangeCells(ByVal wsOut As Worksheet, ByRe
             wsOut.Cells(outputRow, 4).Value = c
             wsOut.Cells(outputRow, 5).Value = rowSpan
             wsOut.Cells(outputRow, 6).Value = colSpan
-            wsOut.Cells(outputRow, 7).Value = ReportAutomation_CellRole(cell, r, c, sourceRange, coveredBy)
+            wsOut.Cells(outputRow, 7).Value = ReportAutomation_CellRole(cell, r, c, sourceRange, coveredBy, tableRec)
             wsOut.Cells(outputRow, 8).Value2 = CStr(ReportAutomation_CellDisplayText(cell))
             Dim rawValue As Variant
             rawValue = cell.Value2
@@ -123,7 +123,7 @@ Private Function ReportAutomation_CellDisplayText(ByVal cell As Range) As String
 End Function
 
 Private Function ReportAutomation_CellRole(ByVal cell As Range, ByVal relativeRow As Long, ByVal relativeCol As Long, _
-                                            ByVal sourceRange As Range, ByVal coveredBy As String) As String
+                                            ByVal sourceRange As Range, ByVal coveredBy As String, ByVal tableRec As Variant) As String
     If Len(coveredBy) > 0 Then
         ReportAutomation_CellRole = "blank"
         Exit Function
@@ -133,18 +133,18 @@ Private Function ReportAutomation_CellRole(ByVal cell As Range, ByVal relativeRo
     text = Trim$(ReportAutomation_CellDisplayText(cell))
     If Len(text) = 0 Then
         ReportAutomation_CellRole = "blank"
-    ElseIf relativeRow = 1 And relativeCol = 1 And InStr(1, text, "표", vbTextCompare) > 0 Then
+    ElseIf cell.Row = CLng(tableRec(IDX_START_ROW)) And ReportAutomation_IsTableTitle(text) Then
         ReportAutomation_CellRole = "title"
-    ElseIf InStr(1, text, "BASE", vbTextCompare) > 0 Or InStr(1, text, "사례수", vbTextCompare) > 0 Then
+    ElseIf InStr(1, text, "BASE", vbTextCompare) > 0 Then
         ReportAutomation_CellRole = "base"
     ElseIf Left$(text, 2) = "출처" Then
         ReportAutomation_CellRole = "source"
-    ElseIf Left$(text, 1) = "주" And Not IsNumeric(text) Then
+    ElseIf ReportAutomation_IsMetadata(text) Then
         ReportAutomation_CellRole = "note"
+    ElseIf cell.Row < ReportAutomation_BodyRowIndex(tableRec) Then
+        ReportAutomation_CellRole = "banner_horizontal"
     ElseIf IsNumeric(cell.Value2) Then
         ReportAutomation_CellRole = "value"
-    ElseIf relativeRow <= 3 Then
-        ReportAutomation_CellRole = "banner_horizontal"
     ElseIf relativeCol = 1 Then
         ReportAutomation_CellRole = "banner_vertical"
     ElseIf relativeCol = 2 Then

@@ -22,8 +22,6 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 import openpyxl
-import tkinter as tk
-from tkinter import filedialog, messagebox
 
 
 # =========================
@@ -89,13 +87,14 @@ class ExcelTableData:
     rows: List[ExcelTableRow]
     total_row: Optional[ExcelTableRow]
     multi_response: bool
+    recognition_warnings: Tuple[str, ...] = ()
 
 
 # =========================
 # Default runtime constants
 # =========================
-MAX_TITLE_LOOKBACK = 5
-MAX_EMPTY_STREAK = 4
+MAX_TITLE_LOOKBACK = 32
+MAX_HEADER_LOOKAHEAD = 32
 DEFAULT_OUTPUT_SUFFIX = "_자동생성.txt"
 TITLE_UNKNOWN = "제목 미확인"
 DEFAULT_CONFIG_PATH = Path(__file__).resolve().parent / "config" / "default_style_schema.json"
@@ -296,7 +295,9 @@ def is_effectively_empty_row(values: List[str]) -> bool:
 # Config-aware label/title helpers
 # =========================
 def is_total_label(text: str, config: StyleConfig) -> bool:
-    return clean_text(text).replace(" ", "") == clean_text(config.table_rules["total_label"]).replace(" ", "")
+    normalized = re.sub(r"\s+", "", normalize_label(text)).casefold()
+    labels = {"전체", "합계", "총계", "total", config.table_rules["total_label"]}
+    return normalized in {re.sub(r"\s+", "", normalize_label(x)).casefold() for x in labels}
 
 
 def is_base_row(values: List[str], config: StyleConfig) -> bool:
@@ -310,8 +311,55 @@ def is_base_row(values: List[str], config: StyleConfig) -> bool:
 
 
 def is_case_header_row(values: List[str], config: StyleConfig) -> bool:
-    target = clean_text(config.table_rules["case_column_name"])
-    return target in join_row_text(values)
+    return find_case_col_idx(values, config) is not None
+
+
+def _normalize_case_header(text: str) -> str:
+    # Match whole labels, not prose containing 사례수. Whitespace can be an Excel
+    # line break; (N)/(명) are units, except standalone (N), which is the label.
+    text = re.sub(r"\s+", "", clean_text(text)).casefold()
+    if text == "(n)":
+        return "n"
+    return re.sub(r"(?<=.)\((?:n|명)\)$", "", text)
+
+
+def _is_numeric_cell(text: str) -> bool:
+    # parse_number is intentionally permissive for rendering. Recognition needs
+    # a full numeric cell, otherwise '문항 3 참조' supplies false data evidence.
+    text = clean_text(text).replace(",", "")
+    if text.startswith("(") and text.endswith(")"):
+        text = text[1:-1].strip()
+    return re.fullmatch(r"[+-]?(?:\d+(?:\.\d*)?|\.\d+)\s*%?", text) is not None
+
+
+def _has_percent_number_format(number_format: str, value: float = 0) -> bool:
+    # Excel quotes, backslash escapes, spacing/fill directives and bracketed
+    # metadata contain literal characters, not measure tokens. Only a remaining
+    # '%' declares a fractional percentage; magnitude is never unit evidence.
+    tokens = re.sub(r'"[^"]*"|\\.|_.|\*.|\[[^\]]*\]', "", number_format or "")
+    sections = tokens.split(";")
+    index = 1 if value < 0 and len(sections) >= 2 else 2 if value == 0 and len(sections) >= 3 else 0
+    return "%" in sections[index]
+
+
+def _parse_response_number(cell, col_name: str, config: StyleConfig) -> Optional[float]:
+    value = parse_number(cell.value)
+    kind = classify_column_name(col_name, config)
+    percent_labels = {clean_text(x) for x in config.table_rules["percent_keywords"]}
+    # Counts/means/scores are separate measures. Text already containing '%' is
+    # also not a fractional Excel numeric value, even with a percent cell style.
+    if (value is not None and isinstance(cell.value, (int, float)) and not isinstance(cell.value, bool)
+            and not is_case_header_row([col_name], config)
+            and (kind in {"rank", "summary"} or col_name in percent_labels)
+            and _has_percent_number_format(cell.number_format, value)):
+        return value * 100
+    return value
+
+
+def _is_note_row(values: List[str]) -> bool:
+    first = next((v for v in values if v), "")
+    return re.match(r"^(?:출처|자료\s*[:：]|주석|주\s*[:：)]|주\s*\d+\s*[:：)]|note\b|source\b)",
+                    first, re.IGNORECASE) is not None
 
 
 def is_unit_row(values: List[str], config: StyleConfig) -> bool:
@@ -320,15 +368,14 @@ def is_unit_row(values: List[str], config: StyleConfig) -> bool:
     percent_keywords = [clean_text(x) for x in config.table_rules["percent_keywords"]]
     if any(k and k in joined for k in unit_keywords):
         return True
-    if joined in percent_keywords:
+    if joined in percent_keywords or (any(values) and all(not v or v in percent_keywords for v in values)):
         return True
     return False
 
 
 def normalize_label(text: str) -> str:
     text = clean_text(text)
-    text = text.replace("■ ", "").replace("■", "").strip()
-    return text
+    return re.sub(r"^[■□●○•·▶►◆◇*\-\s]+", "", text).strip()
 
 
 def should_exclude_label(label: str, config: StyleConfig) -> bool:
@@ -382,6 +429,11 @@ def skip_candidate_title(text: str, config: StyleConfig) -> bool:
         return True
     if is_base_row([text], config):
         return True
+    if _is_note_row([text]) or is_unit_row([text], config):
+        return True
+    banners = {normalize_label(x) for x in config.characteristic_rules["preferred_groups"]}
+    if normalize_label(text) in banners or is_total_label(text, config):
+        return True
     if text.endswith("나타남"):
         return True
     return False
@@ -390,9 +442,17 @@ def skip_candidate_title(text: str, config: StyleConfig) -> bool:
 def strip_title_prefix(title: str, config: StyleConfig) -> str:
     title = dedupe_title_tokens(title)
     title = clean_text(title)
+    # Some exports put the question inside [표 1 > question] rather than after
+    # [표 1]. Expose that question before configured marker-stripping rules run.
+    title = re.sub(r"^\[\s*표\s*[^>\]]*>\s*(.*?)\]\s*$", r"\1", title)
 
     for regex in config.title_rules["strip_regexes"]:
         title = re.sub(regex, "", title)
+
+    # The configured rules still run first; these cover structural markers that
+    # the default schema misses, including unnumbered <표> and English titles.
+    title = re.sub(r"^(?:\[\s*표\s*[^\]]*\]|<\s*표\s*[^>]*>|(?:표|Table)\s+\d+(?:-\d+)*(?:\s*[.)]|\s+)"
+                   r"|(?:Q\s*|문(?:항)?\s*)?\d+(?:-\d+)*\s*[.)])\s*", "", title, flags=re.IGNORECASE)
 
     for prefix in config.title_rules["strip_prefixes"]:
         prefix = clean_text(prefix)
@@ -416,26 +476,50 @@ def normalize_analysis_title(title: str, config: StyleConfig) -> str:
     return clean_text(title)
 
 
-def find_title_for_table(ws, header_row_idx: int, config: StyleConfig) -> str:
-    candidates: List[str] = []
-    for r in range(max(1, header_row_idx - MAX_TITLE_LOOKBACK), header_row_idx):
+def _is_marked_title(text: str) -> bool:
+    return re.match(r"^(?:[\[<]\s*표|(?:표|Table)\s+\d|(?:Q\s*|문(?:항)?\s*)?\d+\s*[.)])",
+                    text, re.IGNORECASE) is not None
+
+
+def _find_title_row(ws, header_row_idx: int, config: StyleConfig, *, boundary: bool = False) -> Tuple[Optional[int], str]:
+    case_idx = find_case_col_idx(row_values(ws, header_row_idx), config)
+    meaningful = 0
+    for r in range(header_row_idx - 1, 0, -1):
         values = row_values(ws, r)
-        joined = dedupe_title_tokens(join_row_text(values))
-        if not joined:
+        if is_effectively_empty_row(values):
             continue
+        meaningful += 1
+        if meaningful > MAX_TITLE_LOOKBACK:
+            break
+        if is_case_header_row(values, config):
+            break
+        if is_base_row(values, config) or is_unit_row(values, config) or _is_note_row(values):
+            continue
+        # Never borrow a prior table's title across its data or header. Looking
+        # nearest-first also prevents an older explicit marker beating a plain
+        # title immediately above this table.
+        if any(_is_numeric_cell(v) for v in values):
+            break
+        texts = unique_preserve_order(values)
+        marked = bool(texts) and _is_marked_title(texts[0])
+        # An explicit prefix and question can occupy separate sparse cells;
+        # arbitrary multi-cell response choices are not a title or major banner.
+        if not texts or (len(texts) != 1 and not marked):
+            continue
+        title = join_row_text(texts)
+        if skip_candidate_title(title, config) and not (boundary and marked):
+            continue
+        # Repeated text only in response columns is a merged upper banner, not
+        # a title. A single sparse B/C cell is still a valid plain title.
+        occupied = [i for i, v in enumerate(values) if v]
+        if not marked and case_idx is not None and len(occupied) > 1 and min(occupied) > case_idx:
+            continue
+        return r, title
+    return None, TITLE_UNKNOWN
 
-        if "[표" in joined or "<표" in joined:
-            return joined
 
-        first_nonempty = next((v for v in values if v), "")
-        first_nonempty = dedupe_title_tokens(first_nonempty)
-        if first_nonempty and not skip_candidate_title(first_nonempty, config):
-            candidates.append(first_nonempty)
-
-        if joined and not skip_candidate_title(joined, config):
-            candidates.append(joined)
-
-    return candidates[-1] if candidates else TITLE_UNKNOWN
+def find_title_for_table(ws, header_row_idx: int, config: StyleConfig) -> str:
+    return _find_title_row(ws, header_row_idx, config)[1]
 
 
 # =========================
@@ -443,63 +527,157 @@ def find_title_for_table(ws, header_row_idx: int, config: StyleConfig) -> str:
 # =========================
 def find_table_starts(ws, config: StyleConfig) -> List[int]:
     starts = []
+    data_start = 0
     for r in range(1, ws.max_row + 1):
-        values = row_values(ws, r)
-        if is_case_header_row(values, config):
+        if r < data_start:
+            continue
+        layout = _header_layout(ws, r, config)
+        if layout is not None:
             starts.append(r)
+            # A vertically merged case label repeats after fill_merged_cells.
+            # All header tiers preceding the first data row belong to one table.
+            data_start = layout[3]
     return starts
 
 
 def find_table_starts_fast(ws, config: StyleConfig) -> List[int]:
-    """병합셀 보정 전에 표 시작 행 후보를 빠르게 찾는다.
-
-    원본 제공 코드는 모든 시트에 대해 `fill_merged_cells()`를 먼저 실행했다.
-    이 방식은 정확도는 좋지만, 목차/빈 시트/매우 큰 시트가 섞인 파일에서는
-    불필요한 셀 쓰기와 unmerge 작업이 많아진다.
-
-    여기서는 먼저 읽기 전용에 가까운 방식으로 `사례수` 헤더가 있는 행만 찾고,
-    후보가 있는 시트에 대해서만 병합셀 보정을 수행한다. 병합셀 보정 이후에는
-    다시 `find_table_starts()`를 호출해 정확한 시작 행을 확정한다.
-    """
-
-    target = clean_text(config.table_rules["case_column_name"])
+    """Cheap candidates only; merged header tiers are validated after filling."""
     starts: List[int] = []
-    if not target:
-        return starts
-
     for row_idx, row in enumerate(ws.iter_rows(values_only=True), start=1):
-        # values_only=True는 Cell 객체를 만들지 않아 대형 집계표에서 훨씬 가볍다.
         values = [clean_text(value) for value in row]
-        if target in join_row_text(values):
+        if is_case_header_row(values, config) or _structural_label_idx(values, config) is not None:
             starts.append(row_idx)
     return starts
 
 
+def _distribution_label_idx(values: List[str], config: StyleConfig) -> Optional[int]:
+    occupied = [i for i, v in enumerate(values) if v]
+    if len(occupied) != 2 or values[occupied[0]] not in {"항목", "구분"}:
+        return None
+    if values[occupied[1]] in {clean_text(x) for x in config.table_rules["percent_keywords"]}:
+        return occupied[0]
+    return None
+
+
+def _structural_label_idx(values: List[str], config: StyleConfig) -> Optional[int]:
+    occupied = [i for i, v in enumerate(values) if v]
+    # Only named, non-measure fields are candidates. In particular, a row of
+    # years or unnamed numeric columns cannot supply a guessed count column.
+    if (len(occupied) < 2 or len(unique_preserve_order(values)) < 2
+            or any(_is_numeric_cell(values[i]) or values[i] == "-" for i in occupied)
+            or all(re.fullmatch(r"(?:19|20)\d{2}\s*년?", values[i]) for i in occupied)
+            or is_base_row(values, config) or is_unit_row(values, config) or _is_note_row(values)
+            or _is_marked_title(values[occupied[0]])):
+        return None
+    return occupied[0]
+
+
+def _declared_stub_indices(header_values: List[str], label_end: int, config: StyleConfig) -> List[int]:
+    # Numeric years/codes are labels only beneath a named non-measure stub.
+    # Weighted counts left of the selected case column are not extra labels.
+    return [i for i in range(label_end) if header_values[i]
+            and classify_column_name(header_values[i], config) == "rank"
+            and not is_case_header_row([header_values[i]], config)
+            and not is_base_row([header_values[i]], config)
+            and not _is_numeric_cell(header_values[i])]
+
+
+def _is_data_row(values: List[str], label_end: int, response_indices: List[int], config: StyleConfig,
+                 numeric_stub_indices: Optional[List[int]] = None) -> bool:
+    if is_base_row(values, config) or is_unit_row(values, config) or _is_note_row(values):
+        return False
+    return ((any(v and not _is_numeric_cell(v) for v in values[:label_end])
+             or any(values[i] for i in numeric_stub_indices or []))
+            and any(_is_numeric_cell(values[i]) for i in response_indices))
+
+
+def _header_layout(ws, row_idx: int, config: StyleConfig) -> Optional[Tuple[Optional[int], int, int, int]]:
+    """Return (case index, response start, lowest label tier, first data row)."""
+    values = row_values(ws, row_idx)
+    # BASE can be merged vertically into a real header. Its exact case label
+    # still needs numeric evidence; BASE rows in the body remain excluded.
+    if _is_note_row(values):
+        return None
+    case_idx = find_case_col_idx(values, config)
+    label_idx = _structural_label_idx(values, config) if case_idx is None else None
+    if case_idx is None and label_idx is None:
+        return None
+    if case_idx is None and _distribution_label_idx(values, config) is None:
+        # Custom response labels are weaker evidence than a known case label.
+        # Require a nearby title or a sheet/blank separator boundary, as well as
+        # two real rows below. None of these checks guesses which value is N.
+        title_row, _ = _find_title_row(ws, row_idx, config, boundary=True)
+        if (title_row is None and row_idx != 1
+                and not is_effectively_empty_row(row_values(ws, row_idx - 1))):
+            return None
+    response_start = (case_idx if case_idx is not None else label_idx) + 1
+    label_end = case_idx if case_idx is not None else response_start
+    numeric_stub_indices = _declared_stub_indices(values, label_end, config)
+    indices = [i for i in range(response_start, len(values)) if values[i]]
+    lower_row = row_idx
+    first_data = None
+    actual_rows = 0
+    meaningful = 0
+    # Bound speculation by nonempty rows, not physical distance: exported sheets
+    # can insert dozens of blank spacers before data. Case tables need one real
+    # row; structural fallback needs two. Stop at an intervening title/header,
+    # and collapse non-numeric tiers (including repeated merged case labels).
+    for r in range(row_idx + 1, ws.max_row + 1):
+        following = row_values(ws, r)
+        if is_effectively_empty_row(following):
+            continue
+        meaningful += 1
+        if meaningful > MAX_HEADER_LOOKAHEAD:
+            break
+        if _is_data_row(following, label_end, indices, config, numeric_stub_indices):
+            first_data = first_data or r
+            actual_rows += 1
+            if actual_rows >= (1 if case_idx is not None else 2):
+                return case_idx, response_start, lower_row, first_data
+            continue
+        # Numbered body labels can resemble question titles. Numeric body
+        # evidence takes precedence; a non-data marked title ends speculation.
+        if _is_marked_title(next((v for v in following if v), "")):
+            break
+        if is_unit_row(following, config):
+            continue
+        if is_base_row(following, config) or _is_note_row(following):
+            continue
+        if first_data is not None:
+            break
+        next_case = find_case_col_idx(following, config)
+        if next_case is not None and next_case != case_idx:
+            break
+        response_labels = [i for i in range(response_start, len(following)) if following[i]]
+        if not response_labels or any(_is_numeric_cell(following[i]) for i in response_labels):
+            break
+        lower_row = r
+        indices = response_labels
+        numeric_stub_indices = _declared_stub_indices(following, label_end, config)
+    return None
+
+
 def find_table_end(ws, start_row: int, config: StyleConfig) -> int:
-    empty_streak = 0
-    for r in range(start_row + 1, ws.max_row + 1):
-        values = row_values(ws, r)
-        joined = join_row_text(values)
-
-        if joined:
-            if "[표" in joined or "<표" in joined:
-                return r - 1
-            if is_case_header_row(values, config):
-                return r - 1
-
-        if is_effectively_empty_row(values):
-            empty_streak += 1
-            if empty_streak >= MAX_EMPTY_STREAK:
-                return r - empty_streak
-        else:
-            empty_streak = 0
+    layout = _header_layout(ws, start_row, config)
+    first_data = layout[3] if layout else start_row + 1
+    # Blank runs may separate subgroups inside a table. Only a validated next
+    # header (and its own nearest title) establishes a new block boundary.
+    for r in range(first_data + 1, ws.max_row + 1):
+        if _header_layout(ws, r, config) is not None:
+            title_row, _ = _find_title_row(ws, r, config, boundary=True)
+            return (title_row if title_row is not None else r) - 1
     return ws.max_row
 
 
 def find_case_col_idx(header_values: List[str], config: StyleConfig) -> Optional[int]:
-    target = clean_text(config.table_rules["case_column_name"])
+    target = _normalize_case_header(config.table_rules["case_column_name"])
+    # Preserve the configured column's priority when several aliases coexist.
     for i, v in enumerate(header_values):
-        if target in v:
+        if target and _normalize_case_header(v) == target:
+            return i
+    targets = {_normalize_case_header(x) for x in {"사례수", "표본수", "응답수", "빈도", "N", "케이스수"}}
+    for i, v in enumerate(header_values):
+        if _normalize_case_header(v) in targets:
             return i
     return None
 
@@ -510,15 +688,22 @@ def find_upper_header_row(ws, header_row_idx: int, config: StyleConfig) -> Optio
     upper = row_values(ws, header_row_idx - 1)
     if is_effectively_empty_row(upper):
         return None
-    if is_base_row(upper, config):
-        return None
-
-    joined = join_row_text(upper)
     if is_unit_row(upper, config):
         return header_row_idx - 1
-
-    nonempty = sum(1 for x in upper if x)
-    if 1 <= nonempty <= 12 and joined:
+    if _is_marked_title(join_row_text(unique_preserve_order(upper))):
+        return None
+    case_idx = find_case_col_idx(row_values(ws, header_row_idx), config)
+    if case_idx is None:
+        label_idx = _distribution_label_idx(row_values(ws, header_row_idx), config)
+        case_idx = label_idx if label_idx is not None else 0
+    # A title/BASE row with no response banner must not prefix every column.
+    # A BASE cell at the left may coexist with real response banners at right.
+    occupied = [i for i, v in enumerate(upper) if v]
+    if (any(i > case_idx for i in occupied)
+            and not any(_is_numeric_cell(v) for v in upper)
+            and (len(unique_preserve_order(upper)) > 1
+                 or (len(occupied) > 1 and min(occupied) > case_idx))
+            and not _is_note_row(upper)):
         return header_row_idx - 1
     return None
 
@@ -548,6 +733,11 @@ def classify_column_name(col_name: str, config: StyleConfig) -> str:
 
 
 def build_response_columns(ws, header_row_idx: int, case_col_idx: int, config: StyleConfig) -> Tuple[List[str], str]:
+    columns, unit_text = _build_response_column_items(ws, header_row_idx, case_col_idx, config)
+    return [name for _, name in columns], unit_text
+
+
+def _build_response_column_items(ws, header_row_idx: int, case_col_idx: int, config: StyleConfig) -> Tuple[List[Tuple[int, str]], str]:
     header_values = row_values(ws, header_row_idx)
     upper_header_idx = find_upper_header_row(ws, header_row_idx, config)
     upper_values = row_values(ws, upper_header_idx) if upper_header_idx else []
@@ -556,7 +746,7 @@ def build_response_columns(ws, header_row_idx: int, case_col_idx: int, config: S
     if upper_values and is_unit_row(upper_values, config):
         unit_text = join_row_text(upper_values)
 
-    response_columns: List[str] = []
+    response_columns: List[Tuple[int, str]] = []
     for c in range(case_col_idx + 1, len(header_values)):
         lower = clean_text(header_values[c])
         upper = clean_text(upper_values[c]) if upper_values and c < len(upper_values) else ""
@@ -573,17 +763,30 @@ def build_response_columns(ws, header_row_idx: int, case_col_idx: int, config: S
 
         col_name = clean_text(col_name)
         if col_name:
-            response_columns.append(col_name)
+            response_columns.append((c, col_name))
 
-    response_columns = unique_preserve_order(response_columns)
+    # Keep physical indexes through blanks and repeats. Reserve existing names
+    # before suffixing duplicates so an original '있음 (2)' is not overwritten.
+    reserved = {name for _, name in response_columns}
+    used = set()
+    for i, (column, name) in enumerate(response_columns):
+        unique_name = name
+        if name in used:
+            suffix = 2
+            while f"{name} ({suffix})" in reserved or f"{name} ({suffix})" in used:
+                suffix += 1
+            unique_name = f"{name} ({suffix})"
+        used.add(unique_name)
+        response_columns[i] = (column, unique_name)
     return response_columns, unit_text
 
 
 # =========================
 # Row parsing
 # =========================
-def split_row_label_parts(left_cells: List[str]) -> Tuple[str, str, str]:
-    cleaned = [normalize_label(cell) for cell in left_cells if normalize_label(cell)]
+def split_row_label_parts(left_cells: List[str], numeric_label_indices: Optional[List[int]] = None) -> Tuple[str, str, str]:
+    cleaned = [normalize_label(cell) for i, cell in enumerate(left_cells) if normalize_label(cell)
+               and (not _is_numeric_cell(cell) or i in (numeric_label_indices or []))]
     if not cleaned:
         return "", "", ""
     if len(cleaned) == 1:
@@ -613,15 +816,34 @@ def detect_table_subtype(title: str, rows: List[ExcelTableRow], config: StyleCon
 
 
 def build_table_data_from_sheet(ws, header_row_idx: int, config: StyleConfig) -> Optional[ExcelTableData]:
-    header_values = row_values(ws, header_row_idx)
-    case_col_idx = find_case_col_idx(header_values, config)
-    if case_col_idx is None:
+    layout = _header_layout(ws, header_row_idx, config)
+    if layout is None:
         return None
+    case_col_idx, response_start, lower_header_row, data_start = layout
 
     title = find_title_for_table(ws, header_row_idx, config)
-    response_columns, unit_text = build_response_columns(ws, header_row_idx, case_col_idx, config)
+    column_items, unit_text = _build_response_column_items(ws, lower_header_row, response_start - 1, config)
+    response_columns = [name for _, name in column_items]
     if not response_columns:
         return None
+
+    recognition_warnings = []
+    if case_col_idx is None:
+        recognition_warnings.append("CASE_COLUMN_UNKNOWN")
+        # Use only explicit unit evidence. Numeric ranges and column positions
+        # cannot tell us whether these custom responses mean %, people or scores.
+        percent_labels = {clean_text(x) for x in config.table_rules["percent_keywords"]}
+        unit_known = bool(unit_text) or all(
+            name in percent_labels or _has_percent_number_format(ws.cell(data_start, i + 1).number_format, parse_number(ws.cell(data_start, i + 1).value) or 0)
+            for i, name in column_items
+        )
+        for r in range(lower_header_row + 1, data_start):
+            values = row_values(ws, r)
+            if is_unit_row(values, config):
+                unit_text = join_row_text(values)
+                unit_known = True
+        if not unit_known:
+            recognition_warnings.append("UNIT_UNKNOWN")
 
     ranked_columns = [c for c in response_columns if classify_column_name(c, config) == "rank"]
     summary_columns = [c for c in response_columns if classify_column_name(c, config) == "summary"]
@@ -634,29 +856,20 @@ def build_table_data_from_sheet(ws, header_row_idx: int, config: StyleConfig) ->
     rows: List[ExcelTableRow] = []
     total_row: Optional[ExcelTableRow] = None
 
-    for r in range(header_row_idx + 1, end_row + 1):
+    label_end = case_col_idx if case_col_idx is not None else response_start
+    response_indices = [i for i, _ in column_items]
+    numeric_stub_indices = _declared_stub_indices(row_values(ws, lower_header_row), label_end, config)
+    for r in range(data_start, end_row + 1):
         values = row_values(ws, r)
-        joined = join_row_text(values)
-
-        if is_effectively_empty_row(values):
+        if not _is_data_row(values, label_end, response_indices, config, numeric_stub_indices):
             continue
-        if is_base_row(values, config):
-            continue
-        if is_unit_row(values, config):
-            continue
-        if is_case_header_row(values, config):
-            continue
-        if "[표" in joined or "<표" in joined:
-            break
-
-        left_cells = values[:case_col_idx]
-        label, group, subgroup = split_row_label_parts(left_cells)
-        case_count = parse_number(values[case_col_idx]) if case_col_idx < len(values) else None
+        left_cells = values[:label_end]
+        label, group, subgroup = split_row_label_parts(left_cells, numeric_stub_indices)
+        case_count = parse_number(values[case_col_idx]) if case_col_idx is not None else None
 
         value_map: Dict[str, Optional[float]] = {}
-        source_values = values[case_col_idx + 1 : case_col_idx + 1 + len(response_columns)]
-        for col_name, raw_value in zip(response_columns, source_values):
-            value_map[col_name] = parse_number(raw_value)
+        for col_idx, col_name in column_items:
+            value_map[col_name] = _parse_response_number(ws.cell(r, col_idx + 1), col_name, config)
 
         if not label and case_count is None and all(v is None for v in value_map.values()):
             continue
@@ -683,8 +896,8 @@ def build_table_data_from_sheet(ws, header_row_idx: int, config: StyleConfig) ->
     subtype = detect_table_subtype(title, rows, config)
     return ExcelTableData(
         sheet_name=ws.title,
-        title=strip_title_prefix(title, config),
-        normalized_title=normalize_analysis_title(title, config),
+        title=strip_title_prefix(title, config) or TITLE_UNKNOWN,
+        normalized_title=normalize_analysis_title(title, config) or TITLE_UNKNOWN,
         subtype=subtype,
         start_row=start_row,
         end_row=end_row,
@@ -696,7 +909,8 @@ def build_table_data_from_sheet(ws, header_row_idx: int, config: StyleConfig) ->
         score_columns=score_columns,
         rows=rows,
         total_row=total_row,
-        multi_response=(numeric_total > multi_threshold) if ranked_columns else False,
+        multi_response=(numeric_total > multi_threshold) if ranked_columns and "UNIT_UNKNOWN" not in recognition_warnings else False,
+        recognition_warnings=tuple(recognition_warnings),
     )
 
 
@@ -715,25 +929,31 @@ def extract_tables_from_excel(
 
     wb = openpyxl.load_workbook(file_path, data_only=True)
     tables: List[ExcelTableData] = []
-    for ws in wb.worksheets:
-        if sheet_name and ws.title != sheet_name:
-            continue
-        if ws.title.strip().upper() == "INDEX":
-            continue
-        if ws.max_row == 0 or ws.max_column == 0:
-            continue
-        fast_starts = find_table_starts_fast(ws, config)
-        if not fast_starts:
-            continue
-        fill_merged_cells(ws)
-        starts = find_table_starts(ws, config)
-        for start_row in starts:
-            table = build_table_data_from_sheet(ws, start_row, config)
-            if table is not None:
-                tables.append(table)
-                if max_tables is not None and len(tables) >= max_tables:
-                    return tables
-    return tables
+    try:
+        for ws in wb.worksheets:
+            if sheet_name and ws.title != sheet_name:
+                continue
+            sheet_label = ws.title.strip().casefold()
+            # Reruns must not reinterpret our own generated cell/narrative
+            # sheets as source tables, even when a structural header fits.
+            if sheet_label == "index" or sheet_label.startswith(("보고서_", "_report")):
+                continue
+            if ws.max_row == 0 or ws.max_column == 0:
+                continue
+            fast_starts = find_table_starts_fast(ws, config)
+            if not fast_starts:
+                continue
+            fill_merged_cells(ws)
+            starts = find_table_starts(ws, config)
+            for start_row in starts:
+                table = build_table_data_from_sheet(ws, start_row, config)
+                if table is not None:
+                    tables.append(table)
+                    if max_tables is not None and len(tables) >= max_tables:
+                        return tables
+        return tables
+    finally:
+        wb.close()
 
 
 # =========================
@@ -818,6 +1038,10 @@ def render_score_line(table: ExcelTableData, config: StyleConfig) -> Optional[st
 
 
 def overall_summary(table: ExcelTableData, config: StyleConfig) -> str:
+    if "UNIT_UNKNOWN" in table.recognition_warnings:
+        # Keep raw numbers available for review, but do not append guessed % or
+        # compare custom fields as though they were confirmed response rates.
+        return f"{table.normalized_title} 문항은 수치 단위 확인 후 요약이 필요합니다."
     if table.total_row is None:
         return f"{table.normalized_title} 문항의 전체 응답을 요약하지 못했습니다."
 
@@ -864,6 +1088,8 @@ def overall_summary(table: ExcelTableData, config: StyleConfig) -> str:
 
 
 def district_summary(table: ExcelTableData, config: StyleConfig) -> str:
+    if "UNIT_UNKNOWN" in table.recognition_warnings:
+        return ""
     parts = []
     for row in table.rows:
         if is_total_label(row.label, config):
@@ -905,6 +1131,8 @@ def select_characteristic_groups(table: ExcelTableData, config: StyleConfig) -> 
 
 
 def characteristic_summary(table: ExcelTableData, config: StyleConfig) -> str:
+    if "UNIT_UNKNOWN" in table.recognition_warnings:
+        return ""
     if table.total_row is None:
         return ""
 
@@ -964,6 +1192,9 @@ def render_question_section(title: str, tables: List[ExcelTableData], config: St
 
     main_bullet = config.report_style["main_bullet"]
     lines = [f"▶ {title}", "", f"{main_bullet} {overall_summary(primary, config)}"]
+    for table in tables:
+        if table.recognition_warnings:
+            lines.append("[표 해석 확인 필요: " + ", ".join(table.recognition_warnings) + "]")
 
     if district_table is not None:
         text = district_summary(district_table, config)
@@ -1005,28 +1236,31 @@ def render_from_generated_output_sheets(file_path: str | Path) -> Optional[str]:
     """
 
     wb = openpyxl.load_workbook(file_path, data_only=True, read_only=True)
-    narrative_sheets = [ws for ws in wb.worksheets if ws.title.startswith("보고서_분석문")]
-    if not narrative_sheets:
-        return None
+    try:
+        narrative_sheets = [ws for ws in wb.worksheets if ws.title.startswith("보고서_분석문")]
+        if not narrative_sheets:
+            return None
 
-    ws = narrative_sheets[-1]
-    lines: List[str] = [f"{Path(file_path).name} 자동 생성 보고서 본문", ""]
-    for row in ws.iter_rows(min_row=2, values_only=True):
-        table_key = clean_text(row[0] if len(row) > 0 else "")
-        title = clean_text(row[1] if len(row) > 1 else "")
-        narrative = clean_text(row[8] if len(row) > 8 and row[8] else row[2] if len(row) > 2 else "")
-        if not title and not narrative:
-            continue
-        if title:
-            lines.append(f"▶ {title}")
-        if narrative:
-            # 셀 안의 줄바꿈은 유지하되, 각 표 사이에는 빈 줄을 넣어 검토하기 쉽게 한다.
-            lines.append(narrative.replace("\r\n", "\n").replace("\r", "\n"))
-        if table_key:
-            lines.append(f"[source: {table_key}]")
-        lines.append("")
+        ws = narrative_sheets[-1]
+        lines: List[str] = [f"{Path(file_path).name} 자동 생성 보고서 본문", ""]
+        for row in ws.iter_rows(min_row=2, values_only=True):
+            table_key = clean_text(row[0] if len(row) > 0 else "")
+            title = clean_text(row[1] if len(row) > 1 else "")
+            narrative = clean_text(row[8] if len(row) > 8 and row[8] else row[2] if len(row) > 2 else "")
+            if not title and not narrative:
+                continue
+            if title:
+                lines.append(f"▶ {title}")
+            if narrative:
+                # 셀 안의 줄바꿈은 유지하되, 각 표 사이에는 빈 줄을 넣어 검토하기 쉽게 한다.
+                lines.append(narrative.replace("\r\n", "\n").replace("\r", "\n"))
+            if table_key:
+                lines.append(f"[source: {table_key}]")
+            lines.append("")
 
-    return "\n".join(lines).strip() + "\n"
+        return "\n".join(lines).strip() + "\n"
+    finally:
+        wb.close()
 
 
 # =========================
@@ -1064,6 +1298,8 @@ def run_cli(argv: Optional[List[str]] = None) -> int:
 
 
 def ask_for_config_file() -> Optional[str]:
+    from tkinter import filedialog
+
     return filedialog.askopenfilename(
         title="스타일 설정 JSON 선택",
         filetypes=[("JSON files", "*.json"), ("All files", "*.*")],
@@ -1071,6 +1307,8 @@ def ask_for_config_file() -> Optional[str]:
 
 
 def ask_for_excel_files() -> Tuple[str, ...]:
+    from tkinter import filedialog
+
     return filedialog.askopenfilenames(
         title="분석할 엑셀 파일 선택(복수 선택 가능)",
         filetypes=[("Excel files", "*.xlsx"), ("All files", "*.*")],
@@ -1078,6 +1316,11 @@ def ask_for_excel_files() -> Tuple[str, ...]:
 
 
 def main() -> None:
+    # Standalone CLI payloads intentionally omit Tcl/Tk. Only GUI entry points
+    # import it; importing this module or using run_cli must remain Tk-free.
+    import tkinter as tk
+    from tkinter import messagebox
+
     global GLOBAL_CONFIG
 
     root = tk.Tk()

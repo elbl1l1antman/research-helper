@@ -126,11 +126,153 @@ Public Function ReportAutomation_CellText(ByVal ws As Worksheet, ByVal rowIndex 
     Dim cell As Range
     Set cell = ws.Cells(rowIndex, colIndex)
 
-    If cell.MergeCells Then
-        ReportAutomation_CellText = Trim$(CStr(cell.MergeArea.Cells(1, 1).Value))
-    Else
-        ReportAutomation_CellText = Trim$(CStr(cell.Value))
+    If cell.MergeCells Then Set cell = cell.MergeArea.Cells(1, 1)
+    If Not IsError(cell.Value2) Then ReportAutomation_CellText = Trim$(CStr(cell.Value2))
+End Function
+
+' 사례수/측정 별칭은 구조 탐색과 분석문에서 같은 기준을 사용한다.
+Public Function ReportAutomation_IsCountHeader(ByVal text As String) As Boolean
+    text = LCase$(Replace(ReportAutomation_CleanText(text), " ", ""))
+    If text = "(n)" Then text = "n"
+    text = Replace(Replace(Replace(text, "(n)", ""), "(명)", ""), "(건)", "")
+    Select Case text
+        Case "n", "사례수", "wt사례수", "가중사례수", "비가중사례수", "실제사례수", "표본수", "케이스수", "빈도", "응답수", "count", "casecount", "cases", "frequency", "weightedn", "rawn"
+            ReportAutomation_IsCountHeader = True
+    End Select
+End Function
+
+Public Function ReportAutomation_IsPercentHeader(ByVal text As String) As Boolean
+    text = LCase$(Replace(ReportAutomation_CleanText(text), " ", ""))
+    Select Case text
+        Case "%", "비율", "비율(%)", "백분율", "백분율(%)", "구성비", "구성비(%)", "퍼센트", "percent", "percentage", "pct", "percent(%)", "percentage(%)"
+            ReportAutomation_IsPercentHeader = True
+    End Select
+End Function
+
+Public Function ReportAutomation_IsMeasureHeader(ByVal text As String) As Boolean
+    ReportAutomation_IsMeasureHeader = ReportAutomation_IsPercentHeader(text) _
+        Or InStr(1, text, "100점", vbTextCompare) > 0 Or InStr(1, text, "점수", vbTextCompare) > 0
+End Function
+
+Public Function ReportAutomation_IsTotalLabel(ByVal text As String) As Boolean
+    text = LCase$(Replace(ReportAutomation_CleanText(text), " ", ""))
+    Do While Len(text) > 0 And InStr(1, "■▣▶◀●•-", Left$(text, 1), vbBinaryCompare) > 0
+        text = Mid$(text, 2)
+    Loop
+    Select Case text
+        Case "전체", "합계", "계", "총계", "total", "grandtotal", "overall"
+            ReportAutomation_IsTotalLabel = True
+    End Select
+End Function
+
+Public Function ReportAutomation_IsStubHeader(ByVal text As String) As Boolean
+    Select Case LCase$(ReportAutomation_CleanText(text))
+        Case "구분", "항목", "응답", "범주", "category", "response", "item"
+            ReportAutomation_IsStubHeader = True
+    End Select
+End Function
+
+Public Function ReportAutomation_IsBannerLabel(ByVal text As String) As Boolean
+    text = ReportAutomation_CleanText(text)
+    If Left$(text, 1) = "◐" Or Left$(text, 1) = "▣" Then ReportAutomation_IsBannerLabel = True: Exit Function
+    Select Case text
+        Case "성별", "연령", "연령대", "지역", "학력", "직업", "응답자 특성", "사업체 특성"
+            ReportAutomation_IsBannerLabel = True
+    End Select
+End Function
+
+Public Function ReportAutomation_IsNumericText(ByVal text As String) As Boolean
+    text = ReportAutomation_CleanText(text)
+    If Len(text) = 0 Then Exit Function
+    If Right$(text, 1) = "%" Then text = Trim$(Left$(text, Len(text) - 1))
+    If Len(text) > 0 Then ReportAutomation_IsNumericText = IsNumeric(text)
+End Function
+
+' 원본 값/표시/서식은 변경하지 않고 분석용 비율만 산출한다.
+Public Function ReportAutomation_PercentValue(ByVal cell As Range) As Variant
+    Dim raw As Variant, text As String, number As Double
+    raw = cell.Value2
+    If IsError(raw) Or IsEmpty(raw) Then Exit Function
+    If VarType(raw) = vbString Then
+        text = ReportAutomation_CleanText(CStr(raw))
+        If Right$(text, 1) = "%" Then
+            text = Trim$(Left$(text, Len(text) - 1))
+            If Len(text) > 0 And IsNumeric(text) Then ReportAutomation_PercentValue = CDbl(text)
+            Exit Function
+        End If
     End If
+    If Not IsNumeric(raw) Then Exit Function
+    number = CDbl(raw)
+    If ReportAutomation_HasPercentFormat(CStr(cell.NumberFormat), number) Then number = number * 100#
+    ReportAutomation_PercentValue = number
+End Function
+
+Private Function ReportAutomation_HasPercentFormat(ByVal formatText As String, ByVal number As Double) As Boolean
+    Dim sections As New Collection, section As String, i As Long, ch As String
+    Dim quoted As Boolean, bracketed As Boolean, escaped As Boolean
+    ' 서식 구간 분리는 따옴표/이스케이프 안의 세미콜론을 보존한다.
+    For i = 1 To Len(formatText)
+        ch = Mid$(formatText, i, 1)
+        If ch = ";" And Not quoted And Not escaped And Not bracketed Then
+            sections.Add section: section = ""
+        Else
+            section = section & ch
+        End If
+        If escaped Then
+            escaped = False
+        ElseIf Not quoted And (ch = "\" Or ch = "_" Or ch = "*") Then
+            escaped = True
+        ElseIf ch = Chr$(34) Then
+            quoted = Not quoted
+        ElseIf Not quoted Then
+            If ch = "[" Then bracketed = True
+            If ch = "]" Then bracketed = False
+        End If
+    Next i
+    sections.Add section
+    i = 1
+    If number < 0 And sections.Count >= 2 Then i = 2
+    If number = 0 And sections.Count >= 3 Then i = 3
+    section = CStr(sections(i))
+    quoted = False: bracketed = False: escaped = False
+    ' 리터럴 "%", \%, _%, *% 및 대괄호 메타 토큰은 비율 서식이 아니다.
+    For i = 1 To Len(section)
+        ch = Mid$(section, i, 1)
+        If escaped Then
+            escaped = False
+        ElseIf Not quoted And (ch = "\" Or ch = "_" Or ch = "*") Then
+            escaped = True
+        ElseIf ch = Chr$(34) Then
+            quoted = Not quoted
+        ElseIf Not quoted Then
+            If ch = "[" Then bracketed = True
+            If ch = "]" Then bracketed = False
+            If ch = "%" And Not bracketed Then ReportAutomation_HasPercentFormat = True: Exit Function
+        End If
+    Next i
+End Function
+
+' 수치 앞의 마지막 스텁을 항목명으로 읽고 전체/합계는 범주에서 제외한다.
+Public Function ReportAutomation_RowLabel(ByVal ws As Worksheet, ByVal rowIndex As Long, ByVal firstCol As Long, ByVal lastCol As Long, Optional ByVal declaredStub As Long = 0) As String
+    Dim c As Long, text As String
+    For c = firstCol To lastCol
+        text = ReportAutomation_CellText(ws, rowIndex, c)
+        If Len(text) > 0 Then
+            If ReportAutomation_IsNumericText(text) And c <> declaredStub Then Exit For
+            If ReportAutomation_IsTotalLabel(text) Then ReportAutomation_RowLabel = "": Exit Function
+            If ReportAutomation_IsMetadata(text) Or ReportAutomation_IsTableTitle(text) _
+                Or ReportAutomation_IsCountHeader(text) Or ReportAutomation_IsMeasureHeader(text) Then Exit Function
+            If Left$(text, 1) <> "▣" And Left$(text, 1) <> "■" Then ReportAutomation_RowLabel = text
+        End If
+    Next c
+End Function
+
+Public Function ReportAutomation_StubColumn(ByVal ws As Worksheet, ByVal firstHeader As Long, ByVal lastHeader As Long, ByVal firstCol As Long, ByVal lastCol As Long) As Long
+    Dim values As Variant, localCol As Long
+    values = ws.Range(ws.Cells(firstHeader, firstCol), ws.Cells(lastHeader, lastCol)).Value2
+    If Not IsArray(values) Then Exit Function
+    localCol = ReportAutomation_DeclaredStub(values, 1, UBound(values, 1), 1, UBound(values, 2))
+    If localCol > 0 Then ReportAutomation_StubColumn = firstCol + localCol - 1
 End Function
 ' ============================================================
 ' 함수명 : ReportAutomation_WorksheetExists

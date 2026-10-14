@@ -82,7 +82,7 @@ Public Sub ReportAutomation_WriteNarratives(ByVal wsNarr As Worksheet, ByVal wsC
         Next p
 
         ' 사용자가 선택한 배너가 있고 배너 교차표인 경우에만 배너별 수치를 차트 데이터에 추가한다.
-        If CLng(rec(IDX_LAST_COL)) > SIMPLE_TABLE_MAX_COL Then
+        If CLng(rec(IDX_LAST_COL)) - ReportAutomation_FirstCol(rec) + 1 > SIMPLE_TABLE_MAX_COL Then
             ReportAutomation_AppendBannerChartRows wsChart, chartRow, dataWs, rec, bannerSetting
         End If
 
@@ -92,7 +92,7 @@ Public Sub ReportAutomation_WriteNarratives(ByVal wsNarr As Worksheet, ByVal wsC
             wsQA.Cells(qaRow, 2).Value = IIf(points.Count = 0, "수치 QA", "표 구조 QA")
             wsQA.Cells(qaRow, 3).Value = "warning"
             wsQA.Cells(qaRow, 4).Value = IIf(points.Count = 0, "분석문 생성에 사용할 전체 기준 비율 값을 찾지 못했습니다.", rec(IDX_WARNING))
-            wsQA.Cells(qaRow, 5).Value = dataWs.Range(dataWs.Cells(CLng(rec(IDX_START_ROW)), 1), dataWs.Cells(CLng(rec(IDX_END_ROW)), CLng(rec(IDX_LAST_COL)))).Address(False, False)
+            wsQA.Cells(qaRow, 5).Value = dataWs.Range(dataWs.Cells(CLng(rec(IDX_START_ROW)), ReportAutomation_FirstCol(rec)), dataWs.Cells(CLng(rec(IDX_END_ROW)), CLng(rec(IDX_LAST_COL)))).Address(False, False)
             wsQA.Cells(qaRow, 6).Value = Format(Now, "yyyy-mm-dd hh:nn:ss")
             qaRow = qaRow + 1
         End If

@@ -43,6 +43,11 @@ namespace ReportAutomationLauncher
                     StandaloneBundle.SelfCheck(GetArgValue(args, "out"));
                     return 0;
                 }
+                if (HasFlag(args, "self-check-excel-recognition"))
+                {
+                    BannerInspector.RunRecognitionSelfCheck();
+                    return 0;
+                }
                 if (HasFlag(args, "self-check-hwp-page-setup"))
                 {
                     EngineRunner.RunHwpPageSetupSelfCheck();
@@ -2100,6 +2105,7 @@ namespace ReportAutomationLauncher
             tablePreviewList.Columns.Add("크기", 70);
             tablePreviewList.Columns.Add("보정", 60);
             tablePreviewList.Columns.Add("삽입", 60);
+            tablePreviewList.Columns.Add("인식 확인", 180);
             panel.Controls.Add(tablePreviewList, 0, 1);
 
             var buttons = new FlowLayoutPanel();
@@ -2977,6 +2983,7 @@ namespace ReportAutomationLauncher
                     item.SubItems.Add(table.RowCount + "x" + table.ColCount);
                     item.SubItems.Add(table.IsManual ? "수동" : "자동");
                     item.SubItems.Add("포함");
+                    item.SubItems.Add(table.RecognitionWarning ?? "");
                     item.Tag = table;
                     LauncherUi.StyleListItem(item, index);
                     tablePreviewList.Items.Add(item);
@@ -6382,6 +6389,7 @@ namespace ReportAutomationLauncher
         public int ColCount;
         public int AutoRowCount;
         public int AutoColCount;
+        public string RecognitionWarning;
         public string AutoRange;
         public string FinalRange;
         public bool IsManual;
@@ -6395,9 +6403,9 @@ namespace ReportAutomationLauncher
         public static List<string> ReadBanners(string workbookPath)
         {
             WorkbookPreview preview = ReadPreview(workbookPath);
-            if (preview.Banners.Count == 1)
+            if (preview.Tables.Count == 0)
             {
-                throw new InvalidOperationException("집계표에서 배너 목록을 찾지 못했습니다. 표 헤더 구조를 확인하세요.");
+                throw new InvalidOperationException("집계표에서 데이터가 있는 표를 찾지 못했습니다. 제목·헤더·표 범위를 확인하세요.");
             }
             return preview.Banners;
         }
@@ -6458,28 +6466,12 @@ namespace ReportAutomationLauncher
                 return;
             }
 
-            var tableStarts = new List<int>();
-            for (int row = sheet.FirstRow; row <= sheet.LastRow; row++)
+            foreach (TableBlock block in DetectBlocks(sheet))
             {
-                string text = sheet.Text(row, 1);
-                if (IsTableTitle(text))
-                {
-                    tableStarts.Add(row);
-                }
-            }
-
-            for (int i = 0; i < tableStarts.Count; i++)
-            {
-                int startRow = tableStarts[i];
-                int endRow = (i + 1 < tableStarts.Count) ? tableStarts[i + 1] - 1 : sheet.LastRow;
-                AddTablePreview(tables, Convert.ToString(ws.Name), sheet.Text(startRow, 1), startRow, endRow, sheet.LastCol);
-                int totalRow = FindTotalRow(sheet, startRow, endRow);
-                if (totalRow == 0)
-                {
-                    continue;
-                }
-
-                foreach (string banner in FindBannerGroups(sheet, startRow, totalRow, sheet.LastCol))
+                AddTablePreview(tables, Convert.ToString(ws.Name), block);
+                // Header extent comes from the first numeric body row, not a required total-row symbol.
+                int beforeHeader = block.TitleRow > 0 ? block.TitleRow : block.HeaderRow - 1;
+                foreach (string banner in FindBannerGroups(sheet, beforeHeader, block.BodyRow, block.LastCol))
                 {
                     if (seen.Add(banner))
                     {
@@ -6495,13 +6487,246 @@ namespace ReportAutomationLauncher
 
         private static bool IsTableTitle(string text)
         {
-            text = (text ?? "").Trim();
-            return text.StartsWith("[표", StringComparison.Ordinal) ||
-                   text.StartsWith("[ 표", StringComparison.Ordinal) ||
-                   text.StartsWith("<표", StringComparison.Ordinal);
+            return TableTitlePattern.IsMatch(NormalizeCell(text));
         }
 
-        private static void AddTablePreview(List<TablePreview> tables, string sheetName, string rawTitle, int row, int endRow, int lastCol)
+        private static readonly System.Text.RegularExpressions.Regex TableTitlePattern = new System.Text.RegularExpressions.Regex(
+            @"^\s*[\[<〈《(]?\s*(?:표|table)\s*(?:[<〈]?\s*(?<no>(?=[A-Z0-9_.-]*[0-9])[A-Z0-9]+(?:[_.-][A-Z0-9]+)*)\s*[>\]〉》):：.]?|[>\]〉》)])\s*",
+            System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+
+        private sealed class TableBlock
+        {
+            public int TitleRow, HeaderRow, BodyRow, EndRow, FirstCol, LastCol, SourceRow;
+            public bool InferredHeader;
+            public string Title;
+        }
+
+        private static string NormalizeCell(string text)
+        {
+            if (string.IsNullOrWhiteSpace(text)) return "";
+            return System.Text.RegularExpressions.Regex.Replace((text ?? "").Normalize(System.Text.NormalizationForm.FormKC), @"\s+", " ").Trim();
+        }
+
+        private static string HeaderToken(string text)
+        {
+            string token = NormalizeCell(text).Replace(" ", "").ToLowerInvariant();
+            if ((token.StartsWith("(") && token.EndsWith(")")) || (token.StartsWith("[") && token.EndsWith("]"))) token = token.Substring(1, token.Length - 2);
+            return token;
+        }
+
+        private static bool IsCaseHeader(string text)
+        {
+            string token = System.Text.RegularExpressions.Regex.Replace(HeaderToken(text), @"\([^)]*\)$", "");
+            return new[] { "사례수", "표본수", "응답수", "빈도", "케이스수", "n", "casecount", "wt사례수" }.Contains(token);
+        }
+
+        private static bool IsPercentHeader(string text)
+        {
+            return new[] { "%", "비율", "비율(%)", "백분율", "구성비", "비중", "percent", "pct" }.Contains(HeaderToken(text));
+        }
+
+        private static bool IsStubHeader(string text)
+        {
+            return new[] { "구분", "항목", "응답항목", "응답", "보기", "category", "item" }.Contains(HeaderToken(text));
+        }
+
+        private static bool IsMetadata(string text)
+        {
+            string token = HeaderToken(text).TrimStart('[');
+            return token.StartsWith("base") || token.StartsWith("단위") || token.StartsWith("출처") ||
+                token.StartsWith("주:") || token.StartsWith("주)") || token.StartsWith("source:") || token.StartsWith("note:");
+        }
+
+        public static void RunRecognitionSelfCheck()
+        {
+            Func<object[][], SheetSnapshot> snapshot = rows =>
+            {
+                int columns = rows.Max(row => row.Length);
+                Array values = Array.CreateInstance(typeof(object), new[] { rows.Length, columns }, new[] { 1, 1 });
+                for (int r = 0; r < rows.Length; r++)
+                    for (int c = 0; c < rows[r].Length; c++) values.SetValue(rows[r][c], r + 1, c + 1);
+                return new SheetSnapshot(1, 1, rows.Length, columns, values);
+            };
+            Action<bool, string> check = (passed, label) => { if (!passed) throw new InvalidOperationException("Excel recognition check failed: " + label); };
+            var shifted = snapshot(new[] {
+                new object[] { "", "<표 2-3> 서비스 만족도" },
+                new object[] { "", "구분", "응답 수(명)", "만족", "불만족" },
+                new object[] { "", "전체", 20, 70, 30 },
+                new object[] { "", "남성", 10, 60, 40 }
+            });
+            var blocks = DetectBlocks(shifted);
+            check(blocks.Count == 1 && blocks[0].TitleRow == 1 && blocks[0].FirstCol == 2 && blocks[0].LastCol == 5, "shifted title/header/body");
+            check(FindTotalRow(shifted, 1, 4) == 3 && ParseTableNo(blocks[0].Title) == "2-3", "plain total and table number");
+            var adjacent = snapshot(new[] {
+                new object[] { "", "Q1. 서비스 평가" }, new object[] { "" }, new object[] { "" },
+                new object[] { "항목", "비율(%)" }, new object[] { "첫 항목", 80 }, new object[] { "둘째 항목", 20 },
+                new object[] { "" }, new object[] { "Table 2. Usage" }, new object[] { "항목", "%" },
+                new object[] { "전체", 100 }, new object[] { "이용", 100 }
+            });
+            blocks = DetectBlocks(adjacent);
+            check(blocks.Count == 2 && blocks[0].TitleRow == 1 && blocks[0].BodyRow == 5 && blocks[0].EndRow == 6 && blocks[1].TitleRow == 8, "plain title, gaps and independent tables");
+            var hierarchical = snapshot(new[] {
+                new object[] { "[ 표 3 ] 분포" }, new object[] { "", "성별", "", "지역", "" },
+                new object[] { "구분", "남성", "여성", "수도권", "비수도권" },
+                new object[] { "", "%", "%", "%", "%" },
+                new object[] { "전체", 10, 60, 20, 40 }, new object[] { "이용", 5, 50, 15, 30 }
+            });
+            blocks = DetectBlocks(hierarchical);
+            check(blocks.Count == 1 && blocks[0].TitleRow == 1, "hierarchical header is not a title");
+            var banners = FindBannerGroups(hierarchical, 1, 5, 5);
+            check(banners.Count == 2 && banners.Contains("성별") && banners.Contains("지역"), "markerless parent banners without child options");
+            var flat = snapshot(new[] { new object[] { "표 4 분포" }, new object[] { "사례수", "만족", "불만족" }, new object[] { "", "%", "%" }, new object[] { "전체", 60, 40 } });
+            check(FindBannerGroups(flat, 1, 4, 3).Count == 0, "response options are not parent banners");
+            var titleless = snapshot(new[] { new object[] { "항목", "비율" }, new object[] { "이용", 30 }, new object[] { "미이용", 70 } });
+            blocks = DetectBlocks(titleless);
+            var previews = new List<TablePreview>();
+            AddTablePreview(previews, "자료", blocks[0]);
+            check(blocks.Count == 1 && previews[0].AutoRange == "A1:B3" && !string.IsNullOrEmpty(previews[0].RecognitionWarning), "missing title stays reviewable");
+            var novel = snapshot(new[] { new object[] { "표 5 실태" }, new object[] { "사업장", "응답인원", "찬성", "반대" }, new object[] { "전체", 10, 60, 40 }, new object[] { "A기관", 5, 70, 30 } });
+            blocks = DetectBlocks(novel);
+            check(blocks.Count == 1 && blocks[0].InferredHeader && blocks[0].TitleRow == 1, "unfamiliar headers require structural evidence");
+            check(ParseTableTitle("<표> 이용 경험") == "이용 경험", "unnumbered table marker");
+            var years = snapshot(new[] { new object[] { "표 6 연도 비교" }, new object[] { "연도", "N", "%" }, new object[] { 2023, 100, 60 }, new object[] { 2024, 120, 70 } });
+            blocks = DetectBlocks(years);
+            check(blocks.Count == 1 && blocks[0].BodyRow == 3, "numeric year labels before case-count column");
+            var index = snapshot(new[] { new object[] { "INDEX" }, new object[] { "[표 1] 서비스", "GO" }, new object[] { "사례수에 관한 안내" } });
+            check(DetectBlocks(index).Count == 0, "contents and narrative mentions are not tables");
+        }
+
+        private static bool IsNumericCell(string text)
+        {
+            double number;
+            return double.TryParse(NormalizeCell(text).Trim('(', ')', '%').Replace(",", ""),
+                System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out number);
+        }
+
+        private static string RowText(SheetSnapshot sheet, int row)
+        {
+            var parts = new List<string>();
+            for (int col = sheet.FirstCol; col <= sheet.LastCol; col++)
+            {
+                string text = NormalizeCell(sheet.Text(row, col));
+                if (text.Length > 0 && !parts.Contains(text)) parts.Add(text);
+            }
+            return string.Join(" ", parts);
+        }
+
+        private static bool IsDataRow(SheetSnapshot sheet, int row)
+        {
+            bool label = false;
+            for (int col = sheet.FirstCol; col <= sheet.LastCol; col++)
+            {
+                string text = NormalizeCell(sheet.Text(row, col));
+                if (text.Length == 0) continue;
+                if (!label)
+                {
+                    if (IsNumericCell(text) || IsMetadata(text) || IsCaseHeader(text) || IsPercentHeader(text) || IsStubHeader(text) || text == "표") return false;
+                    label = true;
+                }
+                else if (IsNumericCell(text)) return true;
+            }
+            return false;
+        }
+
+        private static int FirstBodyRow(SheetSnapshot sheet, int header)
+        {
+            int meaningful = 0;
+            int countCol = 0;
+            for (int col = sheet.FirstCol; col <= sheet.LastCol; col++)
+                if (IsCaseHeader(sheet.Text(header, col))) { countCol = col; break; }
+            for (int row = header + 1; row <= sheet.LastRow; row++)
+            {
+                if (IsDataRow(sheet, row)) return row;
+                // Numeric years/codes are labels only when present left of an explicit count column.
+                if (countCol > sheet.FirstCol)
+                {
+                    bool label = false;
+                    for (int col = sheet.FirstCol; col < countCol; col++)
+                        if (sheet.Text(row, col).Length > 0) { label = IsNumericCell(sheet.Text(row, col)); break; }
+                    if (label && IsNumericCell(sheet.Text(row, countCol)))
+                        for (int col = countCol + 1; col <= sheet.LastCol; col++)
+                            if (IsNumericCell(sheet.Text(row, col))) return row;
+                }
+                string text = RowText(sheet, row);
+                if (IsTableTitle(text) || text.StartsWith("출처") || ++meaningful > 32 && text.Length > 0) break;
+                if (text.Length == 0) meaningful--;
+            }
+            return 0;
+        }
+
+        private static List<TableBlock> DetectBlocks(SheetSnapshot sheet)
+        {
+            var blocks = new List<TableBlock>();
+            // Pair a header with labeled numeric data. Title spelling alone must not turn an INDEX into tables.
+            for (int row = sheet.FirstRow; row <= sheet.LastRow; row++)
+            {
+                if (IsDataRow(sheet, row)) continue;
+                int nonempty = 0;
+                bool header = false;
+                for (int col = sheet.FirstCol; col <= sheet.LastCol; col++)
+                {
+                    string text = sheet.Text(row, col);
+                    if (text.Length > 0) nonempty++;
+                    header |= IsCaseHeader(text) || IsPercentHeader(text) || IsStubHeader(text);
+                }
+                if (nonempty < 2 || IsTableTitle(RowText(sheet, row))) continue;
+                int body = FirstBodyRow(sheet, row);
+                if (body == 0 || blocks.Any(b => b.BodyRow == body)) continue; // Multiple header levels belong to one table.
+                if (!header)
+                {
+                    // An unfamiliar header needs two real data rows and a boundary, not just text over numbers.
+                    bool immediate = true;
+                    for (int h = row + 1; h < body; h++)
+                        if (RowText(sheet, h).Length > 0 && !IsMetadata(RowText(sheet, h))) immediate = false;
+                    int second = body + 1;
+                    while (second <= sheet.LastRow && RowText(sheet, second).Length == 0) second++;
+                    int previous = row - 1;
+                    while (previous >= sheet.FirstRow && RowText(sheet, previous).Length == 0) previous--;
+                    bool boundary = previous < sheet.FirstRow || row - previous > 2 || IsTableTitle(RowText(sheet, previous)) ||
+                        (blocks.Count == 0 && !IsDataRow(sheet, previous) && RowText(sheet, previous).Length > 0 && !IsMetadata(RowText(sheet, previous)));
+                    if (!immediate || !boundary || second > sheet.LastRow || !IsDataRow(sheet, second)) continue;
+                }
+                blocks.Add(new TableBlock { HeaderRow = row, BodyRow = body, InferredHeader = !header });
+            }
+            for (int i = 0; i < blocks.Count; i++)
+            {
+                TableBlock block = blocks[i];
+                block.FirstCol = sheet.LastCol;
+                block.LastCol = sheet.FirstCol;
+                for (int col = sheet.FirstCol; col <= sheet.LastCol; col++)
+                    if (sheet.Text(block.BodyRow, col).Length > 0) { block.FirstCol = Math.Min(block.FirstCol, col); block.LastCol = Math.Max(block.LastCol, col); }
+                int lower = i == 0 ? sheet.FirstRow : blocks[i - 1].BodyRow + 1;
+                int plainRow = 0;
+                string plainTitle = "";
+                for (int row = block.HeaderRow - 1; row >= lower; row--)
+                {
+                    string text = RowText(sheet, row);
+                    if (text.Length == 0 || IsMetadata(text) || IsDataRow(sheet, row)) continue;
+                    if (IsTableTitle(text)) { block.TitleRow = row; block.Title = text; break; }
+                    int count = 0, first = 0;
+                    for (int col = sheet.FirstCol; col <= sheet.LastCol; col++)
+                        if (sheet.Text(row, col).Length > 0) { if (first == 0) first = col; count++; }
+                    if (plainRow == 0 && count <= 2 && first <= block.FirstCol + 1 && !IsStubHeader(text) && !IsCaseHeader(text) && !IsPercentHeader(text))
+                    { plainRow = row; plainTitle = text; }
+                }
+                if (block.TitleRow == 0) { block.TitleRow = plainRow; block.Title = plainTitle; }
+                block.SourceRow = block.TitleRow > 0 ? block.TitleRow + 1 : block.HeaderRow;
+                while (block.SourceRow < block.HeaderRow && RowText(sheet, block.SourceRow).Length == 0) block.SourceRow++;
+            }
+            for (int i = 0; i < blocks.Count; i++)
+            {
+                TableBlock block = blocks[i];
+                block.EndRow = i + 1 < blocks.Count ? (blocks[i + 1].TitleRow > 0 ? blocks[i + 1].TitleRow : blocks[i + 1].HeaderRow) - 1 : sheet.LastRow;
+                while (block.EndRow > block.BodyRow && RowText(sheet, block.EndRow).Length == 0) block.EndRow--;
+                for (int row = block.HeaderRow; row <= block.EndRow; row++)
+                    if (!IsMetadata(RowText(sheet, row)))
+                        for (int col = sheet.FirstCol; col <= sheet.LastCol; col++)
+                            if (sheet.Text(row, col).Length > 0) { block.FirstCol = Math.Min(block.FirstCol, col); block.LastCol = Math.Max(block.LastCol, col); }
+            }
+            return blocks;
+        }
+
+        private static void AddTablePreview(List<TablePreview> tables, string sheetName, TableBlock block)
         {
             if (tables.Count >= 500)
             {
@@ -6512,15 +6737,18 @@ namespace ReportAutomationLauncher
             preview.TableKey = "T" + (tables.Count + 1).ToString("0000");
             preview.SheetName = sheetName;
             preview.AutoSheetName = sheetName;
-            preview.Row = row;
-            preview.RowCount = Math.Max(1, endRow - row + 1);
-            preview.ColCount = Math.Max(1, lastCol);
+            preview.Row = block.TitleRow > 0 ? block.TitleRow : block.HeaderRow;
+            int firstRow = block.SourceRow;
+            preview.RowCount = block.EndRow - firstRow + 1;
+            preview.ColCount = block.LastCol - block.FirstCol + 1;
             preview.AutoRowCount = preview.RowCount;
             preview.AutoColCount = preview.ColCount;
-            preview.AutoRange = "A" + row + ":" + ExcelColumnName(lastCol) + endRow;
+            preview.AutoRange = ExcelColumnName(block.FirstCol) + firstRow + ":" + ExcelColumnName(block.LastCol) + block.EndRow;
             preview.FinalRange = preview.AutoRange;
-            preview.TableNo = ParseTableNo(rawTitle);
-            preview.Title = ParseTableTitle(rawTitle);
+            preview.TableNo = ParseTableNo(block.Title);
+            preview.Title = string.IsNullOrWhiteSpace(block.Title) ? "제목 미확인" : ParseTableTitle(block.Title);
+            preview.RecognitionWarning = block.TitleRow == 0 ? "제목 없음: 범위 확인 필요" : !IsTableTitle(block.Title) ? "구조로 추정: 제목·범위 확인" : "";
+            if (block.InferredHeader) preview.RecognitionWarning += (preview.RecognitionWarning.Length > 0 ? "; " : "") + "비표준 헤더: 열 의미 확인";
             tables.Add(preview);
         }
 
@@ -6569,14 +6797,9 @@ namespace ReportAutomationLauncher
         {
             try
             {
-                int lastRow = Math.Min(Convert.ToInt32(worksheet.Cells[worksheet.Rows.Count, 1].End(-4162).Row), MaxPreviewRows);
-                for (int row = 1; row <= lastRow; row++)
-                {
-                    if (IsTableTitle(Convert.ToString(worksheet.Cells[row, 1].Value2)))
-                    {
-                        return true;
-                    }
-                }
+                if (IsGeneratedSheet(Convert.ToString(worksheet.Name)) || string.Equals(Convert.ToString(worksheet.Name), "INDEX", StringComparison.OrdinalIgnoreCase) || Convert.ToString(worksheet.Name) == "목차") return false;
+                SheetSnapshot sheet;
+                return TryReadSheetSnapshot(worksheet, out sheet) && DetectBlocks(sheet).Count > 0;
             }
             catch
             {
@@ -6598,26 +6821,12 @@ namespace ReportAutomationLauncher
 
         private static string ParseTableNo(string rawTitle)
         {
-            string text = (rawTitle ?? "").Trim();
-            int open = text.IndexOf("[", StringComparison.Ordinal);
-            int close = text.IndexOf("]", StringComparison.Ordinal);
-            if (open >= 0 && close > open)
-            {
-                string token = text.Substring(open + 1, close - open - 1);
-                token = token.Replace("표", "").Trim();
-                return token;
-            }
-            return "";
+            return TableTitlePattern.Match(NormalizeCell(rawTitle)).Groups["no"].Value;
         }
 
         private static string ParseTableTitle(string rawTitle)
         {
-            string text = (rawTitle ?? "").Trim();
-            int close = text.IndexOf("]", StringComparison.Ordinal);
-            if (close >= 0 && close + 1 < text.Length)
-            {
-                text = text.Substring(close + 1).Trim();
-            }
+            string text = TableTitlePattern.Replace(NormalizeCell(rawTitle), "", 1).TrimEnd(']').Trim();
             if (text.StartsWith("[", StringComparison.Ordinal))
             {
                 int sectionClose = text.IndexOf("]", StringComparison.Ordinal);
@@ -6679,10 +6888,10 @@ namespace ReportAutomationLauncher
         {
             for (int row = startRow; row <= endRow; row++)
             {
-                string text = sheet.Text(row, 1);
-                if (text.StartsWith("■", StringComparison.Ordinal))
+                for (int col = sheet.FirstCol; col <= sheet.LastCol; col++)
                 {
-                    return row;
+                    string text = HeaderToken(sheet.Text(row, col)).TrimStart('■', '▣', '●');
+                    if ((text == "전체" || text == "합계" || text == "총계" || text == "total") && IsDataRow(sheet, row)) return row;
                 }
             }
             return 0;
@@ -6703,19 +6912,30 @@ namespace ReportAutomationLauncher
                 return groups;
             }
 
+            // A parent banner needs a child-label level. Flat response options above % are not banners.
+            int bannerRow = 0;
+            for (int row = headerStart; row <= headerEnd && bannerRow == 0; row++)
+                for (int col = sheet.FirstCol; col <= lastCol; col++)
+                {
+                    string candidate = sheet.Text(row, col);
+                    if (!IsGroupNameCandidate(candidate)) continue;
+                    if (candidate.StartsWith("◐", StringComparison.Ordinal)) { bannerRow = row; break; }
+                    if (HasBannerChildren(sheet, row, col, headerEnd, lastCol)) bannerRow = row;
+                    if (bannerRow > 0) break;
+                }
+            if (bannerRow == 0) return groups;
             var colGroupName = new string[lastCol + 1];
             string lastSeenGroupName = "";
             for (int col = 1; col <= lastCol; col++)
             {
-                for (int row = headerStart; row <= headerEnd; row++)
                 {
-                    string text = sheet.Text(row, col);
-                    if (IsGroupNameCandidate(text))
+                    string text = sheet.Text(bannerRow, col);
+                    if (IsGroupNameCandidate(text) && (text.StartsWith("◐", StringComparison.Ordinal) || HasBannerChildren(sheet, bannerRow, col, headerEnd, lastCol)))
                     {
                         colGroupName[col] = text;
                         lastSeenGroupName = text;
-                        break;
                     }
+                    else if (!string.IsNullOrWhiteSpace(text)) lastSeenGroupName = "";
                 }
                 if (string.IsNullOrEmpty(colGroupName[col]) && IsPercentMeasureColumn(sheet, startRow, totalRow, col))
                 {
@@ -6751,11 +6971,22 @@ namespace ReportAutomationLauncher
             return groups;
         }
 
+        private static bool HasBannerChildren(SheetSnapshot sheet, int row, int col, int headerEnd, int lastCol)
+        {
+            // Blank cells following a parent anchor are its span, ending at the next heading.
+            int end = col;
+            while (end < lastCol && string.IsNullOrWhiteSpace(sheet.Text(row, end + 1))) end++;
+            for (int child = row + 1; child <= headerEnd; child++)
+                for (int c = col; c <= end; c++)
+                    if (IsGroupNameCandidate(sheet.Text(child, c)) && NormalizeCell(sheet.Text(child, c)) != NormalizeCell(sheet.Text(row, col))) return true;
+            return false;
+        }
+
         private static bool IsPercentMeasureColumn(SheetSnapshot sheet, int startRow, int totalRow, int col)
         {
             for (int row = startRow + 1; row <= totalRow - 1; row++)
             {
-                if (sheet.Text(row, col) == "%")
+                if (IsPercentHeader(sheet.Text(row, col)))
                 {
                     return true;
                 }
@@ -6769,20 +7000,14 @@ namespace ReportAutomationLauncher
             {
                 return false;
             }
-            string normalized = text.Trim();
-            return normalized != "%" &&
-                   !string.Equals(normalized, "N", StringComparison.OrdinalIgnoreCase) &&
-                   normalized != "사례수";
+            string normalized = NormalizeCell(text);
+            return normalized != "계" && normalized != "합계" && HeaderToken(normalized) != "n/%" && !IsPercentHeader(normalized) && !IsCaseHeader(normalized) && !IsStubHeader(normalized) && !IsMetadata(normalized) && !IsNumericCell(normalized) && !IsTableTitle(normalized);
         }
 
         private static void AddBanner(List<string> groups, string name)
         {
             name = (name ?? "").Trim();
             if (name.Length == 0)
-            {
-                return;
-            }
-            if (!name.StartsWith("◐", StringComparison.Ordinal))
             {
                 return;
             }
@@ -6879,6 +7104,7 @@ namespace ReportAutomationLauncher
             }
 
             public int FirstRow { get { return firstRow; } }
+            public int FirstCol { get { return firstCol; } }
             public int LastRow { get { return firstRow + rowCount - 1; } }
             public int LastCol { get { return firstCol + colCount - 1; } }
 
