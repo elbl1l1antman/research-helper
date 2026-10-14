@@ -174,6 +174,7 @@ class StandalonePayloadTests(unittest.TestCase):
         source = self.root / "src/Launcher.cs"
         self.put(source, 'static class Launcher { static void Main() { System.Console.WriteLine("first"); } }')
         self.put(source.with_name("StandaloneBundle.cs"), "internal static class StandaloneBundle {}")
+        self.put(source.with_name("ExcelAddinDiagnostics.cs"), "internal static class ExcelAddinDiagnostics {}")
         output = self.root / "bin"
         command = ["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File",
                    str(SCRIPT.with_name("build_report_automation_launcher.ps1")), "-DevelopmentOnly",

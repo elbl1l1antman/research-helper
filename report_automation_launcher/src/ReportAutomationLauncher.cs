@@ -38,6 +38,16 @@ namespace ReportAutomationLauncher
         {
             try
             {
+                if (HasFlag(args, "check-excel-addin"))
+                {
+                    string output = GetArgValue(args, "out");
+                    if (string.IsNullOrWhiteSpace(output)) throw new ArgumentException("--out <path> 값을 지정하세요.");
+                    string path = GetArgValue(args, "addin");
+                    var report = ExcelAddinDiagnostics.Check(string.IsNullOrWhiteSpace(path) ? PathResolver.ResolveDefaultAddinPath() : path);
+                    ExcelAddinDiagnostics.Save(output, report);
+                    Console.WriteLine(report["message"]);
+                    return (string)report["status"] == "opened" ? 0 : 1;
+                }
                 if (HasFlag(args, "self-check-standalone"))
                 {
                     StandaloneBundle.SelfCheck(GetArgValue(args, "out"));
@@ -108,6 +118,8 @@ namespace ReportAutomationLauncher
                     try
                     {
                         File.WriteAllText(outputPath + ".error.txt", ex.ToString(), System.Text.Encoding.UTF8);
+                        var addinError = ex as ExcelAddinOpenException;
+                        if (addinError != null) ExcelAddinDiagnostics.Save(outputPath + ".excel_addin.json", addinError.Report);
                     }
                     catch
                     {
@@ -1908,19 +1920,23 @@ namespace ReportAutomationLauncher
             group.AutoSize = true;
             group.Padding = new Padding(10);
 
-            var grid = CreateGrid(3);
+            var grid = CreateGrid(4);
             group.Controls.Add(grid);
 
             AddPathRow(grid, 0, "집계표 엑셀", workbookPathText, "찾기", BrowseWorkbook);
             AddPathRow(grid, 1, "자동화 추가기능", addinPathText, "찾기", BrowseAddin);
             addinPathText.ReadOnly = false;
 
+            var checkAddin = new Button { Text = "연결 검사", AutoSize = true };
+            checkAddin.Click += CheckExcelAddin;
+            grid.Controls.Add(checkAddin, 2, 2);
+
             var note = new Label();
             note.Text = "선택한 파일은 직접 수정하지 않고, 기본값으로 복사본에 산출 시트를 생성합니다.";
             note.AutoSize = true;
             note.ForeColor = LauncherUi.ColorMutedText;
             note.Margin = new Padding(130, 4, 0, 0);
-            grid.Controls.Add(note, 1, 2);
+            grid.Controls.Add(note, 1, 3);
             grid.SetColumnSpan(note, 2);
 
             return group;
@@ -3233,6 +3249,36 @@ namespace ReportAutomationLauncher
             }
         }
 
+        private void CheckExcelAddin(object sender, EventArgs e)
+        {
+            var button = (Button)sender;
+            button.Enabled = false;
+            string path = addinPathText.Text.Trim();
+            string output = Path.Combine(ResolveHwpDiagnosticOutputDirectory(), "excel_addin_report_" + DateTime.Now.ToString("yyyyMMdd_HHmmss") + ".json");
+            var thread = new Thread(delegate()
+            {
+                string summary;
+                try
+                {
+                    var report = ExcelAddinDiagnostics.Check(path);
+                    ExcelAddinDiagnostics.Save(output, report);
+                    summary = report["message"] + Environment.NewLine + "검사 기록: " + output;
+                }
+                catch (Exception ex) { summary = "Excel 연결 검사 실패: " + ex.Message; }
+                if (!IsDisposed && IsHandleCreated)
+                    BeginInvoke(new Action(delegate()
+                    {
+                        button.Enabled = true;
+                        resultSummaryText.Text = summary;
+                        Log(summary);
+                        MessageBox.Show(this, summary, "Excel 연결 검사", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                    }));
+            });
+            thread.SetApartmentState(ApartmentState.STA);
+            thread.IsBackground = true;
+            thread.Start();
+        }
+
         private void BrowseHwpTemplate(object sender, EventArgs e)
         {
             BrowseTemplate(hwpTemplateText, "HWP/HWPX 템플릿 선택", "HWP/HWPX files (*.hwp;*.hwpx)|*.hwp;*.hwpx|All files (*.*)|*.*", "HWPX/HWP 템플릿을 선택했습니다. 검사를 실행하세요.");
@@ -3676,6 +3722,17 @@ namespace ReportAutomationLauncher
                 catch (Exception ex)
                 {
                     Log("오류: " + ex.Message);
+                    var addinError = ex as ExcelAddinOpenException;
+                    if (addinError != null)
+                    {
+                        try
+                        {
+                            string diagnosticPath = Path.Combine(Path.GetDirectoryName(options.WorkbookPath), "excel_addin_error_" + DateTime.Now.ToString("yyyyMMdd_HHmmss") + ".json");
+                            ExcelAddinDiagnostics.Save(diagnosticPath, addinError.Report);
+                            Log("Excel 연결 오류 기록: " + diagnosticPath);
+                        }
+                        catch (Exception saveError) { Log("오류 기록 저장 실패: " + saveError.Message); }
+                    }
                     BeginInvoke(new Action(delegate()
                     {
                         resultSummaryText.Text = "실행 중 오류가 발생했습니다." + Environment.NewLine + ex.Message;
@@ -5412,8 +5469,7 @@ namespace ReportAutomationLauncher
         public static string Run(LauncherOptions options, Action<string> log)
         {
             options.Validate();
-            string workbookToOpen = options.CopyWorkbook ? CreateWorkingCopy(options.WorkbookPath) : options.WorkbookPath;
-            log("대상 파일: " + workbookToOpen);
+            string workbookToOpen = options.WorkbookPath;
             log("추가기능: " + options.AddinPath);
 
             object excel = null;
@@ -5434,8 +5490,11 @@ namespace ReportAutomationLauncher
                 xl.Visible = false;
 
                 log("Excel을 시작했습니다.");
+                // Validate actual Excel access before copying/opening the user's input workbook.
+                addin = ExcelAddinDiagnostics.Open(excel, options.AddinPath);
+                workbookToOpen = options.CopyWorkbook ? CreateWorkingCopy(options.WorkbookPath) : options.WorkbookPath;
+                log("대상 파일: " + workbookToOpen);
                 workbook = xl.Workbooks.Open(workbookToOpen);
-                addin = xl.Workbooks.Open(options.AddinPath);
                 dynamic wb = workbook;
                 wb.Activate();
 
@@ -5480,7 +5539,8 @@ namespace ReportAutomationLauncher
             finally
             {
                 CloseComWorkbookForLauncher(addin, false);
-                CloseComWorkbookForLauncher(workbook, true);
+                // Success saves explicitly above. Never save partial changes while unwinding a failure.
+                CloseComWorkbookForLauncher(workbook, false);
                 QuitComExcelForLauncher(excel);
                 ReleaseComForLauncher(addin);
                 ReleaseComForLauncher(workbook);

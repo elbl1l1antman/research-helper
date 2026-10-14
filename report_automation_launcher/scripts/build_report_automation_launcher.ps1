@@ -27,6 +27,10 @@ $BundleSourcePath = Join-Path (Split-Path -Parent $SourcePath) "StandaloneBundle
 if (-not (Test-Path -LiteralPath $BundleSourcePath)) {
     throw "Standalone bundle source not found: $BundleSourcePath"
 }
+$DiagnosticsSourcePath = Join-Path (Split-Path -Parent $SourcePath) 'ExcelAddinDiagnostics.cs'
+if (-not (Test-Path -LiteralPath $DiagnosticsSourcePath)) {
+    throw "Excel diagnostics source not found: $DiagnosticsSourcePath"
+}
 
 New-Item -ItemType Directory -Force -Path $OutputDir | Out-Null
 
@@ -66,7 +70,7 @@ try {
         }
         $compilerArgs += "/resource:$payload,ReportAutomation.Payload.zip"
     }
-    $compilerArgs += @($SourcePath, $BundleSourcePath)
+    $compilerArgs += @($SourcePath, $BundleSourcePath, $DiagnosticsSourcePath)
     & $csc @compilerArgs
     if ($LASTEXITCODE -ne 0) {
         throw "Launcher build failed with exit code $LASTEXITCODE"

@@ -66,6 +66,11 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\tests\test_standalone_laun
 사용자 Excel/아래한글 문서를 열거나 COM 객체를 생성하지 않습니다.
 이 검증은 실제 Excel/HWP 자동화 통합 테스트를 대체하지 않습니다.
 
+실제 Excel에서 내장 추가기능을 열 수 있는지는 파일 영역의 **연결 검사** 또는
+`--check-excel-addin --out "검사결과.json"`으로 확인합니다. 파일 존재와 Excel의 접근
+성공은 별개이며, 연결 검사 성공도 매크로 실행 성공을 보장하지 않습니다.
+[연결 진단과 현재 PC의 캐시 접근 제한](excel_addin_diagnostics.md)
+
 런타임 경로와 검사 결과 JSON은 다음 명령으로 확인할 수 있습니다.
 
 ```powershell

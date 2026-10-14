@@ -19,6 +19,15 @@ try {
     $result = Get-Content -LiteralPath $report -Raw -Encoding UTF8 | ConvertFrom-Json
     if ($result.status -ne 'ready' -or $result.gui -ne 'ready' -or -not $result.bundled -or $result.python -notlike ($result.bundle_root + '\*') -or $result.engine -notlike ($result.bundle_root + '\*') -or $result.addin -notlike ($result.bundle_root + '\*')) { throw 'Standalone initialization failed or dependencies escaped the bundle.' }
     if ($result.runtime.prefix -ne (Join-Path $result.bundle_root 'runtime')) { throw 'Python used an external installation.' }
+    # Missing-file diagnostics must work without opening Excel or requiring a workbook argument.
+    $missingReport = Join-Path $directory 'missing_addin.json'
+    $missingAddin = Join-Path $directory 'not_found.xlam'
+    $probe = Start-Process -FilePath $copy -ArgumentList @('--check-excel-addin', '--addin', ('"' + $missingAddin + '"'), '--out', ('"' + $missingReport + '"')) -WorkingDirectory $directory -WindowStyle Hidden -PassThru
+    $null = $probe.Handle
+    $probe.WaitForExit()
+    if ($probe.ExitCode -ne 1 -or -not (Test-Path -LiteralPath $missingReport)) { throw 'Missing add-in diagnostic CLI failed.' }
+    $diagnostic = Get-Content -LiteralPath $missingReport -Raw -Encoding UTF8 | ConvertFrom-Json
+    if ($diagnostic.status -ne 'blocked' -or $diagnostic.stage -ne 'file_check' -or $diagnostic.macro_execution_verified) { throw 'Misleading missing add-in readiness report.' }
     # Exercise actual engine commands, not only imports, from the unrelated EXE-only directory.
     $engineDirectory = Split-Path -Parent $result.engine
     $template = Join-Path $directory 'basic report.pptx'
