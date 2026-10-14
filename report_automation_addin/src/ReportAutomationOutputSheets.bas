@@ -64,6 +64,8 @@ Public Sub ReportAutomation_WriteSettingsSheet(ByVal ws As Worksheet, ByVal wb A
         End If
     Next i
 
+    ReportAutomation_CopyTableRangeSettings priorSettingsWs, ws
+
     ws.Columns("A:C").AutoFit
     ws.Range("A3:A" & UBound(labels) + 3).Font.Bold = True
     ReportAutomation_StyleHeader ws.Range("A1:C1")
@@ -86,10 +88,10 @@ Public Sub ReportAutomation_WriteTableList(ByVal ws As Worksheet, ByVal tables A
         ws.Cells(i + 1, 5).Value = rec(IDX_BASIS)
         ws.Cells(i + 1, 6).Value = rec(IDX_BASE_LABEL)
         ws.Cells(i + 1, 7).Value = dataWs.Name
-        ws.Cells(i + 1, 8).Value = dataWs.Range(dataWs.Cells(CLng(rec(IDX_START_ROW)), 1), dataWs.Cells(CLng(rec(IDX_END_ROW)), CLng(rec(IDX_LAST_COL)))).Address(False, False)
+        ws.Cells(i + 1, 8).Value = dataWs.Range(dataWs.Cells(CLng(rec(IDX_START_ROW)), ReportAutomation_FirstCol(rec)), dataWs.Cells(CLng(rec(IDX_END_ROW)), CLng(rec(IDX_LAST_COL)))).Address(False, False)
         ws.Cells(i + 1, 9).Value = rec(IDX_TABLE_TYPE)
         ws.Cells(i + 1, 10).Value = CLng(rec(IDX_END_ROW)) - CLng(rec(IDX_START_ROW)) + 1
-        ws.Cells(i + 1, 11).Value = CLng(rec(IDX_LAST_COL))
+        ws.Cells(i + 1, 11).Value = CLng(rec(IDX_LAST_COL)) - ReportAutomation_FirstCol(rec) + 1
         ws.Cells(i + 1, 12).Value = rec(IDX_WARNING)
     Next i
 
@@ -115,7 +117,7 @@ End Sub
 ' ============================================================
 Public Sub ReportAutomation_WriteMetaSheet(ByVal ws As Worksheet, ByVal wb As Workbook, ByVal dataWs As Worksheet, ByVal tables As Collection, _
                                             ByVal wsSettings As Worksheet, ByVal wsList As Worksheet, ByVal wsNarr As Worksheet, _
-                                            ByVal wsChart As Worksheet, ByVal wsInsert As Worksheet)
+                                            ByVal wsChart As Worksheet, ByVal wsInsert As Worksheet, ByVal wsInsertCells As Worksheet)
     ws.Range("A1:B1").Value = Array("key", "value")
     ReportAutomation_StyleHeader ws.Range("A1:B1")
 
@@ -130,6 +132,7 @@ Public Sub ReportAutomation_WriteMetaSheet(ByVal ws As Worksheet, ByVal wb As Wo
     ReportAutomation_WriteMetaKV ws, rowNo, "narrative_sheet", wsNarr.Name
     ReportAutomation_WriteMetaKV ws, rowNo, "chart_data_sheet", wsChart.Name
     ReportAutomation_WriteMetaKV ws, rowNo, "insert_table_sheet", wsInsert.Name
+    ReportAutomation_WriteMetaKV ws, rowNo, "insert_table_cells_sheet", wsInsertCells.Name
     ReportAutomation_WriteMetaKV ws, rowNo, "style_profile", "formal_korean_research"
     ReportAutomation_WriteMetaKV ws, rowNo, "number_format", "percent_1_decimal"
     ReportAutomation_WriteMetaKV ws, rowNo, "hwp_chart_paste_mode", "metafile_preferred"

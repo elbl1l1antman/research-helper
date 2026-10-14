@@ -1,0 +1,332 @@
+from __future__ import annotations
+
+import copy
+import sys
+import tempfile
+import unittest
+import zipfile
+from pathlib import Path
+from xml.etree import ElementTree as ET
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from report_automation_engine.hwp_style_config import DEFAULT_HWP_STYLE_CONFIG, REQUIRED_STYLE_NAMES
+from report_automation_engine.hwpx_style_registry import register_named_styles
+
+
+HH = "http://www.hancom.co.kr/hwpml/2011/head"
+HC = "http://www.hancom.co.kr/hwpml/2011/core"
+HP = "http://www.hancom.co.kr/hwpml/2011/paragraph"
+
+
+HEADER_XML = f"""<?xml version="1.0" encoding="UTF-8"?>
+<hh:head xmlns:hh="{HH}" xmlns:hc="{HC}" xmlns:hp="{HP}" version="1.5" secCnt="1">
+  <hh:beginNum page="1" footnote="1" endnote="1" pic="1" tbl="1" equation="1"/>
+  <hh:refList>
+    <hh:fontfaces itemCnt="2">
+      <hh:fontface lang="HANGUL" fontCnt="1"><hh:font id="0" face="함초롬돋움" type="TTF" isEmbedded="0"/></hh:fontface>
+      <hh:fontface lang="LATIN" fontCnt="1"><hh:font id="0" face="함초롬돋움" type="TTF" isEmbedded="0"/></hh:fontface>
+    </hh:fontfaces>
+    <hh:borderFills itemCnt="1"><hh:borderFill id="1"/></hh:borderFills>
+    <hh:charProperties itemCnt="1">
+      <hh:charPr id="0" height="1000" textColor="#000000" shadeColor="none" borderFillIDRef="1">
+        <hh:fontRef hangul="0" latin="0" hanja="0" japanese="0" other="0" symbol="0" user="0"/>
+      </hh:charPr>
+    </hh:charProperties>
+    <hh:tabProperties itemCnt="1"><hh:tabPr id="0" autoTabLeft="0" autoTabRight="0"/></hh:tabProperties>
+    <hh:numberings itemCnt="0"/>
+    <hh:paraProperties itemCnt="1">
+      <hh:paraPr id="0" tabPrIDRef="0" condense="0" textDir="LTR">
+        <hh:align horizontal="LEFT" vertical="BASELINE"/>
+        <hh:heading type="NONE" idRef="0" level="0"/>
+        <hh:margin><hc:intent value="0" unit="HWPUNIT"/><hc:left value="0" unit="HWPUNIT"/><hc:right value="0" unit="HWPUNIT"/><hc:prev value="0" unit="HWPUNIT"/><hc:next value="0" unit="HWPUNIT"/></hh:margin>
+        <hh:lineSpacing type="PERCENT" value="160" unit="HWPUNIT"/>
+      </hh:paraPr>
+    </hh:paraProperties>
+    <hh:styles itemCnt="1"><hh:style id="0" type="PARA" name="바탕글" engName="Normal" paraPrIDRef="0" charPrIDRef="0" nextStyleIDRef="0" langID="1042" lockForm="0"/></hh:styles>
+  </hh:refList>
+</hh:head>
+"""
+
+
+def local_name(tag: str) -> str:
+    return tag.rsplit("}", 1)[-1]
+
+
+def child(parent: ET.Element, name: str) -> ET.Element:
+    return next(node for node in list(parent) if local_name(node.tag) == name)
+
+
+def descendants(parent: ET.Element, name: str) -> list[ET.Element]:
+    return [node for node in parent.iter() if local_name(node.tag) == name]
+
+
+def write_fixture(path: Path, header: bytes | None = HEADER_XML.encode("utf-8")) -> list[str]:
+    members = ["mimetype", "META-INF/container.xml", "Contents/header.xml", "Contents/section0.xml", "tail.bin"]
+    with zipfile.ZipFile(path, "w") as archive:
+        archive.writestr("mimetype", "application/hwp+zip", compress_type=zipfile.ZIP_STORED)
+        archive.writestr("META-INF/container.xml", b"<container/>")
+        if header is not None:
+            archive.writestr("Contents/header.xml", header)
+        archive.writestr("Contents/section0.xml", b"<section/>")
+        archive.writestr("tail.bin", b"unchanged payload")
+    return [name for name in members if header is not None or name != "Contents/header.xml"]
+
+
+class HwpxStyleRegistryTests(unittest.TestCase):
+    def test_duplicate_style_references_follow_survivor_before_id_reuse(self) -> None:
+        root = ET.fromstring(HEADER_XML)
+        styles = child(child(root, "refList"), "styles")
+        styles[0].attrib["nextStyleIDRef"] = "10"
+        for style_id in ("9", "10"):
+            style = copy.deepcopy(styles[0])
+            style.attrib.update({"id": style_id, "name": "보고서 본문1"})
+            styles.append(style)
+        section = f'<hp:sec xmlns:hp="{HP}"><hp:p styleIDRef="10"/><hp:p styleIDRef="0"/></hp:sec>'.encode()
+        with tempfile.TemporaryDirectory() as temp_dir:
+            template = Path(temp_dir) / "template.hwpx"
+            output = Path(temp_dir) / "working.hwpx"
+            write_fixture(template, ET.tostring(root, encoding="utf-8"))
+            with zipfile.ZipFile(template, "a") as archive:
+                archive.writestr("Contents/section1.xml", section)
+                archive.writestr("Contents/section2.xml", section)
+                archive.writestr("Contents/untouched.xml", b'<keep attr="original" /> <!-- retain bytes -->')
+            source_bytes = template.read_bytes()
+
+            register_named_styles(template, output, DEFAULT_HWP_STYLE_CONFIG)
+
+            self.assertEqual(template.read_bytes(), source_bytes)
+            with zipfile.ZipFile(template) as source, zipfile.ZipFile(output) as archive:
+                self.assertEqual(archive.namelist(), source.namelist())
+                for info in source.infolist():
+                    self.assertEqual(archive.getinfo(info.filename).compress_type, info.compress_type)
+                    self.assertEqual(archive.getinfo(info.filename).date_time, info.date_time)
+                    if info.filename not in {"Contents/header.xml", "Contents/section1.xml", "Contents/section2.xml"}:
+                        self.assertEqual(archive.read(info.filename), source.read(info.filename))
+                for member in ("Contents/section1.xml", "Contents/section2.xml"):
+                    paragraphs = list(ET.fromstring(archive.read(member)))
+                    self.assertEqual([node.attrib["styleIDRef"] for node in paragraphs], ["9", "0"])
+                updated_styles = child(child(ET.fromstring(archive.read("Contents/header.xml")), "refList"), "styles")
+                normal = next(node for node in updated_styles if node.attrib["id"] == "0")
+                self.assertEqual(normal.attrib["nextStyleIDRef"], "9")
+                reused = next(node for node in updated_styles if node.attrib["id"] == "10")
+                self.assertEqual(reused.attrib["name"], "보고서 본문2")
+
+    def test_cloned_body2_does_not_change_shared_template_bullet(self) -> None:
+        root = ET.fromstring(HEADER_XML)
+        ref_list = child(root, "refList")
+        para_properties = child(ref_list, "paraProperties")
+        child(para_properties[0], "heading").attrib.update({"type": "BULLET", "idRef": "1"})
+        unrelated = copy.deepcopy(para_properties[0])
+        unrelated.attrib["id"] = "7"
+        para_properties.append(unrelated)
+        bullets = ET.Element(f"{{{HH}}}bullets", {"itemCnt": "1"})
+        bullet = ET.SubElement(bullets, f"{{{HH}}}bullet", {"id": "1", "char": "*", "useImage": "0"})
+        ET.SubElement(bullet, f"{{{HH}}}paraHead", {"numFormat": "CHAR", "textOffset": "75"})
+        original_bullet = ET.tostring(bullet)
+        ref_list.insert(list(ref_list).index(para_properties), bullets)
+        with tempfile.TemporaryDirectory() as temp_dir:
+            template = Path(temp_dir) / "template.hwpx"
+            output = Path(temp_dir) / "working.hwpx"
+            write_fixture(template, ET.tostring(root, encoding="utf-8"))
+            source_bytes = template.read_bytes()
+
+            register_named_styles(template, output, DEFAULT_HWP_STYLE_CONFIG)
+
+            self.assertEqual(template.read_bytes(), source_bytes)
+            with zipfile.ZipFile(output) as archive:
+                updated = child(ET.fromstring(archive.read("Contents/header.xml")), "refList")
+            updated_bullets = {node.attrib["id"]: node for node in child(updated, "bullets")}
+            self.assertEqual(ET.tostring(updated_bullets["1"]), original_bullet)
+            paras = {node.attrib["id"]: node for node in child(updated, "paraProperties")}
+            self.assertEqual(child(paras["7"], "heading").attrib["idRef"], "1")
+            body2 = next(node for node in child(updated, "styles") if node.attrib["name"] == "보고서 본문2")
+            bullet_id = child(paras[body2.attrib["paraPrIDRef"]], "heading").attrib["idRef"]
+            self.assertNotEqual(bullet_id, "1")
+            self.assertEqual(updated_bullets[bullet_id].attrib["char"], "-")
+            self.assertEqual(child(updated_bullets[bullet_id], "paraHead").attrib["textOffset"], "75")
+
+    def test_registers_five_styles_and_preserves_template(self) -> None:
+        config = copy.deepcopy(DEFAULT_HWP_STYLE_CONFIG)
+        with tempfile.TemporaryDirectory() as temp_dir:
+            template = Path(temp_dir) / "template.hwpx"
+            output = Path(temp_dir) / "working.hwpx"
+            member_order = write_fixture(template)
+            source_bytes = template.read_bytes()
+
+            mapping = register_named_styles(template, output, config)
+
+            self.assertEqual(template.read_bytes(), source_bytes)
+            self.assertEqual(list(mapping), list(REQUIRED_STYLE_NAMES))
+            self.assertEqual(len(set(mapping.values())), 5)
+            with zipfile.ZipFile(output) as archive:
+                self.assertEqual(archive.namelist(), member_order)
+                self.assertEqual(archive.read("tail.bin"), b"unchanged payload")
+                root = ET.fromstring(archive.read("Contents/header.xml"))
+
+            ref_list = child(root, "refList")
+            collections = {
+                name: child(ref_list, name)
+                for name in ("fontfaces", "charProperties", "paraProperties", "bullets", "styles")
+            }
+            for name, collection in collections.items():
+                self.assertEqual(int(collection.attrib["itemCnt"]), len(list(collection)), name)
+            for fontface in list(collections["fontfaces"]):
+                self.assertEqual(int(fontface.attrib["fontCnt"]), len(list(fontface)))
+                self.assertIn("맑은 고딕", {node.attrib["face"] for node in list(fontface)})
+
+            styles = list(collections["styles"])
+            by_name = {node.attrib["name"]: node for node in styles}
+            self.assertEqual([styles[index].attrib["name"] for index in mapping.values()], list(REQUIRED_STYLE_NAMES))
+            self.assertEqual(len([node for node in styles if node.attrib.get("name") in REQUIRED_STYLE_NAMES]), 5)
+
+            char_prs = {node.attrib["id"]: node for node in collections["charProperties"]}
+            para_prs = {node.attrib["id"]: node for node in collections["paraProperties"]}
+            for style_name, expected in config["paragraph_styles"].items():
+                style = by_name[style_name]
+                char_pr = char_prs[style.attrib["charPrIDRef"]]
+                para_pr = para_prs[style.attrib["paraPrIDRef"]]
+                self.assertEqual(int(char_pr.attrib["height"]), round(expected["font_size_pt"] * 100))
+                self.assertEqual(any(local_name(node.tag) == "bold" for node in list(char_pr)), expected["bold"])
+                self.assertNotEqual(child(char_pr, "fontRef").attrib["hangul"], "0")
+                self.assertTrue(all(node.attrib["value"] == str(expected["line_spacing_percent"]) for node in descendants(para_pr, "lineSpacing")))
+                self.assertEqual(child(para_pr, "align").attrib["horizontal"], expected["alignment"].upper())
+                margin = child(para_pr, "margin")
+                self.assertEqual(int(child(margin, "left").attrib["value"]), round(expected["left_indent_mm"] * 7200 / 25.4))
+                self.assertEqual(int(child(margin, "intent").attrib["value"]), round(expected["first_line_indent_mm"] * 7200 / 25.4))
+
+            body2_para = para_prs[by_name["보고서 본문2"].attrib["paraPrIDRef"]]
+            heading = child(body2_para, "heading")
+            self.assertEqual(heading.attrib["type"], "BULLET")
+            bullets = list(collections["bullets"])
+            self.assertEqual(len(bullets), 1)
+            self.assertEqual(bullets[0].attrib["id"], "1")
+            self.assertEqual(bullets[0].attrib["id"], heading.attrib["idRef"])
+            self.assertEqual(bullets[0].attrib["char"], "-")
+            self.assertEqual(child(bullets[0], "paraHead").attrib["numFormat"], "DIGIT")
+
+    def test_updates_existing_named_style_without_duplication(self) -> None:
+        config = copy.deepcopy(DEFAULT_HWP_STYLE_CONFIG)
+        config["paragraph_styles"]["보고서 본문1"].update({"font_size_pt": 12.0, "bold": True})
+        root = ET.fromstring(HEADER_XML)
+        ref_list = child(root, "refList")
+        styles = child(ref_list, "styles")
+        existing = copy.deepcopy(list(styles)[0])
+        existing.attrib.update({"id": "9", "name": "보고서 본문1"})
+        styles.insert(0, existing)
+        duplicate = copy.deepcopy(existing)
+        duplicate.attrib["id"] = "10"
+        styles.append(duplicate)
+        styles.attrib["itemCnt"] = str(len(list(styles)))
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            template = Path(temp_dir) / "template.hwpx"
+            first = Path(temp_dir) / "first.hwpx"
+            second = Path(temp_dir) / "second.hwpx"
+            write_fixture(template, ET.tostring(root, encoding="utf-8", xml_declaration=True))
+
+            first_mapping = register_named_styles(template, first, config)
+            second_mapping = register_named_styles(first, second, config)
+
+            self.assertEqual(first_mapping, second_mapping)
+            self.assertEqual(first_mapping["보고서 본문1"], 0)
+            with zipfile.ZipFile(second) as archive:
+                second_root = ET.fromstring(archive.read("Contents/header.xml"))
+            second_ref_list = child(second_root, "refList")
+            second_styles = child(second_ref_list, "styles")
+            names = [node.attrib.get("name") for node in list(second_styles)]
+            self.assertEqual(names.count("보고서 본문1"), 1)
+            self.assertEqual(sum(name in REQUIRED_STYLE_NAMES for name in names), 5)
+            body_style = next(node for node in list(second_styles) if node.attrib.get("name") == "보고서 본문1")
+            char_prs = {node.attrib["id"]: node for node in child(second_ref_list, "charProperties")}
+            body_char_pr = char_prs[body_style.attrib["charPrIDRef"]]
+            self.assertEqual(body_char_pr.attrib["height"], "1200")
+            self.assertTrue(any(local_name(node.tag) == "bold" for node in list(body_char_pr)))
+
+    def test_assigns_font_ids_in_required_style_order(self) -> None:
+        config = copy.deepcopy(DEFAULT_HWP_STYLE_CONFIG)
+        expected_families = []
+        for index, name in enumerate(REQUIRED_STYLE_NAMES, start=1):
+            family = f"테스트 글꼴 {index}"
+            config["paragraph_styles"][name]["font_family"] = family
+            expected_families.append(family)
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            template = Path(temp_dir) / "template.hwpx"
+            output = Path(temp_dir) / "working.hwpx"
+            write_fixture(template)
+            mapping = register_named_styles(template, output, config)
+
+            with zipfile.ZipFile(output) as archive:
+                root = ET.fromstring(archive.read("Contents/header.xml"))
+            ref_list = child(root, "refList")
+            fontfaces = child(ref_list, "fontfaces")
+            for fontface in list(fontfaces):
+                self.assertEqual(
+                    [(font.attrib["id"], font.attrib["face"]) for font in list(fontface)],
+                    [("0", "함초롬돋움"), *[(str(index), family) for index, family in enumerate(expected_families, start=1)]],
+                )
+
+            styles = list(child(ref_list, "styles"))
+            char_prs = {node.attrib["id"]: node for node in child(ref_list, "charProperties")}
+            for expected_id, name in enumerate(REQUIRED_STYLE_NAMES, start=1):
+                style = styles[mapping[name]]
+                font_ref = child(char_prs[style.attrib["charPrIDRef"]], "fontRef")
+                self.assertEqual(font_ref.attrib["hangul"], str(expected_id))
+                self.assertEqual(font_ref.attrib["latin"], str(expected_id))
+
+    def test_normalizes_reused_bullet_num_format(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp = Path(temp_dir)
+            template = temp / "template.hwpx"
+            seeded = temp / "seeded.hwpx"
+            legacy = temp / "legacy-char.hwpx"
+            output = temp / "working.hwpx"
+            write_fixture(template)
+            register_named_styles(template, seeded, DEFAULT_HWP_STYLE_CONFIG)
+
+            with zipfile.ZipFile(seeded) as archive:
+                root = ET.fromstring(archive.read("Contents/header.xml"))
+            para_head = next(node for node in root.iter() if local_name(node.tag) == "paraHead")
+            para_head.attrib["numFormat"] = "CHAR"
+            write_fixture(legacy, ET.tostring(root, encoding="utf-8", xml_declaration=True))
+
+            register_named_styles(legacy, output, DEFAULT_HWP_STYLE_CONFIG)
+
+            with zipfile.ZipFile(output) as archive:
+                output_root = ET.fromstring(archive.read("Contents/header.xml"))
+            para_heads = [node for node in output_root.iter() if local_name(node.tag) == "paraHead"]
+            self.assertEqual(len(para_heads), 1)
+            self.assertEqual(para_heads[0].attrib["numFormat"], "DIGIT")
+
+    def test_rejects_missing_or_invalid_header(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp = Path(temp_dir)
+            missing = temp / "missing.hwpx"
+            invalid = temp / "invalid.hwpx"
+            output = temp / "output.hwpx"
+            write_fixture(missing, None)
+            write_fixture(invalid, b"not xml")
+
+            with self.assertRaisesRegex(ValueError, r"Contents/header\.xml.*없"):
+                register_named_styles(missing, output, DEFAULT_HWP_STYLE_CONFIG)
+            with self.assertRaisesRegex(ValueError, r"Contents/header\.xml.*XML"):
+                register_named_styles(invalid, output, DEFAULT_HWP_STYLE_CONFIG)
+
+    def test_rejects_lookalike_head_namespaces(self) -> None:
+        headers = (
+            b'<?xml version="1.0" encoding="UTF-8"?><head/>',
+            b'<?xml version="1.0" encoding="UTF-8"?><x:head xmlns:x="urn:not-hwpx"/>',
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp = Path(temp_dir)
+            for index, header in enumerate(headers):
+                with self.subTest(index=index):
+                    template = temp / f"lookalike-{index}.hwpx"
+                    write_fixture(template, header)
+                    with self.assertRaisesRegex(ValueError, "네임스페이스"):
+                        register_named_styles(template, temp / f"output-{index}.hwpx", DEFAULT_HWP_STYLE_CONFIG)
+
+
+if __name__ == "__main__":
+    unittest.main()

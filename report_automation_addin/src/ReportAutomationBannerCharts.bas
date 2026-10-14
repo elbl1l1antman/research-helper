@@ -6,64 +6,51 @@
 Option Explicit
 
 ' ============================================================
-Private Function ReportAutomation_FindBannerGroups(ByVal ws As Worksheet, ByVal startRow As Long, ByVal totalRow As Long, ByVal lastCol As Long) As Collection
-    Dim groups As New Collection
-    Dim headerStart As Long, headerEnd As Long
-    Dim c As Long, r As Long
-    Dim cellText As String
-    Dim colGroupName() As String
-    Dim curName As String
-    Dim colList As Collection
-    Dim lastSeenGroupName As String
-
-    If totalRow = 0 Then
-        Set ReportAutomation_FindBannerGroups = groups
-        Exit Function
-    End If
-
-    ' 헤더 행 범위: 제목 다음 행 ~ 전체 행 위 행
-    headerStart = startRow + 1
-    headerEnd = totalRow - 1
-    If headerStart > headerEnd Then
-        Set ReportAutomation_FindBannerGroups = groups
-        Exit Function
-    End If
-
-    ' 열별로 가장 위에 있는 배너 그룹명을 수집한다.
-    ReDim colGroupName(1 To lastCol)
-    For c = 1 To lastCol
-        For r = headerStart To headerEnd
-            cellText = ReportAutomation_CellText(ws, r, c)
-            If Len(cellText) > 0 And cellText <> "%" And UCase$(cellText) <> "N" And cellText <> "사례수" Then
-                colGroupName(c) = cellText
-                lastSeenGroupName = cellText
-                Exit For
+' 부모 배너만 인정한다. 응답 항목의 N/% 한 쌍은 별도 배너가 아니다.
+Public Function ReportAutomation_FindBannerGroups(ByVal ws As Worksheet, ByVal firstHeader As Long, ByVal lastHeader As Long, ByVal lastCol As Long, Optional ByVal firstCol As Long = 1) As Collection
+    Dim groups As New Collection, names() As String, r As Long, c As Long, edge As Long
+    Dim text As String, pctCount As Long, k As Long, lowerLevel As Boolean
+    ReDim names(firstCol To lastCol)
+    For r = firstHeader To lastHeader - 1
+        c = firstCol
+        Do While c <= lastCol
+            text = ReportAutomation_CellText(ws, r, c)
+            edge = c
+            Do While edge < lastCol
+                If ReportAutomation_CellText(ws, r, edge + 1) <> text Then Exit Do
+                edge = edge + 1
+            Loop
+            If Len(text) > 0 And Not IsNumeric(text) Then
+                If Not ReportAutomation_IsCountHeader(text) And Not ReportAutomation_IsMeasureHeader(text) _
+                    And Not ReportAutomation_IsTotalLabel(text) And Not ReportAutomation_IsMetadata(text) _
+                    And Not ReportAutomation_IsTableTitle(text) And Not ReportAutomation_IsStubHeader(text) Then
+                    pctCount = 0: lowerLevel = False
+                    For k = c To edge
+                        If ReportAutomation_IsPercentMeasureColumn(ws, r, lastHeader + 1, k) Then pctCount = pctCount + 1
+                        If Len(ReportAutomation_CellText(ws, r + 1, k)) > 0 Then lowerLevel = True
+                    Next k
+                    ' 기존 표식은 그대로 보존하고 무표식 부모는 여러 측정 쌍을 요구한다.
+                    If lowerLevel And (pctCount >= 2 Or (Left$(text, 1) = "◐" And pctCount >= 1)) Then
+                        For k = c To edge
+                            If Len(names(k)) = 0 Then names(k) = text
+                        Next k
+                    End If
+                End If
             End If
-        Next r
-        If Len(colGroupName(c)) = 0 And ReportAutomation_IsPercentMeasureColumn(ws, startRow, totalRow, c) Then
-            colGroupName(c) = lastSeenGroupName
+            c = edge + 1
+        Loop
+    Next r
+    Dim curName As String, cols As Collection
+    Set cols = New Collection
+    For c = firstCol To lastCol
+        If names(c) <> curName Then
+            If Len(curName) > 0 And cols.Count > 0 Then groups.Add Array(curName, ReportAutomation_CollectionToArray(cols))
+            curName = names(c)
+            Set cols = New Collection
         End If
+        If Len(curName) > 0 And ReportAutomation_IsPercentMeasureColumn(ws, firstHeader - 1, lastHeader + 1, c) Then cols.Add c
     Next c
-
-    ' 연속된 같은 그룹명 구간을 하나의 배너 그룹으로 묶는다.
-    curName = ""
-    Set colList = New Collection
-    For c = 1 To lastCol
-        If colGroupName(c) <> curName Then
-            If Len(curName) > 0 And colList.Count > 0 Then
-                groups.Add Array(curName, ReportAutomation_CollectionToArray(colList))
-            End If
-            curName = colGroupName(c)
-            Set colList = New Collection
-        End If
-        If ReportAutomation_IsPercentMeasureColumn(ws, startRow, totalRow, c) Then
-            colList.Add c
-        End If
-    Next c
-    If Len(curName) > 0 And colList.Count > 0 Then
-        groups.Add Array(curName, ReportAutomation_CollectionToArray(colList))
-    End If
-
+    If Len(curName) > 0 And cols.Count > 0 Then groups.Add Array(curName, ReportAutomation_CollectionToArray(cols))
     Set ReportAutomation_FindBannerGroups = groups
 End Function
 
@@ -76,7 +63,7 @@ End Function
 Public Sub ReportAutomation_AppendBannerChartRows(ByVal wsChart As Worksheet, ByRef chartRow As Long, _
                                                     ByVal ws As Worksheet, ByVal tableRec As Variant, _
                                                     ByVal bannerSetting As String)
-    Dim startRow As Long, endRow As Long, totalRow As Long
+    Dim startRow As Long, endRow As Long, totalRow As Long, firstCol As Long, bodyRow As Long
     Dim bannerGroups As Collection
     Dim bg As Variant
     Dim bgName As String
@@ -86,13 +73,18 @@ Public Sub ReportAutomation_AppendBannerChartRows(ByVal wsChart As Worksheet, By
     Dim subLabel As String
     Dim sortOrder As Long
     Dim category As String
+    Dim percentValue As Variant
+    Dim declaredStub As Long
 
-    startRow = CLng(tableRec(IDX_START_ROW))
+    startRow = ReportAutomation_HeaderRowIndex(tableRec) - 1
     endRow   = CLng(tableRec(IDX_END_ROW))
-    totalRow = ReportAutomation_FindTotalRow(ws, startRow, endRow)
+    firstCol = ReportAutomation_FirstCol(tableRec)
+    bodyRow = ReportAutomation_BodyRowIndex(tableRec)
+    declaredStub = ReportAutomation_StubColumn(ws, startRow + 1, bodyRow - 1, firstCol, CLng(tableRec(IDX_LAST_COL)))
+    totalRow = ReportAutomation_FindTotalRow(ws, bodyRow, endRow, firstCol, CLng(tableRec(IDX_LAST_COL)))
     If totalRow = 0 Then Exit Sub
 
-    Set bannerGroups = ReportAutomation_FindBannerGroups(ws, startRow, totalRow, CLng(tableRec(IDX_LAST_COL)))
+    Set bannerGroups = ReportAutomation_FindBannerGroups(ws, startRow + 1, bodyRow - 1, CLng(tableRec(IDX_LAST_COL)), firstCol)
 
     For Each bg In bannerGroups
         bgName = CStr(bg(0))
@@ -111,22 +103,22 @@ Public Sub ReportAutomation_AppendBannerChartRows(ByVal wsChart As Worksheet, By
             pctCol = CLng(pctCols(colIdx))
 
             ' 이 % 열의 하위 범주 레이블을 헤더에서 읽는다.
-            subLabel = ReportAutomation_HeaderLabel(ws, startRow + 1, totalRow - 1, pctCol)
+            subLabel = ReportAutomation_HeaderLabel(ws, startRow + 1, bodyRow - 1, pctCol, firstCol)
             If Len(subLabel) = 0 Then subLabel = bgName
 
             ' 항목 행을 먼저 수집한 뒤 값 기준 내림차순으로 정렬한다.
             Dim rowCandidates As Collection
             Set rowCandidates = New Collection
-            For r = startRow + 3 To endRow
+            For r = bodyRow To endRow
                 If r = totalRow Then GoTo NextRow
 
-                category = Trim$(CStr(ws.Cells(r, 2).Value))
-                If Len(category) = 0 Then category = Trim$(CStr(ws.Cells(r, 1).Value))
+                category = ReportAutomation_RowLabel(ws, r, firstCol, CLng(tableRec(IDX_LAST_COL)), declaredStub)
                 If Len(category) = 0 Then GoTo NextRow
                 If Left$(category, 1) = "■" Or Left$(category, 1) = "▣" Then GoTo NextRow
 
-                If IsNumeric(ws.Cells(r, pctCol).Value) Then
-                    rowCandidates.Add Array(category, CDbl(ws.Cells(r, pctCol).Value))
+                percentValue = ReportAutomation_PercentValue(ws.Cells(r, pctCol))
+                If Not IsEmpty(percentValue) Then
+                    rowCandidates.Add Array(category, CDbl(percentValue))
                 End If
 NextRow:
             Next r

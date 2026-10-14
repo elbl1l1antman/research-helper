@@ -8,6 +8,13 @@
 
 - `bin/ReportAutomationLauncher.exe`
 
+배포 파일은 이 EXE 하나이며 Python 런타임, 엔진, 기본 설정/템플릿과 Excel 추가기능을
+내장합니다. EXE를 다른 폴더에 옮겨도 실행할 수 있으며 Python을 설치할 필요가 없습니다.
+Windows x64, Excel, HWPX 생성에 사용하는 아래한글은 별도 설치가 필요합니다.
+첫 실행 시 `%LOCALAPPDATA%\ResearchHelper\bundles`에 실행 구성요소를 준비합니다.
+사용자 서식 저장 위치는 기존과 동일하고 API 키나 원자료는 내장하지 않습니다.
+[독립 실행 안내](../docs/standalone_launcher.md)
+
 GUI에서 집계표 Excel 파일과 자동화 추가기능(`.xlam`)을 선택하면 표 목록과 배너 목록을 먼저 확인할 수 있습니다. 이후 실행하면 선택한 통합문서에 보고서 산출 시트를 생성하고, 선택 시 Python 보조 엔진으로 문장 초안 TXT도 함께 생성합니다. 생성된 초안은 결과 탭에서 미리보기, 문장별 수정, QA 경고 확인, 열기, 복사, 검토본 저장을 할 수 있습니다.
 
 현재 알파에서 실제 실행되는 출력은 `Excel 산출 시트`, `문장 초안 TXT`, `report_package.json`, `preflight_report.json`, HWPX 초본입니다. HWPX 초본은 Windows에서 아래한글 COM 객체를 사용할 수 있을 때 생성하며, PowerPoint 보고서 출력은 아직 선택/검증 중심입니다.
@@ -26,11 +33,13 @@ GUI에서 집계표 Excel 파일과 자동화 추가기능(`.xlam`)을 선택하
 - 실행 후 `report_package.json`과 `preflight_report.json`을 생성해 HWPX/PPTX 문서 생성 전 준비 상태를 `ready`, `ready_with_warnings`, `blocked`로 표시합니다.
 - 실행 완료 후 결과 탭에서 산출 엑셀 열기, 초안 TXT 열기, HWPX 초본 열기, HWPX writer report 열기, 초안 미리보기 복사, 문장별 수정, 검토본 저장을 할 수 있습니다.
 - HWPX 보고서 출력은 실행 전 아래한글 COM 환경을 먼저 점검하고, 실패 시 writer report에 실패 단계와 오류를 남깁니다.
+- HWPX 옵션의 `서식`에서 기본 서식 또는 최대 3개의 사용자 서식을 선택할 수 있습니다. `서식 설정`에서는 `보고서 본문1`, `보고서 본문2`, `표보기`, `표배너`, `표숫자`의 글꼴·크기·정렬·줄간격·들여쓰기와 표 배경·테두리를 편집합니다.
+- 사용자 서식은 `%LOCALAPPDATA%\ResearchHelper\hwp_style_presets.json`에 저장되며 기본 서식은 수정하거나 삭제할 수 없습니다. 실행 시 선택한 서식은 산출 폴더의 `hwp_style_config.json`으로 기록되어 HWPX writer에 전달됩니다.
+- `편집용지`에서 용지 크기·세로/가로와 위/아래/좌/우/제본/머리말/꼬리말 여백을 mm로 지정할 수 있습니다. 기본은 템플릿 유지이며 직접 지정 시 BODY 구역에 먼저 적용하고 표 너비를 계산합니다. 설정은 `hwp_page_setup.json`으로 기록됩니다. [자세한 안내](../docs/hwp_page_setup.md)
 - QA 경고 탭에서는 출처 없음, 제목 없음, 문장 짧음, 수치 없음, 종결 표현 확인 항목을 필터링해 검토할 수 있습니다.
 - 실행 설정은 산출 파일 옆에 `*_launcher_config.txt`로 기록됩니다.
-- `REPORT_AUTOMATION_ADDIN` 환경변수를 지정하면 기본 추가기능 경로로 사용합니다.
-- `REPORT_AUTOMATION_PYTHON` 환경변수를 지정하면 문장 초안 생성에 사용할 Python 경로로 사용합니다.
-- `REPORT_AUTOMATION_ENGINE` 환경변수를 지정하면 `excel_report_generator.py` 경로로 사용합니다.
+- 배포 빌드는 내장 Python/엔진/추가기능 경로를 우선 사용합니다.
+- `-DevelopmentOnly` 개발 빌드에서만 `REPORT_AUTOMATION_ADDIN`, `REPORT_AUTOMATION_PYTHON`, `REPORT_AUTOMATION_ENGINE` 환경변수로 외부 개발 경로를 지정할 수 있습니다.
 
 ## 템플릿 도구
 
@@ -57,7 +66,10 @@ GUI에서 집계표 Excel 파일과 자동화 추가기능(`.xlam`)을 선택하
 powershell -NoProfile -ExecutionPolicy Bypass -File .\report_automation_launcher\scripts\build_report_automation_launcher.ps1
 ```
 
-빌드에는 Windows .NET Framework의 `csc.exe`를 사용합니다.
+기본 빌드는 독립 실행형이며 의존성이 설치된 저장소 `.venv`와 Windows .NET Framework의
+`csc.exe`를 사용합니다. 검증·컴파일 실패 시 기존 EXE는 유지합니다.
+빠른 개발용 빌드가 필요할 때만 `-DevelopmentOnly`를 지정하며 배포 전 기본 빌드로 다시 생성합니다.
+산출 이름은 항상 `ReportAutomationLauncher.exe`이고 코드 버전은 Git으로 관리합니다.
 
 ## CLI 검증
 
@@ -89,6 +101,15 @@ GUI 없이 자동화 호출만 확인할 때 사용할 수 있습니다.
 - `--hwp-template <path>`: HWPX 보고서 템플릿
 - `--hwp-visible`: 아래한글 창 표시 상태로 HWPX 생성
 - `--hwp-keep-open-on-error`: HWPX 생성 실패 시 열린 문서 유지
+- `--hwp-style-config <path>`: 검증할 HWP 서식 JSON 지정. 실행 시 산출 폴더의 `hwp_style_config.json`으로 정규화해 사용
+- `--hwp-style-preset <name>`: 실행 기록에 남길 서식 이름(설정 JSON의 이름이 우선)
+
+런처 preset 저장소만 점검하려면 다음 명령을 사용합니다.
+
+```powershell
+report_automation_launcher\bin\ReportAutomationLauncher.exe --self-check-hwp-style-presets
+report_automation_launcher\bin\ReportAutomationLauncher.exe --self-check-hwp-style-cli
+```
 
 배너 목록 탐지만 확인할 때는 다음 옵션을 사용할 수 있습니다.
 
