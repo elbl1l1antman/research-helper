@@ -1980,13 +1980,13 @@ namespace ReportAutomationLauncher
             for (int index = 0; index < reportProfileCombo.Items.Count; index++)
             {
                 reportProfileCombo.SelectedIndex = index;
-                if (narrativeExampleText.Lines.Length < 2 || !examples.Add(narrativeExampleText.Text))
-                    throw new InvalidOperationException("보고서 유형별 분석문 예시가 올바르지 않습니다.");
+                for (int style = 0; style < styleProfileCombo.Items.Count; style++)
+                {
+                    styleProfileCombo.SelectedIndex = style;
+                    if (narrativeExampleText.Lines.Length < 2 || !examples.Add(narrativeExampleText.Text))
+                        throw new InvalidOperationException("보고서 유형·문체별 분석문 예시가 올바르지 않습니다.");
+                }
             }
-            string automaticExample = narrativeExampleText.Text;
-            styleProfileCombo.SelectedIndex = 1;
-            if (narrativeExampleText.Text != automaticExample)
-                throw new InvalidOperationException("설정에만 저장되는 문체가 실제 산출 예시를 바꿉니다.");
 
             for (int index = 0; index < workflowTabs.TabCount; index++)
             {
@@ -3084,7 +3084,7 @@ namespace ReportAutomationLauncher
             grid.Controls.Add(reportProfileCombo, 1, 0);
             grid.SetColumnSpan(reportProfileCombo, 2);
 
-            AddLabel(grid, 1, "문체");
+            AddLabel(grid, 1, "문체 (참고)");
             styleProfileCombo.DropDownStyle = ComboBoxStyle.DropDownList;
             styleProfileCombo.Items.Add("공식 보고서체");
             styleProfileCombo.Items.Add("간결 요약체");
@@ -3102,7 +3102,7 @@ namespace ReportAutomationLauncher
             AddLabel(grid, 3, "분석문 작성 예시");
             var caption = new Label
             {
-                Text = "가상 수치 · 현재 자동 산출 형식(기본 문체)",
+                Text = "가상 조사: 디지털 상담 지원 서비스(500개 기업) · 유형과 문체는 자동 산출에 미반영",
                 AutoSize = true, ForeColor = LauncherUi.ColorMutedText,
                 Margin = new Padding(3, 8, 0, 5)
             };
@@ -3117,22 +3117,49 @@ namespace ReportAutomationLauncher
             grid.RowStyles[4].Height = 120;
             grid.Controls.Add(narrativeExampleText, 1, 4);
             grid.SetColumnSpan(narrativeExampleText, 2);
-            var examples = new[]
+            var focus = new[]
             {
-                "서비스 이용 만족도에 대해 조사한 결과, ‘만족’ 응답은 68.4%, 100점 평균은 72.6점으로 나타남" +
-                    Environment.NewLine + "반면, ‘불만족’은 12.8%로 나타남",
-                "디지털 기술 도입 분야는 복수응답 기준으로 ‘업무 자동화’가 48.6%로 가장 높게 나타남" +
-                    Environment.NewLine + "다음으로 ‘데이터 분석’(32.1%), ‘온라인 판매’(24.7%) 순으로 나타남",
-                "우선 지원이 필요한 분야는 복수응답 기준으로 ‘인력 양성’이 54.2%로 가장 높게 나타남" +
-                    Environment.NewLine + "다음으로 ‘사업비 지원’(39.5%), ‘컨설팅’(27.1%) 순으로 나타남",
-                "주 이용 채널은 ‘모바일 앱’이 52.3%로 가장 높게 나타남" +
-                    Environment.NewLine + "다음으로 ‘웹사이트’(31.4%), ‘오프라인 창구’(16.3%) 순으로 나타남"
+                "이용자 평가: 만족·불만족 비율과 환산 점수",
+                "산업 현황: 전체 이용률과 기업 규모별 차이",
+                "정책 수요: 현재 미이용 기업의 향후 이용 의향",
+                "빈도·교차표: 사례수와 비율, 집단별 분모"
             };
-            reportProfileCombo.SelectedIndexChanged += delegate
+            var examples = new[,]
             {
-                int index = reportProfileCombo.SelectedIndex;
-                narrativeExampleText.Text = index >= 0 && index < examples.Length ? examples[index] : "";
+                {
+                    "이용 기업 310개를 대상으로 조사한 결과, 만족 응답은 68.4%로 불만족 응답(12.9%)보다 높게 나타남. 100점 환산 평균은 72.6점임.",
+                    "이용 기업 만족 68.4%, 불만족 12.9%. 100점 환산 평균 72.6점.",
+                    "이용 기업 310개 중 68.4%가 만족, 12.9%가 불만족으로 응답함. 평균은 72.6점(100점 환산)이며, 미이용 기업은 이 평가에 포함되지 않음.",
+                    "확인: 만족 68.4%, 불만족 12.9%, 100점 평균 72.6점. 본문에 ‘이용 기업 기준(n=310)’을 표시할 것."
+                },
+                {
+                    "전체 응답 기업의 서비스 이용률은 62.0%로 나타남. 중대형 기업은 72.0%로 소규모 기업(52.0%)보다 20.0%p 높았음.",
+                    "이용률 전체 62.0%. 중대형(72.0%)이 소규모(52.0%)보다 20.0%p 높음.",
+                    "전체 이용률은 62.0%이며, 규모별로는 중대형 72.0%, 소규모 52.0%로 20.0%p 차이가 남. 이 표만으로는 기업 규모가 이용률 차이의 원인인지 판단할 수 없음.",
+                    "확인: 전체 62.0%, 중대형 72.0%, 소규모 52.0%. 격차는 20.0%p로 표기하고 원인으로 단정하지 말 것."
+                },
+                {
+                    "현재 미이용 기업 190개 중 54.2%가 향후 이용 의향이 있다고 응답함. 기존 이용 실적과 별도로 신규 지원 수요를 검토할 때 참고할 수 있음.",
+                    "미이용 기업의 54.2%가 향후 이용 의향을 밝힘.",
+                    "미이용 기업 190개 중 103개(54.2%)가 향후 이용 의향을 보임. 이는 미이용 집단의 잠재 수요이며, 전체 기업의 이용률(62.0%)이나 향후 실제 이용률과는 구분해야 함.",
+                    "검토: 이용 의향 54.2%의 분모는 미이용 기업 190개. 지원 규모를 산정하기 전에 미이용 사유도 확인할 것."
+                },
+                {
+                    "응답 기업 500개 중 이용 310개(62.0%), 미이용 190개(38.0%)로 집계됨. 규모별 이용률은 소규모 52.0%, 중대형 72.0%임.",
+                    "이용 310개(62.0%), 미이용 190개(38.0%). 규모별 이용률은 소규모 52.0%, 중대형 72.0%.",
+                    "전체 500개 중 310개(62.0%)가 이용함. 규모별 분모는 각각 250개로, 이용 기업은 소규모 130개(52.0%), 중대형 180개(72.0%)임.",
+                    "대조: 이용 310개 + 미이용 190개 = 500개. 교차표의 소규모 52.0%, 중대형 72.0%는 각 집단 250개 기준."
+                }
             };
+            EventHandler updateExample = delegate
+            {
+                int type = reportProfileCombo.SelectedIndex;
+                int style = styleProfileCombo.SelectedIndex;
+                narrativeExampleText.Text = type < 0 || style < 0 ? "" :
+                    focus[type] + Environment.NewLine + Environment.NewLine + examples[type, style];
+            };
+            reportProfileCombo.SelectedIndexChanged += updateExample;
+            styleProfileCombo.SelectedIndexChanged += updateExample;
             return group;
         }
 
