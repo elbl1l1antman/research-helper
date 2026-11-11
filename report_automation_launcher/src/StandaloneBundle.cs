@@ -143,7 +143,10 @@ namespace ReportAutomationLauncher
                     throw new InvalidOperationException("내장 Python 이외의 실행 환경이 사용되었습니다.");
                 // Construct the actual launcher without showing it or opening user documents.
                 using (var form = new MainForm())
+                {
                     if (form.Handle == IntPtr.Zero) throw new InvalidOperationException("런처 GUI를 초기화하지 못했습니다.");
+                    form.CheckWorkflowLayout();
+                }
                 var report = new Dictionary<string, object>
                 {
                     { "status", "ready" }, { "bundled", true }, { "gui", "ready" }, { "bundle_root", Root },

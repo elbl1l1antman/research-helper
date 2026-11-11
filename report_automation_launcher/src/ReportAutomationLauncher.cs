@@ -887,23 +887,21 @@ namespace ReportAutomationLauncher
 
     internal static class LauncherUi
     {
-        public static readonly Color ColorBackground = Color.FromArgb(246, 248, 251);
+        public static readonly Color ColorBackground = Color.FromArgb(247, 248, 247);
         public static readonly Color ColorSurface = Color.White;
-        public static readonly Color ColorSurfaceAlt = Color.FromArgb(240, 244, 248);
-        public static readonly Color ColorSurfaceStrong = Color.FromArgb(232, 239, 247);
-        public static readonly Color ColorBorder = Color.FromArgb(211, 219, 230);
-        public static readonly Color ColorText = Color.FromArgb(31, 41, 55);
-        public static readonly Color ColorMutedText = Color.FromArgb(89, 99, 112);
-        public static readonly Color ColorPrimary = Color.FromArgb(39, 101, 173);
-        public static readonly Color ColorPrimaryHover = Color.FromArgb(28, 83, 145);
+        public static readonly Color ColorSurfaceAlt = Color.FromArgb(239, 242, 239);
+        public static readonly Color ColorSurfaceStrong = Color.FromArgb(224, 235, 229);
+        public static readonly Color ColorBorder = Color.FromArgb(204, 212, 207);
+        public static readonly Color ColorText = Color.FromArgb(29, 38, 34);
+        public static readonly Color ColorMutedText = Color.FromArgb(74, 89, 82);
+        public static readonly Color ColorPrimary = Color.FromArgb(25, 83, 65);
+        public static readonly Color ColorPrimaryHover = Color.FromArgb(19, 65, 51);
         public static readonly Color ColorSuccess = Color.FromArgb(20, 112, 74);
-        public static readonly Color ColorSuccessSurface = Color.FromArgb(226, 246, 236);
         public static readonly Color ColorWarning = Color.FromArgb(166, 94, 12);
-        public static readonly Color ColorWarningSurface = Color.FromArgb(255, 246, 226);
         public static readonly Color ColorDanger = Color.FromArgb(175, 48, 48);
-        public static readonly Color ColorDisabledSurface = Color.FromArgb(232, 236, 241);
-        public static readonly Color ColorDisabledText = Color.FromArgb(133, 143, 156);
-        public static readonly Color ColorRowAlt = Color.FromArgb(249, 251, 253);
+        public static readonly Color ColorDisabledSurface = Color.FromArgb(235, 238, 236);
+        public static readonly Color ColorDisabledText = Color.FromArgb(99, 110, 104);
+        public static readonly Color ColorRowAlt = Color.FromArgb(246, 249, 247);
 
         public const int SpaceXs = 4;
         public const int SpaceSm = 8;
@@ -953,8 +951,8 @@ namespace ReportAutomationLauncher
             button.Height = ControlHeight;
             button.FlatStyle = FlatStyle.Flat;
             button.UseVisualStyleBackColor = false;
-            button.Font = SectionFont();
-            button.Padding = new Padding(SpaceMd, 0, SpaceMd, 0);
+            button.Font = kind == LauncherButtonKind.Primary ? SectionFont() : BaseFont();
+            button.Padding = new Padding(SpaceSm, 0, SpaceSm, 0);
 
             Color normalBack;
             Color normalFore;
@@ -970,9 +968,9 @@ namespace ReportAutomationLauncher
             else if (kind == LauncherButtonKind.Secondary)
             {
                 normalBack = ColorSurface;
-                normalFore = ColorPrimary;
-                border = Color.FromArgb(160, 184, 213);
-                hoverBack = Color.FromArgb(231, 240, 250);
+                normalFore = ColorText;
+                border = ColorBorder;
+                hoverBack = ColorSurfaceAlt;
             }
             else
             {
@@ -1012,13 +1010,6 @@ namespace ReportAutomationLauncher
             enabledHandler(button, EventArgs.Empty);
         }
 
-        public static void StyleStatusLabel(Label label, bool isReady)
-        {
-            label.ForeColor = isReady ? ColorSuccess : ColorWarning;
-            label.BackColor = isReady ? ColorSuccessSurface : ColorWarningSurface;
-            label.BorderStyle = BorderStyle.FixedSingle;
-        }
-
         public static void StyleListItem(ListViewItem item, int index)
         {
             item.UseItemStyleForSubItems = true;
@@ -1049,7 +1040,7 @@ namespace ReportAutomationLauncher
             {
                 TextBox textBox = (TextBox)control;
                 textBox.BorderStyle = BorderStyle.FixedSingle;
-                textBox.BackColor = textBox.ReadOnly ? Color.FromArgb(250, 252, 255) : ColorSurface;
+                textBox.BackColor = textBox.ReadOnly ? ColorBackground : ColorSurface;
                 textBox.ForeColor = ColorText;
                 textBox.Font = BaseFont();
                 textBox.MinimumSize = new Size(0, ControlHeight);
@@ -1092,24 +1083,14 @@ namespace ReportAutomationLauncher
             if (control is Button)
             {
                 Button button = (Button)control;
-                if (button.Text == "실행" || button.Text.IndexOf("생성", StringComparison.OrdinalIgnoreCase) >= 0)
-                {
-                    StyleButton(button, LauncherButtonKind.Primary);
-                }
-                else if (button.Text == "닫기")
-                {
-                    StyleButton(button, LauncherButtonKind.Ghost);
-                }
-                else
-                {
-                    StyleButton(button, LauncherButtonKind.Secondary);
-                }
+                StyleButton(button, button.Tag is LauncherButtonKind ? (LauncherButtonKind)button.Tag : LauncherButtonKind.Secondary);
                 return;
             }
 
             if (control is CheckBox)
             {
                 CheckBox checkBox = (CheckBox)control;
+                checkBox.AutoSize = true;
                 checkBox.ForeColor = ColorText;
                 checkBox.Font = BaseFont();
                 checkBox.Margin = new Padding(0, SpaceSm, SpaceLg, SpaceXs);
@@ -1143,12 +1124,9 @@ namespace ReportAutomationLauncher
             GroupBox groupBox = (GroupBox)sender;
             e.Graphics.Clear(ColorBackground);
 
-            Rectangle border = new Rectangle(0, 12, groupBox.Width - 1, groupBox.Height - 13);
             using (Pen borderPen = new Pen(ColorBorder))
-            using (Pen accentPen = new Pen(ColorPrimary, 2))
             {
-                e.Graphics.DrawRectangle(borderPen, border);
-                e.Graphics.DrawLine(accentPen, SpaceLg, 12, SpaceLg + 42, 12);
+                e.Graphics.DrawLine(borderPen, 0, 12, groupBox.Width, 12);
             }
 
             Size textSize = TextRenderer.MeasureText(groupBox.Text, groupBox.Font);
@@ -1258,12 +1236,13 @@ namespace ReportAutomationLauncher
             root.Controls.Add(borderPanel, 0, 4);
 
             var buttons = new FlowLayoutPanel { Dock = DockStyle.Fill, AutoSize = true, FlowDirection = FlowDirection.RightToLeft };
-            Button close = MakeButton("선택 후 닫기", delegate
+            Button close = MakeButton("이 서식 사용", delegate
             {
                 SelectedPresetName = presetCombo.SelectedItem == null ? HwpStylePresetStore.BuiltInName : presetCombo.SelectedItem.ToString();
                 DialogResult = DialogResult.OK;
             });
             Button cancel = MakeButton("취소", delegate { DialogResult = DialogResult.Cancel; });
+            close.Tag = LauncherButtonKind.Primary;
             Button save = MakeButton("새로 저장", SaveNew);
             Button overwrite = MakeButton("덮어쓰기", Overwrite);
             Button delete = MakeButton("삭제", DeletePreset);
@@ -1801,10 +1780,8 @@ namespace ReportAutomationLauncher
         private readonly Button selectTableRangeButton = new Button();
         private readonly Button clearTableRangeButton = new Button();
         private readonly Label dataStatusLabel = new Label();
-        private readonly Label fileStepStatusLabel = new Label();
-        private readonly Label dataStepStatusLabel = new Label();
-        private readonly Label bannerStepStatusLabel = new Label();
-        private readonly Label runStepStatusLabel = new Label();
+        private readonly Label workspaceStatus = new Label();
+        private readonly ToolTip actionTips = new ToolTip();
         private readonly Button reloadBannerButton = new Button();
         private readonly Button recommendedBannerButton = new Button();
         private readonly Button selectAllBannerButton = new Button();
@@ -1816,6 +1793,7 @@ namespace ReportAutomationLauncher
         private readonly TextBox titlePrefixesText = new TextBox();
         private readonly ComboBox reportProfileCombo = new ComboBox();
         private readonly ComboBox styleProfileCombo = new ComboBox();
+        private readonly TextBox narrativeExampleText = new TextBox();
         private readonly CheckBox analysisCheck = new CheckBox();
         private readonly CheckBox chartCheck = new CheckBox();
         private readonly CheckBox tableCheck = new CheckBox();
@@ -1831,7 +1809,7 @@ namespace ReportAutomationLauncher
         private readonly CheckBox copyWorkbookCheck = new CheckBox();
         private readonly CheckBox keepExcelOpenCheck = new CheckBox();
         private readonly Button runButton = new Button();
-        private readonly Button closeButton = new Button();
+        private bool reportRunning;
         private readonly Button openWorkbookButton = new Button();
         private readonly Button openDraftButton = new Button();
         private readonly Button openHwpOutputButton = new Button();
@@ -1891,7 +1869,7 @@ namespace ReportAutomationLauncher
         public MainForm()
         {
             hwpStylePresetStore = new HwpStylePresetStore(recoveryLog: Log);
-            Text = "보고서 자동화 Alpha";
+            Text = "Research Helper | 보고서 자동화";
             MinimumSize = new Size(980, 720);
             Size = new Size(1120, 820);
             StartPosition = FormStartPosition.CenterScreen;
@@ -1901,45 +1879,51 @@ namespace ReportAutomationLauncher
             root.Dock = DockStyle.Fill;
             root.Padding = new Padding(LauncherUi.SpaceXl);
             root.ColumnCount = 1;
-            root.RowCount = 4;
-            root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+            root.RowCount = 3;
             root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
             root.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
             root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
             Controls.Add(root);
 
             root.Controls.Add(BuildHeaderPanel(), 0, 0);
-            root.Controls.Add(BuildWorkflowSummaryStrip(), 0, 1);
 
             workflowTabs.Dock = DockStyle.Fill;
             workflowTabs.DrawMode = TabDrawMode.OwnerDrawFixed;
             workflowTabs.SizeMode = TabSizeMode.Fixed;
-            workflowTabs.ItemSize = new Size(148, 34);
+            workflowTabs.ItemSize = new Size(146, 37);
             workflowTabs.DrawItem += WorkflowTabs_DrawItem;
-            workflowTabs.TabPages.Add(CreateStepPage("1 파일 등록", BuildFileGroup()));
-            workflowTabs.TabPages.Add(CreateStepPage("2 데이터 확인", BuildDataReviewGroup()));
-            workflowTabs.TabPages.Add(CreateStepPage("3 작성 규칙", BuildRulesPage()));
-            workflowTabs.TabPages.Add(CreateStepPage("4 실행/결과", BuildRunGroup()));
-            workflowTabs.TabPages.Add(CreateStepPage("대시보드 PPT", BuildDashboardPage()));
+            workflowTabs.TabPages.Add(CreateStepPage("1  원본 파일", BuildFileGroup()));
+            workflowTabs.TabPages.Add(CreateStepPage("2  표 · 배너", BuildDataReviewGroup()));
+            workflowTabs.TabPages.Add(CreateStepPage("3  보고서 설정", BuildRulesPage()));
+            workflowTabs.TabPages.Add(CreateStepPage("4  산출 결과", BuildRunGroup()));
+            workflowTabs.TabPages.Add(CreateStepPage("기관 대시보드 PPT", BuildDashboardPage()));
             workflowTabs.SelectedIndexChanged += delegate { UpdateWorkflowStatus(); };
-            root.Controls.Add(workflowTabs, 0, 2);
+            root.Controls.Add(workflowTabs, 0, 1);
 
-            var buttons = new FlowLayoutPanel();
-            buttons.FlowDirection = FlowDirection.RightToLeft;
-            buttons.Dock = DockStyle.Fill;
-            buttons.AutoSize = true;
-            buttons.BackColor = LauncherUi.ColorSurface;
-            buttons.Padding = new Padding(LauncherUi.SpaceMd);
-            buttons.Margin = new Padding(0, LauncherUi.SpaceMd, 0, 0);
-            runButton.Text = "실행";
-            runButton.Width = 104;
+            var footer = new TableLayoutPanel
+            {
+                Dock = DockStyle.Fill, AutoSize = true, ColumnCount = 2,
+                Margin = new Padding(0, LauncherUi.SpaceSm, 0, 0)
+            };
+            footer.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+            footer.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+            workspaceStatus.Dock = DockStyle.Fill;
+            workspaceStatus.AutoEllipsis = true;
+            workspaceStatus.TextAlign = ContentAlignment.MiddleLeft;
+            workspaceStatus.ForeColor = LauncherUi.ColorMutedText;
+            workspaceStatus.AccessibleName = "현재 보고서 작업 상태";
+            runButton.AutoSize = true;
+            runButton.MinimumSize = new Size(176, 34);
+            runButton.Tag = LauncherButtonKind.Primary;
             runButton.Click += RunButton_Click;
-            closeButton.Text = "닫기";
-            closeButton.Width = 96;
-            closeButton.Click += delegate { Close(); };
-            buttons.Controls.Add(closeButton);
-            buttons.Controls.Add(runButton);
-            root.Controls.Add(buttons, 0, 3);
+            footer.Controls.Add(workspaceStatus, 0, 0);
+            footer.Controls.Add(runButton, 1, 0);
+            root.Controls.Add(footer, 0, 2);
+            FormClosing += delegate(object sender, FormClosingEventArgs args)
+            {
+                if (reportRunning && args.CloseReason == CloseReason.UserClosing) args.Cancel = true;
+            };
+            Disposed += delegate { actionTips.Dispose(); };
 
             workbookPathText.TextChanged += delegate { UpdateWorkflowStatus(); };
             addinPathText.TextChanged += delegate { UpdateWorkflowStatus(); };
@@ -1973,10 +1957,51 @@ namespace ReportAutomationLauncher
             copyWorkbookCheck.Checked = true;
             keepExcelOpenCheck.Checked = true;
             LauncherUi.ApplyTree(this);
-            LauncherUi.StyleButton(runButton, LauncherButtonKind.Primary);
-            LauncherUi.StyleButton(closeButton, LauncherButtonKind.Ghost);
             UpdateWorkflowStatus();
             UpdateReadinessChecklist();
+        }
+
+        internal void CheckWorkflowLayout()
+        {
+            Size = MinimumSize;
+            if (runButton.Enabled || runButton.Text != "Excel 산출 시트 만들기")
+                throw new InvalidOperationException("원본 파일이 없는 Excel 산출 상태가 올바르지 않습니다.");
+
+            // Existing paths stand in for inputs; no Excel or Hancom session is opened.
+            workbookPathText.Text = addinPathText.Text;
+            outputTypeCombo.SelectedIndex = 1;
+            if (runButton.Enabled || runButton.Text != "한글 보고서 만들기")
+                throw new InvalidOperationException("양식 없는 한글 보고서의 준비 상태가 올바르지 않습니다.");
+            hwpTemplateText.Text = addinPathText.Text;
+            if (!runButton.Enabled)
+                throw new InvalidOperationException("입력이 준비된 한글 보고서의 실행 버튼이 비활성 상태입니다.");
+
+            var examples = new HashSet<string>();
+            for (int index = 0; index < reportProfileCombo.Items.Count; index++)
+            {
+                reportProfileCombo.SelectedIndex = index;
+                if (narrativeExampleText.Lines.Length < 2 || !examples.Add(narrativeExampleText.Text))
+                    throw new InvalidOperationException("보고서 유형별 분석문 예시가 올바르지 않습니다.");
+            }
+            string automaticExample = narrativeExampleText.Text;
+            styleProfileCombo.SelectedIndex = 1;
+            if (narrativeExampleText.Text != automaticExample)
+                throw new InvalidOperationException("설정에만 저장되는 문체가 실제 산출 예시를 바꿉니다.");
+
+            for (int index = 0; index < workflowTabs.TabCount; index++)
+            {
+                workflowTabs.SelectedIndex = index;
+                PerformLayout();
+                if (index == 1 && selectTableRangeButton.Parent == bannerList.Parent)
+                    throw new InvalidOperationException("표 범위와 배너 도구가 같은 작업 영역에 있습니다.");
+                if (index == 4 && runButton.Visible)
+                    throw new InvalidOperationException("대시보드에 한글 보고서 버튼이 표시됩니다.");
+            }
+            foreach (var button in new[] { runButton, selectTableRangeButton, dashboardBrowseButton, dashboardInspectButton, dashboardTemplateBrowseButton })
+            {
+                if (button.Width < TextRenderer.MeasureText(button.Text, button.Font).Width)
+                    throw new InvalidOperationException("최소 창 크기에서 버튼명이 잘립니다: " + button.Text);
+            }
         }
 
         private static TabPage CreateStepPage(string title, Control content)
@@ -1995,37 +2020,24 @@ namespace ReportAutomationLauncher
             var panel = new TableLayoutPanel();
             panel.Dock = DockStyle.Top;
             panel.AutoSize = true;
-            panel.BackColor = LauncherUi.ColorSurface;
-            panel.Padding = new Padding(LauncherUi.SpaceLg);
-            panel.Margin = new Padding(0, 0, 0, LauncherUi.SpaceMd);
+            panel.Margin = new Padding(0, 0, 0, LauncherUi.SpaceSm);
             panel.ColumnCount = 2;
-            panel.RowCount = 2;
-            panel.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 8));
+            panel.RowCount = 1;
             panel.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
-            panel.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-            panel.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-
-            var accent = new Panel();
-            accent.BackColor = LauncherUi.ColorPrimary;
-            accent.Dock = DockStyle.Fill;
-            accent.Margin = new Padding(0, 0, LauncherUi.SpaceMd, 0);
-            panel.Controls.Add(accent, 0, 0);
-            panel.SetRowSpan(accent, 2);
+            panel.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
 
             var title = new Label();
-            title.Text = "보고서 자동화 Alpha";
+            title.Text = "보고서 자동화";
             title.Font = LauncherUi.TitleFont();
             title.AutoSize = true;
             title.ForeColor = LauncherUi.ColorText;
             title.Margin = new Padding(0, 0, 0, LauncherUi.SpaceXs);
-            panel.Controls.Add(title, 1, 0);
-
-            var subtitle = new Label();
-            subtitle.Text = "Excel 집계표 확인, 분석 배너 선택, 문장 검토, HWPX/PPTX 초본 생성을 한 곳에서 관리합니다.";
-            subtitle.AutoSize = true;
-            subtitle.ForeColor = LauncherUi.ColorMutedText;
-            subtitle.Margin = new Padding(0);
-            panel.Controls.Add(subtitle, 1, 1);
+            panel.Controls.Add(title, 0, 0);
+            panel.Controls.Add(new Label
+            {
+                Text = "Research Helper", AutoSize = true, Anchor = AnchorStyles.Right,
+                ForeColor = LauncherUi.ColorMutedText, Margin = new Padding(8, 0, 0, 0)
+            }, 1, 0);
             return panel;
         }
 
@@ -2038,11 +2050,7 @@ namespace ReportAutomationLauncher
             Color foreColor = selected ? LauncherUi.ColorPrimary : LauncherUi.ColorMutedText;
 
             using (SolidBrush backBrush = new SolidBrush(backColor))
-            using (SolidBrush textBrush = new SolidBrush(foreColor))
-            using (StringFormat format = new StringFormat())
             {
-                format.Alignment = StringAlignment.Center;
-                format.LineAlignment = StringAlignment.Center;
                 e.Graphics.FillRectangle(backBrush, bounds);
                 if (selected)
                 {
@@ -2051,43 +2059,10 @@ namespace ReportAutomationLauncher
                         e.Graphics.DrawLine(accent, bounds.Left + 12, bounds.Bottom - 3, bounds.Right - 12, bounds.Bottom - 3);
                     }
                 }
-                e.Graphics.DrawString(page.Text, LauncherUi.SectionFont(), textBrush, bounds, format);
+                TextRenderer.DrawText(e.Graphics, page.Text, workflowTabs.Font, bounds, foreColor,
+                    TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis);
+                if ((e.State & DrawItemState.Focus) != 0) e.DrawFocusRectangle();
             }
-        }
-
-        private Control BuildWorkflowSummaryStrip()
-        {
-            var panel = new TableLayoutPanel();
-            panel.Dock = DockStyle.Top;
-            panel.AutoSize = true;
-            panel.ColumnCount = 4;
-            panel.RowCount = 1;
-            panel.Margin = new Padding(0, 0, 0, 10);
-            for (int i = 0; i < 4; i++)
-            {
-                panel.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 25));
-            }
-
-            panel.Controls.Add(CreateStepStatusLabel(fileStepStatusLabel, "파일"), 0, 0);
-            panel.Controls.Add(CreateStepStatusLabel(dataStepStatusLabel, "데이터"), 1, 0);
-            panel.Controls.Add(CreateStepStatusLabel(bannerStepStatusLabel, "배너"), 2, 0);
-            panel.Controls.Add(CreateStepStatusLabel(runStepStatusLabel, "실행"), 3, 0);
-            return panel;
-        }
-
-        private Label CreateStepStatusLabel(Label label, string title)
-        {
-            label.Text = title + ": 대기";
-            label.Dock = DockStyle.Fill;
-            label.AutoSize = false;
-            label.Height = 34;
-            label.TextAlign = ContentAlignment.MiddleLeft;
-            label.Padding = new Padding(LauncherUi.SpaceMd, 0, LauncherUi.SpaceMd, 0);
-            label.Margin = new Padding(0, 0, LauncherUi.SpaceSm, 0);
-            label.BorderStyle = BorderStyle.FixedSingle;
-            label.BackColor = LauncherUi.ColorSurface;
-            label.ForeColor = LauncherUi.ColorMutedText;
-            return label;
         }
 
         private void UpdateWorkflowStatus()
@@ -2097,17 +2072,20 @@ namespace ReportAutomationLauncher
             int tableCount = tablePreviewList.Items.Count;
             int checkedBanners = CountCheckedBanners();
 
-            SetStepStatus(fileStepStatusLabel, "파일", hasWorkbook && hasAddin ? "준비됨" : "확인 필요", hasWorkbook && hasAddin);
-            SetStepStatus(dataStepStatusLabel, "데이터", tableCount > 0 ? tableCount + "개 표" : "미확인", tableCount > 0);
-            SetStepStatus(bannerStepStatusLabel, "배너", checkedBanners > 0 ? checkedBanners + "개 선택" : "전체 기준", checkedBanners > 0 || bannerList.Items.Count == 0);
-            SetStepStatus(runStepStatusLabel, "실행", workflowTabs.SelectedIndex == 3 ? "검토 중" : "대기", workflowTabs.SelectedIndex == 3);
+            bool dashboard = workflowTabs.SelectedIndex == 4;
+            bool hwp = outputTypeCombo.Text.IndexOf("HWP", StringComparison.OrdinalIgnoreCase) >= 0;
+            bool needsTemplate = hwp && !File.Exists(hwpTemplateText.Text.Trim());
+            runButton.Visible = !dashboard;
+            runButton.Text = reportRunning ? "보고서 산출 중…" : hwp ? "한글 보고서 만들기" : "Excel 산출 시트 만들기";
+            runButton.AccessibleName = runButton.Text;
+            runButton.Enabled = !reportRunning && hasWorkbook && hasAddin && !needsTemplate;
+            workspaceStatus.Text = dashboard ? "기관 대시보드 · PowerPoint" :
+                reportRunning ? "산출 중 · 진행 기록은 산출 결과에서 확인" :
+                !hasWorkbook ? "원본 Excel 미선택" : !hasAddin ? "Excel 추가기능 미연결" :
+                needsTemplate ? "한글 양식 미선택 · 보고서 설정" :
+                Path.GetFileName(workbookPathText.Text.Trim()) + "  ·  표 " + tableCount + "개  ·  " +
+                    (checkedBanners == 0 ? "전체 기준" : "배너 " + checkedBanners + "개");
             UpdateReadinessChecklist();
-        }
-
-        private void SetStepStatus(Label label, string title, string value, bool isReady)
-        {
-            label.Text = title + ": " + value;
-            LauncherUi.StyleStatusLabel(label, isReady);
         }
 
         private void UpdateReadinessChecklist()
@@ -2146,8 +2124,9 @@ namespace ReportAutomationLauncher
             var item = new ListViewItem(name);
             item.SubItems.Add(ready ? "완료" : "확인 필요");
             item.SubItems.Add(detail);
-            item.ForeColor = ready ? LauncherUi.ColorSuccess : LauncherUi.ColorWarning;
-            item.BackColor = ready ? LauncherUi.ColorSuccessSurface : LauncherUi.ColorWarningSurface;
+            LauncherUi.StyleListItem(item, readinessList.Items.Count);
+            item.UseItemStyleForSubItems = false;
+            item.SubItems[1].ForeColor = ready ? LauncherUi.ColorSuccess : LauncherUi.ColorWarning;
             readinessList.Items.Add(item);
         }
 
@@ -2249,38 +2228,36 @@ namespace ReportAutomationLauncher
 
         private Control BuildFileGroup()
         {
-            var group = new GroupBox();
-            group.Text = "파일";
-            group.Dock = DockStyle.Top;
-            group.AutoSize = true;
-            group.Padding = new Padding(10);
+            var page = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, AutoScroll = true };
+            var source = new GroupBox { Text = "원본 집계표", Dock = DockStyle.Top, AutoSize = true };
+            var input = CreateGrid(2);
+            source.Controls.Add(input);
+            AddPathRow(input, 0, "Excel 집계표", workbookPathText, "Excel 파일 선택…", BrowseWorkbook);
+            var checks = new FlowLayoutPanel { Dock = DockStyle.Fill, AutoSize = true };
+            copyWorkbookCheck.Text = "작업 복사본에 저장";
+            keepExcelOpenCheck.Text = "산출 후 Excel 열어두기";
+            checks.Controls.Add(copyWorkbookCheck);
+            checks.Controls.Add(keepExcelOpenCheck);
+            AddLabel(input, 1, "산출 파일");
+            input.Controls.Add(checks, 1, 1);
+            input.SetColumnSpan(checks, 2);
+            page.Controls.Add(source, 0, 0);
 
-            var grid = CreateGrid(4);
-            group.Controls.Add(grid);
-
-            AddPathRow(grid, 0, "집계표 엑셀", workbookPathText, "찾기", BrowseWorkbook);
-            AddPathRow(grid, 1, "자동화 추가기능", addinPathText, "찾기", BrowseAddin);
-            addinPathText.ReadOnly = false;
-
-            var checkAddin = new Button { Text = "연결 검사", AutoSize = true };
+            var connection = new GroupBox { Text = "Excel 연결", Dock = DockStyle.Top, AutoSize = true };
+            var grid = CreateGrid(2);
+            connection.Controls.Add(grid);
+            AddPathRow(grid, 0, "Excel 추가기능", addinPathText, "추가기능 선택…", BrowseAddin);
+            var checkAddin = new Button { Text = "추가기능 연결 확인", AutoSize = true, Anchor = AnchorStyles.Left };
             checkAddin.Click += CheckExcelAddin;
-            grid.Controls.Add(checkAddin, 2, 2);
-
-            var note = new Label();
-            note.Text = "선택한 파일은 직접 수정하지 않고, 기본값으로 복사본에 산출 시트를 생성합니다.";
-            note.AutoSize = true;
-            note.ForeColor = LauncherUi.ColorMutedText;
-            note.Margin = new Padding(130, 4, 0, 0);
-            grid.Controls.Add(note, 1, 3);
-            grid.SetColumnSpan(note, 2);
-
-            return group;
+            grid.Controls.Add(checkAddin, 1, 1);
+            page.Controls.Add(connection, 0, 1);
+            return page;
         }
 
         private Control BuildOutputGroup()
         {
             var group = new GroupBox();
-            group.Text = "산출 방식";
+            group.Text = "출력 파일";
             group.Dock = DockStyle.Top;
             group.AutoSize = true;
             group.Padding = new Padding(10);
@@ -2297,38 +2274,33 @@ namespace ReportAutomationLauncher
             grid.Controls.Add(outputTypeCombo, 1, 0);
             grid.SetColumnSpan(outputTypeCombo, 2);
 
-            AddPathRow(grid, 1, "HWP/HWPX 템플릿", hwpTemplateText, "찾기", BrowseHwpTemplate);
-            AddPathRow(grid, 2, "PPTX 템플릿", pptTemplateText, "찾기", BrowsePptTemplate);
-            AddPathRow(grid, 3, "HWP 표 스타일", hwpTableStyleProfileText, "찾기", BrowseHwpTableStyleProfile);
+            AddPathRow(grid, 1, "한글 보고서 양식", hwpTemplateText, "한글 양식 선택…", BrowseHwpTemplate);
+            AddPathRow(grid, 2, "PowerPoint 양식", pptTemplateText, "PPTX 양식 선택…", BrowsePptTemplate);
+            AddPathRow(grid, 3, "한글 표 스타일 파일", hwpTableStyleProfileText, "스타일 파일 선택…", BrowseHwpTableStyleProfile);
 
             var templateButtons = new FlowLayoutPanel();
             templateButtons.Dock = DockStyle.Fill;
             templateButtons.AutoSize = true;
-            inspectTemplateButton.Text = "검사";
-            inspectTemplateButton.Width = 60;
+            inspectTemplateButton.Text = "양식 검사";
             inspectTemplateButton.Click += InspectTemplateButton_Click;
-            createHwpTemplateButton.Text = "기본 HWPX";
-            createHwpTemplateButton.Width = 90;
+            createHwpTemplateButton.Text = "한글 기본 양식 저장…";
             createHwpTemplateButton.Click += CreateHwpTemplateButton_Click;
-            createPptTemplateButton.Text = "기본 PPTX";
-            createPptTemplateButton.Width = 90;
+            createPptTemplateButton.Text = "PPTX 기본 양식 저장…";
             createPptTemplateButton.Click += CreatePptTemplateButton_Click;
-            createChartTemplateButton.Text = "차트 PPTX";
-            createChartTemplateButton.Width = 90;
+            createChartTemplateButton.Text = "차트 검토 양식 저장…";
             createChartTemplateButton.Click += CreateChartTemplateButton_Click;
-            autoFixTemplateButton.Text = "자동 보정";
-            autoFixTemplateButton.Width = 85;
+            autoFixTemplateButton.Text = "보정 사본 저장…";
             autoFixTemplateButton.Click += AutoFixTemplateButton_Click;
-            openTemplateGuideButton.Text = "가이드";
-            openTemplateGuideButton.Width = 70;
+            openTemplateGuideButton.Text = "양식 가이드 열기";
             openTemplateGuideButton.Click += OpenTemplateGuideButton_Click;
             templateButtons.Controls.Add(inspectTemplateButton);
+            templateButtons.Controls.Add(autoFixTemplateButton);
             templateButtons.Controls.Add(createHwpTemplateButton);
             templateButtons.Controls.Add(createPptTemplateButton);
             templateButtons.Controls.Add(createChartTemplateButton);
-            templateButtons.Controls.Add(autoFixTemplateButton);
             templateButtons.Controls.Add(openTemplateGuideButton);
-            AddLabel(grid, 4, "템플릿 도구");
+            foreach (Button button in templateButtons.Controls) button.AutoSize = true;
+            AddLabel(grid, 4, "양식 도구");
             grid.Controls.Add(templateButtons, 1, 4);
             grid.SetColumnSpan(templateButtons, 2);
 
@@ -2345,16 +2317,16 @@ namespace ReportAutomationLauncher
             hwpVisibleCheck.Text = "아래한글 창 표시";
             hwpKeepOpenOnErrorCheck.Text = "실패 시 문서 유지";
             var hwpLimitLabel = new Label();
-            hwpLimitLabel.Text = "초본 문항 수";
+            hwpLimitLabel.Text = "출력 문항 수";
             hwpLimitLabel.AutoSize = true;
             hwpLimitLabel.Margin = new Padding(12, 7, 6, 0);
             hwpMaxSectionsCombo.DropDownStyle = ComboBoxStyle.DropDownList;
             hwpMaxSectionsCombo.Width = 120;
-            hwpMaxSectionsCombo.Items.Add("1개 검증");
-            hwpMaxSectionsCombo.Items.Add("3개 검증");
-            hwpMaxSectionsCombo.Items.Add("전체");
+            hwpMaxSectionsCombo.Items.Add("첫 문항만");
+            hwpMaxSectionsCombo.Items.Add("첫 3개 문항");
+            hwpMaxSectionsCombo.Items.Add("모든 문항");
             var hwpDispatchLabel = new Label();
-            hwpDispatchLabel.Text = "dispatch";
+            hwpDispatchLabel.Text = "한글 연결 방식";
             hwpDispatchLabel.AutoSize = true;
             hwpDispatchLabel.Margin = new Padding(12, 7, 6, 0);
             hwpDispatchModeCombo.DropDownStyle = ComboBoxStyle.DropDownList;
@@ -2362,20 +2334,17 @@ namespace ReportAutomationLauncher
             hwpDispatchModeCombo.Items.Add("ensure_dispatch");
             hwpDispatchModeCombo.Items.Add("dispatch");
             hwpDispatchModeCombo.Items.Add("dispatch_ex");
-            hwpEnvironmentCheckButton.Text = "COM diag";
-            hwpEnvironmentCheckButton.Width = 85;
+            hwpEnvironmentCheckButton.Text = "한글 연결 확인";
             hwpEnvironmentCheckButton.Click += HwpEnvironmentCheckButton_Click;
             var hwpStyleLabel = new Label();
-            hwpStyleLabel.Text = "서식";
+            hwpStyleLabel.Text = "서식 프리셋";
             hwpStyleLabel.AutoSize = true;
             hwpStyleLabel.Margin = new Padding(12, 7, 6, 0);
             hwpStylePresetCombo.DropDownStyle = ComboBoxStyle.DropDownList;
             hwpStylePresetCombo.Width = 130;
-            hwpStyleSettingsButton.Text = "서식 설정";
-            hwpStyleSettingsButton.Width = 85;
+            hwpStyleSettingsButton.Text = "글꼴·표 서식 편집…";
             hwpStyleSettingsButton.Click += HwpStyleSettingsButton_Click;
-            hwpPageSetupButton.Text = "편집용지";
-            hwpPageSetupButton.Width = 85;
+            hwpPageSetupButton.Text = "용지·여백 설정…";
             hwpPageSetupButton.Click += delegate
             {
                 using (var dialog = new HwpPageSetupDialog(hwpPageSetup))
@@ -2383,46 +2352,63 @@ namespace ReportAutomationLauncher
                     if (dialog.ShowDialog(this) == DialogResult.OK) hwpPageSetup = dialog.SelectedConfig;
                 }
             };
-            hwpOptions.Controls.Add(hwpVisibleCheck);
-            hwpOptions.Controls.Add(hwpKeepOpenOnErrorCheck);
-            hwpOptions.Controls.Add(hwpLimitLabel);
-            hwpOptions.Controls.Add(hwpMaxSectionsCombo);
-            hwpOptions.Controls.Add(hwpDispatchLabel);
-            hwpOptions.Controls.Add(hwpDispatchModeCombo);
-            hwpOptions.Controls.Add(hwpEnvironmentCheckButton);
+            hwpStyleSettingsButton.AutoSize = true;
+            hwpPageSetupButton.AutoSize = true;
+            hwpEnvironmentCheckButton.AutoSize = true;
             hwpOptions.Controls.Add(hwpStyleLabel);
             hwpOptions.Controls.Add(hwpStylePresetCombo);
             hwpOptions.Controls.Add(hwpStyleSettingsButton);
             hwpOptions.Controls.Add(hwpPageSetupButton);
-            AddLabel(grid, 6, "HWPX 옵션");
+            hwpOptions.Controls.Add(hwpLimitLabel);
+            hwpOptions.Controls.Add(hwpMaxSectionsCombo);
+            AddLabel(grid, 6, "한글 서식");
             grid.Controls.Add(hwpOptions, 1, 6);
             grid.SetColumnSpan(hwpOptions, 2);
 
             var components = new FlowLayoutPanel();
             components.Dock = DockStyle.Fill;
             components.AutoSize = true;
-            analysisCheck.Text = "분석문";
+            analysisCheck.Text = "본문 분석문";
             chartCheck.Text = "차트 데이터";
-            tableCheck.Text = "삽입용 집계표";
-            qaCheck.Text = "QA/출처/수정이력";
-            draftTextCheck.Text = "문장 초안 TXT(Python)";
+            tableCheck.Text = "보고서 삽입표";
+            qaCheck.Text = "검토·출처·수정 기록";
+            draftTextCheck.Text = "문장 초안 텍스트 파일";
             components.Controls.Add(analysisCheck);
             components.Controls.Add(chartCheck);
             components.Controls.Add(tableCheck);
             components.Controls.Add(qaCheck);
             components.Controls.Add(draftTextCheck);
-            AddLabel(grid, 7, "구성요소");
+            AddLabel(grid, 7, "포함 항목");
             grid.Controls.Add(components, 1, 7);
             grid.SetColumnSpan(components, 2);
 
-            var note = new Label();
-            note.Text = "HWPX 보고서는 Excel 산출과 preflight 생성 후 아래한글 COM으로 새 HWPX 초본을 저장합니다. PPTX 보고서 직접 생성은 다음 단계입니다.";
-            note.AutoSize = true;
-            note.ForeColor = LauncherUi.ColorMutedText;
-            note.Margin = new Padding(0, 4, 0, 0);
-            grid.Controls.Add(note, 1, 8);
-            grid.SetColumnSpan(note, 2);
+            var connection = new FlowLayoutPanel { Dock = DockStyle.Fill, AutoSize = true };
+            connection.Controls.Add(hwpDispatchLabel);
+            connection.Controls.Add(hwpDispatchModeCombo);
+            connection.Controls.Add(hwpEnvironmentCheckButton);
+            connection.Controls.Add(hwpVisibleCheck);
+            connection.Controls.Add(hwpKeepOpenOnErrorCheck);
+            AddLabel(grid, 8, "한글 실행 옵션");
+            grid.Controls.Add(connection, 1, 8);
+            grid.SetColumnSpan(connection, 2);
 
+            outputTypeCombo.SelectedIndexChanged += delegate
+            {
+                bool hwp = outputTypeCombo.SelectedIndex == 1;
+                bool ppt = outputTypeCombo.SelectedIndex == 2;
+                grid.SuspendLayout();
+                foreach (Control control in grid.Controls)
+                {
+                    int row = grid.GetRow(control);
+                    control.Visible = row == 0 || row == 7 ||
+                        (hwp && (row == 1 || row == 3 || row == 6 || row == 8)) ||
+                        (ppt && row == 2) || ((hwp || ppt) && (row == 4 || row == 5));
+                }
+                createHwpTemplateButton.Visible = hwp;
+                createPptTemplateButton.Visible = ppt;
+                createChartTemplateButton.Visible = ppt;
+                grid.ResumeLayout(true);
+            };
             return group;
         }
 
@@ -2430,85 +2416,83 @@ namespace ReportAutomationLauncher
         {
             var panel = new TableLayoutPanel();
             panel.Dock = DockStyle.Fill;
-            panel.ColumnCount = 1;
-            panel.RowCount = 4;
+            panel.ColumnCount = 2;
+            panel.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 71));
+            panel.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 29));
+            panel.RowCount = 3;
+            panel.RowStyles.Add(new RowStyle(SizeType.AutoSize));
             panel.RowStyles.Add(new RowStyle(SizeType.AutoSize));
             panel.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
-            panel.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-            panel.RowStyles.Add(new RowStyle(SizeType.AutoSize));
 
-            dataStatusLabel.Text = "집계표 파일을 선택하면 표 목록과 배너 목록을 자동으로 확인합니다.";
+            dataStatusLabel.Text = "원본 Excel 미선택";
             dataStatusLabel.AutoSize = true;
             dataStatusLabel.ForeColor = LauncherUi.ColorMutedText;
-            dataStatusLabel.Margin = new Padding(0, 0, 0, 8);
+            dataStatusLabel.Margin = new Padding(0, 2, 0, 6);
             panel.Controls.Add(dataStatusLabel, 0, 0);
 
             tablePreviewList.Dock = DockStyle.Fill;
             tablePreviewList.View = View.Details;
             tablePreviewList.FullRowSelect = true;
             tablePreviewList.GridLines = true;
-            tablePreviewList.Columns.Add("No", 48);
-            tablePreviewList.Columns.Add("표번호", 80);
-            tablePreviewList.Columns.Add("제목", 330);
-            tablePreviewList.Columns.Add("시트", 110);
-            tablePreviewList.Columns.Add("자동 범위", 110);
-            tablePreviewList.Columns.Add("최종 범위", 160);
+            tablePreviewList.Columns.Add("순번", 48);
+            tablePreviewList.Columns.Add("표 번호", 65);
+            tablePreviewList.Columns.Add("표 제목", 248);
+            tablePreviewList.Columns.Add("시트", 90);
+            tablePreviewList.Columns.Add("자동 범위", 92);
+            tablePreviewList.Columns.Add("사용 범위", 110);
             tablePreviewList.Columns.Add("크기", 70);
             tablePreviewList.Columns.Add("보정", 60);
             tablePreviewList.Columns.Add("삽입", 60);
             tablePreviewList.Columns.Add("인식 확인", 180);
-            panel.Controls.Add(tablePreviewList, 0, 1);
+            tablePreviewList.Columns[5].DisplayIndex = 3;
+            tablePreviewList.AccessibleName = "감지한 통계표 목록";
+            panel.Controls.Add(tablePreviewList, 0, 2);
 
             var buttons = new FlowLayoutPanel();
             buttons.Dock = DockStyle.Fill;
             buttons.AutoSize = true;
-            selectTableRangeButton.Text = "Excel에서 범위 다시 선택";
+            selectTableRangeButton.Text = "Excel에서 표 범위 지정…";
             selectTableRangeButton.AutoSize = true;
             selectTableRangeButton.Click += delegate { SelectTableRangeInExcel(); };
-            clearTableRangeButton.Text = "자동 범위로 복원";
+            clearTableRangeButton.Text = "감지 범위 복원";
             clearTableRangeButton.AutoSize = true;
             clearTableRangeButton.Click += delegate { ClearSelectedTableRange(); };
+            reloadBannerButton.Text = "표·배너 다시 읽기";
+            reloadBannerButton.AutoSize = true;
+            reloadBannerButton.Click += delegate { LoadBannerPreviewAsync(); };
+            buttons.Controls.Add(reloadBannerButton);
             buttons.Controls.Add(selectTableRangeButton);
             buttons.Controls.Add(clearTableRangeButton);
-            panel.Controls.Add(buttons, 0, 2);
+            panel.Controls.Add(buttons, 0, 1);
 
-            var note = new Label();
-            note.Text = "자동 탐지 범위가 다르면 표를 선택한 뒤 Excel에서 범위를 다시 지정하세요. 원본 파일은 저장하지 않습니다.";
-            note.AutoSize = true;
-            note.ForeColor = LauncherUi.ColorMutedText;
-            note.Margin = new Padding(0, 8, 0, 0);
-            panel.Controls.Add(note, 0, 3);
+            var banners = BuildBannerPanel();
+            banners.Margin = new Padding(12, 0, 0, 0);
+            panel.Controls.Add(banners, 1, 0);
+            panel.SetRowSpan(banners, 3);
             return panel;
         }
 
         private Control BuildRulesPage()
         {
-            var panel = new TableLayoutPanel();
-            panel.Dock = DockStyle.Fill;
-            panel.ColumnCount = 1;
-            panel.RowCount = 4;
-            panel.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-            panel.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-            panel.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-            panel.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
-
-            panel.Controls.Add(BuildOutputGroup(), 0, 0);
-            panel.Controls.Add(BuildOptionsGroup(), 0, 1);
-            panel.Controls.Add(BuildAdvancedOptionsGroup(), 0, 2);
-
-            var note = new Label();
-            note.Text = "현재 선택값은 실행 설정 파일과 Excel의 보고서_설정 시트에 남습니다. 아직 미구현된 출력도 설정 계약으로 먼저 저장합니다.";
-            note.AutoSize = true;
-            note.ForeColor = LauncherUi.ColorMutedText;
-            note.Margin = new Padding(0, 10, 0, 0);
-            panel.Controls.Add(note, 0, 3);
-            return panel;
+            var tabs = new TabControl { Dock = DockStyle.Fill };
+            foreach (var page in new[]
+            {
+                CreateStepPage("파일 · 서식", BuildOutputGroup()),
+                CreateStepPage("분석문", BuildOptionsGroup()),
+                CreateStepPage("수치 · 고급", BuildAdvancedOptionsGroup())
+            })
+            {
+                page.AutoScroll = true;
+                page.Controls[0].Dock = DockStyle.Top;
+                tabs.TabPages.Add(page);
+            }
+            return tabs;
         }
 
         private Control BuildAdvancedOptionsGroup()
         {
             var group = new GroupBox();
-            group.Text = "고급 옵션";
+            group.Text = "수치·산출 옵션";
             group.Dock = DockStyle.Top;
             group.AutoSize = true;
             group.Padding = new Padding(10);
@@ -2543,9 +2527,9 @@ namespace ReportAutomationLauncher
             grid.Controls.Add(tableInsertModeCombo, 1, 2);
             grid.SetColumnSpan(tableInsertModeCombo, 2);
 
-            llmEnabledCheck.Text = "LLM 문장 고도화 사용";
+            llmEnabledCheck.Text = "AI로 문장 다듬기";
             llmEnabledCheck.AutoSize = true;
-            AddLabel(grid, 3, "LLM");
+            AddLabel(grid, 3, "문장 보조");
             grid.Controls.Add(llmEnabledCheck, 1, 3);
             grid.SetColumnSpan(llmEnabledCheck, 2);
 
@@ -2578,82 +2562,77 @@ namespace ReportAutomationLauncher
             var panel = new TableLayoutPanel();
             panel.Dock = DockStyle.Fill;
             panel.ColumnCount = 1;
-            panel.RowCount = 6;
+            panel.RowCount = 3;
+            panel.RowStyles.Add(new RowStyle(SizeType.Absolute, 172));
             panel.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-            panel.RowStyles.Add(new RowStyle(SizeType.Absolute, 120));
-            panel.RowStyles.Add(new RowStyle(SizeType.Percent, 34));
-            panel.RowStyles.Add(new RowStyle(SizeType.Percent, 22));
-            panel.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-            panel.RowStyles.Add(new RowStyle(SizeType.Percent, 44));
+            panel.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
 
-            var guide = new Label();
-            guide.Text = "실행 후 로그, 완료 요약, 문장 초안 미리보기를 확인합니다. 오류가 나면 이 로그를 기준으로 원본 표 구조나 Excel 신뢰 설정을 점검합니다.";
-            guide.AutoSize = true;
-            guide.ForeColor = LauncherUi.ColorMutedText;
-            guide.Margin = new Padding(0, 0, 0, 8);
-            panel.Controls.Add(guide, 0, 0);
+            var overview = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2, RowCount = 2, Margin = new Padding(0) };
+            overview.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 57));
+            overview.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 43));
+            overview.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+            overview.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+            overview.Controls.Add(new Label { Text = "산출 전 확인", Font = LauncherUi.SectionFont(), AutoSize = true }, 0, 0);
+            overview.Controls.Add(new Label { Text = "최근 산출 요약", Font = LauncherUi.SectionFont(), AutoSize = true }, 1, 0);
+            panel.Controls.Add(overview, 0, 0);
 
             readinessList.Dock = DockStyle.Fill;
             readinessList.View = View.Details;
             readinessList.FullRowSelect = true;
             readinessList.GridLines = true;
             readinessList.HeaderStyle = ColumnHeaderStyle.Nonclickable;
-            readinessList.Columns.Add("항목", 130);
-            readinessList.Columns.Add("상태", 100);
-            readinessList.Columns.Add("확인 내용", 650);
-            panel.Controls.Add(readinessList, 0, 1);
+            readinessList.Columns.Add("항목", 82);
+            readinessList.Columns.Add("상태", 72);
+            readinessList.Columns.Add("확인 내용", 286);
+            readinessList.SizeChanged += delegate
+            {
+                readinessList.Columns[2].Width = Math.Max(145, readinessList.ClientSize.Width - 158 - SystemInformation.VerticalScrollBarWidth);
+            };
+            overview.Controls.Add(readinessList, 0, 1);
 
             logText.Multiline = true;
             logText.ReadOnly = true;
             logText.ScrollBars = ScrollBars.Vertical;
             logText.Dock = DockStyle.Fill;
             logText.Margin = new Padding(0, 0, 0, 8);
-            panel.Controls.Add(logText, 0, 2);
 
             resultSummaryText.Multiline = true;
             resultSummaryText.ReadOnly = true;
             resultSummaryText.ScrollBars = ScrollBars.Vertical;
             resultSummaryText.Dock = DockStyle.Fill;
             resultSummaryText.Text = "아직 실행 결과가 없습니다.";
-            panel.Controls.Add(resultSummaryText, 0, 3);
+            overview.Controls.Add(resultSummaryText, 1, 1);
 
             var resultButtons = new FlowLayoutPanel();
             resultButtons.Dock = DockStyle.Fill;
             resultButtons.AutoSize = true;
-            resultButtons.BackColor = LauncherUi.ColorSurfaceAlt;
-            resultButtons.Padding = new Padding(LauncherUi.SpaceSm);
-            resultButtons.Margin = new Padding(0, LauncherUi.SpaceSm, 0, LauncherUi.SpaceSm);
-            openWorkbookButton.Text = "산출 엑셀 열기";
-            openWorkbookButton.Width = 110;
+            resultButtons.Margin = new Padding(0, LauncherUi.SpaceXs, 0, LauncherUi.SpaceXs);
+            openWorkbookButton.Text = "산출 Excel 열기";
             openWorkbookButton.Enabled = false;
             openWorkbookButton.Click += OpenWorkbookButton_Click;
-            openDraftButton.Text = "초안 TXT 열기";
-            openDraftButton.Width = 105;
+            openDraftButton.Text = "문장 초안 파일 열기";
             openDraftButton.Enabled = false;
             openDraftButton.Click += OpenDraftButton_Click;
-            openHwpOutputButton.Text = "HWPX 초본 열기";
-            openHwpOutputButton.Width = 115;
+            openHwpOutputButton.Text = "한글 보고서 열기";
             openHwpOutputButton.Enabled = false;
             openHwpOutputButton.Click += OpenHwpOutputButton_Click;
-            openHwpReportButton.Text = "HWPX 리포트 열기";
-            openHwpReportButton.Width = 125;
+            openHwpReportButton.Text = "한글 생성 기록 열기";
             openHwpReportButton.Enabled = false;
             openHwpReportButton.Click += OpenHwpReportButton_Click;
-            copyDraftButton.Text = "초안 복사";
-            copyDraftButton.Width = 85;
+            copyDraftButton.Text = "전체 초안 복사";
+            copyDraftButton.AutoSize = true;
             copyDraftButton.Enabled = false;
             copyDraftButton.Click += CopyDraftButton_Click;
             draftPreviewStatusLabel.AutoSize = true;
             draftPreviewStatusLabel.ForeColor = LauncherUi.ColorMutedText;
             draftPreviewStatusLabel.Margin = new Padding(10, 7, 0, 0);
-            draftPreviewStatusLabel.Text = "문장 초안이 생성되면 아래에 표시됩니다.";
-            resultButtons.Controls.Add(openWorkbookButton);
-            resultButtons.Controls.Add(openDraftButton);
-            resultButtons.Controls.Add(openHwpOutputButton);
-            resultButtons.Controls.Add(openHwpReportButton);
-            resultButtons.Controls.Add(copyDraftButton);
-            resultButtons.Controls.Add(draftPreviewStatusLabel);
-            panel.Controls.Add(resultButtons, 0, 4);
+            draftPreviewStatusLabel.Text = "문장 초안 없음";
+            foreach (var button in new[] { openHwpOutputButton, openWorkbookButton, openDraftButton, openHwpReportButton })
+            {
+                button.AutoSize = true;
+                resultButtons.Controls.Add(button);
+            }
+            panel.Controls.Add(resultButtons, 0, 1);
 
             draftPreviewText.Multiline = true;
             draftPreviewText.ReadOnly = true;
@@ -2661,11 +2640,20 @@ namespace ReportAutomationLauncher
             draftPreviewText.Dock = DockStyle.Fill;
             draftPreviewText.Text = "아직 문장 초안이 없습니다.";
 
+            var draft = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 2 };
+            draft.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+            draft.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+            var draftTools = new FlowLayoutPanel { Dock = DockStyle.Fill, AutoSize = true, Margin = new Padding(0) };
+            draftTools.Controls.Add(copyDraftButton);
+            draftTools.Controls.Add(draftPreviewStatusLabel);
+            draft.Controls.Add(draftTools, 0, 0);
+            draft.Controls.Add(draftPreviewText, 0, 1);
             draftReviewTabs.Dock = DockStyle.Fill;
-            draftReviewTabs.TabPages.Add(CreateStepPage("전체 초안", draftPreviewText));
-            draftReviewTabs.TabPages.Add(CreateStepPage("문장 리뷰", BuildSentenceReviewPanel()));
-            draftReviewTabs.TabPages.Add(CreateStepPage("QA 경고", BuildQaReviewPanel()));
-            panel.Controls.Add(draftReviewTabs, 0, 5);
+            draftReviewTabs.TabPages.Add(CreateStepPage("전체 초안", draft));
+            draftReviewTabs.TabPages.Add(CreateStepPage("문장 수정", BuildSentenceReviewPanel()));
+            draftReviewTabs.TabPages.Add(CreateStepPage("검토 경고", BuildQaReviewPanel()));
+            draftReviewTabs.TabPages.Add(CreateStepPage("진행 기록", logText));
+            panel.Controls.Add(draftReviewTabs, 0, 2);
             return panel;
         }
 
@@ -2674,24 +2662,29 @@ namespace ReportAutomationLauncher
             var root = new TableLayoutPanel();
             root.Dock = DockStyle.Fill;
             root.ColumnCount = 1;
-            root.RowCount = 5;
-            root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-            root.RowStyles.Add(new RowStyle(SizeType.Percent, 32));
-            root.RowStyles.Add(new RowStyle(SizeType.Percent, 34));
-            root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-            root.RowStyles.Add(new RowStyle(SizeType.Percent, 34));
+            root.RowCount = 2;
+            root.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+            root.RowStyles.Add(new RowStyle(SizeType.Absolute, 76));
 
-            root.Controls.Add(BuildDashboardFileGroup(), 0, 0);
-            root.Controls.Add(BuildDashboardSelectionGroup(), 0, 1);
-            root.Controls.Add(BuildDashboardMappingGroup(), 0, 2);
-            root.Controls.Add(BuildDashboardCommandGroup(), 0, 3);
+            var inputs = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 2 };
+            inputs.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+            inputs.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+            inputs.Controls.Add(BuildDashboardFileGroup(), 0, 0);
+            inputs.Controls.Add(BuildDashboardSelectionGroup(), 0, 1);
+            var output = CreateStepPage("PPT 출력", BuildDashboardCommandGroup());
+            output.Controls[0].Dock = DockStyle.Top;
+            var tabs = new TabControl { Dock = DockStyle.Fill };
+            tabs.TabPages.Add(CreateStepPage("원자료 · 기관", inputs));
+            tabs.TabPages.Add(CreateStepPage("지표 배치", BuildDashboardMappingGroup()));
+            tabs.TabPages.Add(output);
+            root.Controls.Add(tabs, 0, 0);
 
             dashboardStatusText.Multiline = true;
             dashboardStatusText.ReadOnly = true;
             dashboardStatusText.ScrollBars = ScrollBars.Vertical;
             dashboardStatusText.Dock = DockStyle.Fill;
-            dashboardStatusText.Text = "Excel을 읽은 뒤 사용할 sheet, 기관, 열을 선택하세요.";
-            root.Controls.Add(dashboardStatusText, 0, 4);
+            dashboardStatusText.Text = "대시보드 원자료 미선택";
+            root.Controls.Add(dashboardStatusText, 0, 1);
             return root;
         }
 
@@ -2703,37 +2696,34 @@ namespace ReportAutomationLauncher
             group.AutoSize = true;
             group.Padding = new Padding(10);
 
-            var grid = CreateGrid(4);
+            var grid = CreateGrid(3);
             group.Controls.Add(grid);
             AddLabel(grid, 0, "Excel 원자료");
             dashboardWorkbookText.Dock = DockStyle.Fill;
             grid.Controls.Add(dashboardWorkbookText, 1, 0);
-            dashboardBrowseButton.Text = "찾기";
+            dashboardBrowseButton.Text = "Excel 파일 선택…";
+            dashboardBrowseButton.Dock = DockStyle.Fill;
             dashboardBrowseButton.Click += DashboardBrowseButton_Click;
             grid.Controls.Add(dashboardBrowseButton, 2, 0);
 
-            AddLabel(grid, 1, "sheet");
+            AddLabel(grid, 1, "원자료 시트");
             dashboardSheetCombo.DropDownStyle = ComboBoxStyle.DropDownList;
             dashboardSheetCombo.Dock = DockStyle.Fill;
             dashboardSheetCombo.SelectedIndexChanged += DashboardSheetCombo_SelectedIndexChanged;
             grid.Controls.Add(dashboardSheetCombo, 1, 1);
-            dashboardInspectButton.Text = "데이터 읽기";
+            dashboardInspectButton.Text = "원자료 다시 읽기";
+            dashboardInspectButton.Dock = DockStyle.Fill;
             dashboardInspectButton.Click += DashboardInspectButton_Click;
             grid.Controls.Add(dashboardInspectButton, 2, 1);
 
             AddLabel(grid, 2, "작업용 PPT 템플릿");
             dashboardTemplateText.Dock = DockStyle.Fill;
             grid.Controls.Add(dashboardTemplateText, 1, 2);
-            dashboardTemplateBrowseButton.Text = "찾기";
+            dashboardTemplateBrowseButton.Text = "PPT 양식 선택…";
+            dashboardTemplateBrowseButton.Dock = DockStyle.Fill;
             dashboardTemplateBrowseButton.Click += DashboardTemplateBrowseButton_Click;
             grid.Controls.Add(dashboardTemplateBrowseButton, 2, 2);
 
-            var note = new Label();
-            note.Text = "템플릿을 지정하면 첫 슬라이드의 RA_DASH_* 위치와 폰트를 유지하고 데이터만 교체합니다.";
-            note.AutoSize = true;
-            note.ForeColor = LauncherUi.ColorMutedText;
-            grid.Controls.Add(note, 1, 3);
-            grid.SetColumnSpan(note, 2);
             return group;
         }
 
@@ -2773,6 +2763,7 @@ namespace ReportAutomationLauncher
             entityPanel.RowStyles.Add(new RowStyle(SizeType.AutoSize));
             var entityTop = new FlowLayoutPanel();
             entityTop.Dock = DockStyle.Fill;
+            entityTop.AutoSize = true;
             var entityLabel = new Label();
             entityLabel.Text = "기관명 열";
             entityLabel.AutoSize = true;
@@ -2789,9 +2780,11 @@ namespace ReportAutomationLauncher
             var entityButtons = new FlowLayoutPanel();
             entityButtons.Dock = DockStyle.Fill;
             entityButtons.AutoSize = true;
-            dashboardSelectAllEntitiesButton.Text = "전체 선택";
+            dashboardSelectAllEntitiesButton.Text = "모든 기관 체크";
+            dashboardSelectAllEntitiesButton.AutoSize = true;
             dashboardSelectAllEntitiesButton.Click += delegate { SetChecked(dashboardEntityList, true); };
-            dashboardClearEntitiesButton.Text = "선택 해제";
+            dashboardClearEntitiesButton.Text = "체크 해제";
+            dashboardClearEntitiesButton.AutoSize = true;
             dashboardClearEntitiesButton.Click += delegate { SetChecked(dashboardEntityList, false); };
             entityButtons.Controls.Add(dashboardSelectAllEntitiesButton);
             entityButtons.Controls.Add(dashboardClearEntitiesButton);
@@ -2815,9 +2808,11 @@ namespace ReportAutomationLauncher
             var columnButtons = new FlowLayoutPanel();
             columnButtons.Dock = DockStyle.Fill;
             columnButtons.AutoSize = true;
-            dashboardSelectAllColumnsButton.Text = "전체 선택";
+            dashboardSelectAllColumnsButton.Text = "모든 열 체크";
+            dashboardSelectAllColumnsButton.AutoSize = true;
             dashboardSelectAllColumnsButton.Click += delegate { SetChecked(dashboardColumnList, true); RefreshDashboardMappingCandidates(); };
-            dashboardClearColumnsButton.Text = "선택 해제";
+            dashboardClearColumnsButton.Text = "체크 해제";
+            dashboardClearColumnsButton.AutoSize = true;
             dashboardClearColumnsButton.Click += delegate { SetChecked(dashboardColumnList, false); RefreshDashboardMappingCandidates(); };
             columnButtons.Controls.Add(dashboardSelectAllColumnsButton);
             columnButtons.Controls.Add(dashboardClearColumnsButton);
@@ -2918,7 +2913,7 @@ namespace ReportAutomationLauncher
             panel.BackColor = LauncherUi.ColorSurfaceAlt;
             panel.Padding = new Padding(LauncherUi.SpaceSm);
             var outputLabel = new Label();
-            outputLabel.Text = "출력";
+            outputLabel.Text = "기관 범위";
             outputLabel.AutoSize = true;
             outputLabel.Margin = new Padding(0, 7, 6, 0);
             dashboardOutputModeCombo.DropDownStyle = ComboBoxStyle.DropDownList;
@@ -2943,7 +2938,7 @@ namespace ReportAutomationLauncher
             dashboardDesignCombo.Items.Add("모던 민트");
             dashboardDesignCombo.Items.Add("그래파이트");
             var fontLabel = new Label();
-            fontLabel.Text = "폰트";
+            fontLabel.Text = "글꼴";
             fontLabel.AutoSize = true;
             fontLabel.Margin = new Padding(12, 7, 6, 0);
             dashboardFontCombo.DropDownStyle = ComboBoxStyle.DropDownList;
@@ -2952,11 +2947,12 @@ namespace ReportAutomationLauncher
             dashboardFontCombo.Items.Add("나눔고딕");
             dashboardFontCombo.Items.Add("Noto Sans CJK KR");
             dashboardFontCombo.Items.Add("Arial");
-            dashboardGenerateButton.Text = "대시보드 PPT 생성";
-            dashboardGenerateButton.Width = 140;
+            dashboardGenerateButton.Text = "대시보드 PPT 만들기…";
+            dashboardGenerateButton.AutoSize = true;
+            dashboardGenerateButton.Tag = LauncherButtonKind.Primary;
             dashboardGenerateButton.Click += DashboardGenerateButton_Click;
-            dashboardOpenOutputButton.Text = "결과 열기";
-            dashboardOpenOutputButton.Width = 90;
+            dashboardOpenOutputButton.Text = "산출 PPT 열기";
+            dashboardOpenOutputButton.AutoSize = true;
             dashboardOpenOutputButton.Enabled = false;
             dashboardOpenOutputButton.Click += DashboardOpenOutputButton_Click;
             panel.Controls.Add(outputLabel);
@@ -3004,16 +3000,16 @@ namespace ReportAutomationLauncher
             var buttons = new FlowLayoutPanel();
             buttons.Dock = DockStyle.Fill;
             buttons.AutoSize = true;
-            applySentenceEditButton.Text = "수정 적용";
-            applySentenceEditButton.Width = 90;
+            applySentenceEditButton.Text = "수정 문장 반영";
+            applySentenceEditButton.AutoSize = true;
             applySentenceEditButton.Enabled = false;
             applySentenceEditButton.Click += ApplySentenceEditButton_Click;
             copySelectedSentenceButton.Text = "선택 문장 복사";
-            copySelectedSentenceButton.Width = 110;
+            copySelectedSentenceButton.AutoSize = true;
             copySelectedSentenceButton.Enabled = false;
             copySelectedSentenceButton.Click += CopySelectedSentenceButton_Click;
-            exportReviewedDraftButton.Text = "검토본 저장";
-            exportReviewedDraftButton.Width = 95;
+            exportReviewedDraftButton.Text = "검토한 초안 저장…";
+            exportReviewedDraftButton.AutoSize = true;
             exportReviewedDraftButton.Enabled = false;
             exportReviewedDraftButton.Click += ExportReviewedDraftButton_Click;
             buttons.Controls.Add(applySentenceEditButton);
@@ -3070,12 +3066,12 @@ namespace ReportAutomationLauncher
         private Control BuildOptionsGroup()
         {
             var group = new GroupBox();
-            group.Text = "분석 옵션";
+            group.Text = "분석문 작성 기준";
             group.Dock = DockStyle.Top;
             group.AutoSize = true;
             group.Padding = new Padding(10);
 
-            var grid = CreateGrid(8);
+            var grid = CreateGrid(5);
             group.Controls.Add(grid);
 
             AddLabel(grid, 0, "보고서 유형");
@@ -3098,84 +3094,109 @@ namespace ReportAutomationLauncher
             grid.Controls.Add(styleProfileCombo, 1, 1);
             grid.SetColumnSpan(styleProfileCombo, 2);
 
-            AddLabel(grid, 2, "추출 배너 목록");
-            bannerText.Dock = DockStyle.Fill;
-            grid.Controls.Add(bannerText, 1, 2);
-            grid.SetColumnSpan(bannerText, 2);
-
-            AddLabel(grid, 3, "발견된 배너");
-            bannerList.Dock = DockStyle.Fill;
-            bannerList.CheckOnClick = true;
-            bannerList.Height = 82;
-            bannerList.ItemCheck += BannerList_ItemCheck;
-            grid.Controls.Add(bannerList, 1, 3);
-            grid.SetColumnSpan(bannerList, 2);
-
-            var bannerButtons = new FlowLayoutPanel();
-            bannerButtons.Dock = DockStyle.Fill;
-            bannerButtons.AutoSize = true;
-            reloadBannerButton.Text = "새로고침";
-            reloadBannerButton.Width = 80;
-            reloadBannerButton.Click += delegate { LoadBannerPreviewAsync(); };
-            recommendedBannerButton.Text = "추천 선택";
-            recommendedBannerButton.Width = 80;
-            recommendedBannerButton.Click += delegate { SelectRecommendedBanners(); };
-            selectAllBannerButton.Text = "전체 선택";
-            selectAllBannerButton.Width = 80;
-            selectAllBannerButton.Click += delegate { SetAllBannersChecked(true); };
-            clearBannerButton.Text = "선택 해제";
-            clearBannerButton.Width = 80;
-            clearBannerButton.Click += delegate { SetAllBannersChecked(false); };
-            moveBannerUpButton.Text = "위로";
-            moveBannerUpButton.Width = 60;
-            moveBannerUpButton.Click += delegate { MoveSelectedBanner(-1); };
-            moveBannerDownButton.Text = "아래로";
-            moveBannerDownButton.Width = 60;
-            moveBannerDownButton.Click += delegate { MoveSelectedBanner(1); };
-            deleteBannerButton.Text = "목록 삭제";
-            deleteBannerButton.Width = 80;
-            deleteBannerButton.Click += delegate { DeleteSelectedBanners(); };
-            bannerStatusLabel.AutoSize = true;
-            bannerStatusLabel.ForeColor = LauncherUi.ColorMutedText;
-            bannerStatusLabel.Margin = new Padding(10, 8, 0, 0);
-            bannerButtons.Controls.Add(reloadBannerButton);
-            bannerButtons.Controls.Add(recommendedBannerButton);
-            bannerButtons.Controls.Add(selectAllBannerButton);
-            bannerButtons.Controls.Add(clearBannerButton);
-            bannerButtons.Controls.Add(moveBannerUpButton);
-            bannerButtons.Controls.Add(moveBannerDownButton);
-            bannerButtons.Controls.Add(deleteBannerButton);
-            bannerButtons.Controls.Add(bannerStatusLabel);
-            grid.Controls.Add(bannerButtons, 1, 4);
-            grid.SetColumnSpan(bannerButtons, 2);
-
-            AddLabel(grid, 5, "제목 제거 접두어");
+            AddLabel(grid, 2, "제목에서 뺄 접두어");
             titlePrefixesText.Dock = DockStyle.Fill;
-            grid.Controls.Add(titlePrefixesText, 1, 5);
+            grid.Controls.Add(titlePrefixesText, 1, 2);
             grid.SetColumnSpan(titlePrefixesText, 2);
 
-            copyWorkbookCheck.Text = "원본 옆에 작업 복사본 생성";
-            copyWorkbookCheck.AutoSize = true;
-            keepExcelOpenCheck.Text = "완료 후 Excel 열어두기";
-            keepExcelOpenCheck.AutoSize = true;
-            var checks = new FlowLayoutPanel();
-            checks.Dock = DockStyle.Fill;
-            checks.AutoSize = true;
-            checks.Controls.Add(copyWorkbookCheck);
-            checks.Controls.Add(keepExcelOpenCheck);
-            AddLabel(grid, 6, "실행 방식");
-            grid.Controls.Add(checks, 1, 6);
-            grid.SetColumnSpan(checks, 2);
-
-            var note = new Label();
-            note.Text = "알파 기본값은 인식도/만족도 조사형, 공식 보고서체, 소수점 한 자리입니다.";
-            note.AutoSize = true;
-            note.ForeColor = LauncherUi.ColorMutedText;
-            note.Margin = new Padding(0, 4, 0, 0);
-            grid.Controls.Add(note, 1, 7);
-            grid.SetColumnSpan(note, 2);
-
+            AddLabel(grid, 3, "분석문 작성 예시");
+            var caption = new Label
+            {
+                Text = "가상 수치 · 현재 자동 산출 형식(기본 문체)",
+                AutoSize = true, ForeColor = LauncherUi.ColorMutedText,
+                Margin = new Padding(3, 8, 0, 5)
+            };
+            grid.Controls.Add(caption, 1, 3);
+            grid.SetColumnSpan(caption, 2);
+            narrativeExampleText.Multiline = true;
+            narrativeExampleText.ReadOnly = true;
+            narrativeExampleText.ScrollBars = ScrollBars.Vertical;
+            narrativeExampleText.Dock = DockStyle.Fill;
+            narrativeExampleText.AccessibleName = "선택한 보고서 유형의 분석문 예시";
+            grid.RowStyles[4].SizeType = SizeType.Absolute;
+            grid.RowStyles[4].Height = 120;
+            grid.Controls.Add(narrativeExampleText, 1, 4);
+            grid.SetColumnSpan(narrativeExampleText, 2);
+            var examples = new[]
+            {
+                "서비스 이용 만족도에 대해 조사한 결과, ‘만족’ 응답은 68.4%, 100점 평균은 72.6점으로 나타남" +
+                    Environment.NewLine + "반면, ‘불만족’은 12.8%로 나타남",
+                "디지털 기술 도입 분야는 복수응답 기준으로 ‘업무 자동화’가 48.6%로 가장 높게 나타남" +
+                    Environment.NewLine + "다음으로 ‘데이터 분석’(32.1%), ‘온라인 판매’(24.7%) 순으로 나타남",
+                "우선 지원이 필요한 분야는 복수응답 기준으로 ‘인력 양성’이 54.2%로 가장 높게 나타남" +
+                    Environment.NewLine + "다음으로 ‘사업비 지원’(39.5%), ‘컨설팅’(27.1%) 순으로 나타남",
+                "주 이용 채널은 ‘모바일 앱’이 52.3%로 가장 높게 나타남" +
+                    Environment.NewLine + "다음으로 ‘웹사이트’(31.4%), ‘오프라인 창구’(16.3%) 순으로 나타남"
+            };
+            reportProfileCombo.SelectedIndexChanged += delegate
+            {
+                int index = reportProfileCombo.SelectedIndex;
+                narrativeExampleText.Text = index >= 0 && index < examples.Length ? examples[index] : "";
+            };
             return group;
+        }
+
+        private Control BuildBannerPanel()
+        {
+            var panel = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 7 };
+            panel.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+            panel.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+            panel.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+            panel.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+            panel.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+            panel.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+            panel.RowStyles.Add(new RowStyle(SizeType.Absolute, 36));
+            panel.Controls.Add(new Label { Text = "분석 배너", Font = LauncherUi.SectionFont(), AutoSize = true }, 0, 0);
+
+            bannerList.Dock = DockStyle.Fill;
+            bannerList.CheckOnClick = true;
+            bannerList.IntegralHeight = false;
+            bannerList.AccessibleName = "분석에 포함할 가로 배너";
+            bannerList.ItemCheck += BannerList_ItemCheck;
+            panel.Controls.Add(bannerList, 0, 2);
+
+            var selection = new FlowLayoutPanel { Dock = DockStyle.Fill, AutoSize = true, Margin = new Padding(0) };
+            recommendedBannerButton.Text = "추천 체크";
+            recommendedBannerButton.Click += delegate { SelectRecommendedBanners(); };
+            selectAllBannerButton.Text = "모두 체크";
+            selectAllBannerButton.Click += delegate { SetAllBannersChecked(true); };
+            clearBannerButton.Text = "체크 해제";
+            clearBannerButton.Click += delegate { SetAllBannersChecked(false); };
+            foreach (var button in new[] { recommendedBannerButton, selectAllBannerButton, clearBannerButton })
+            {
+                button.AutoSize = true;
+                selection.Controls.Add(button);
+            }
+            panel.Controls.Add(selection, 0, 1);
+
+            var reorder = new FlowLayoutPanel { Dock = DockStyle.Fill, AutoSize = true, Margin = new Padding(0) };
+            moveBannerUpButton.Text = "↑";
+            moveBannerUpButton.Width = 34;
+            moveBannerUpButton.AccessibleName = "선택한 배너 위로 이동";
+            actionTips.SetToolTip(moveBannerUpButton, moveBannerUpButton.AccessibleName);
+            moveBannerUpButton.Click += delegate { MoveSelectedBanner(-1); };
+            moveBannerDownButton.Text = "↓";
+            moveBannerDownButton.Width = 34;
+            moveBannerDownButton.AccessibleName = "선택한 배너 아래로 이동";
+            actionTips.SetToolTip(moveBannerDownButton, moveBannerDownButton.AccessibleName);
+            moveBannerDownButton.Click += delegate { MoveSelectedBanner(1); };
+            deleteBannerButton.Text = "배너 목록에서 제거";
+            deleteBannerButton.AutoSize = true;
+            deleteBannerButton.Click += delegate { DeleteSelectedBanners(); };
+            reorder.Controls.Add(moveBannerUpButton);
+            reorder.Controls.Add(moveBannerDownButton);
+            reorder.Controls.Add(deleteBannerButton);
+            panel.Controls.Add(reorder, 0, 3);
+            bannerStatusLabel.Dock = DockStyle.Fill;
+            bannerStatusLabel.Height = 22;
+            bannerStatusLabel.AutoEllipsis = true;
+            bannerStatusLabel.ForeColor = LauncherUi.ColorMutedText;
+            panel.Controls.Add(bannerStatusLabel, 0, 4);
+            panel.Controls.Add(new Label { Text = "분석에 적용할 배너", AutoSize = true, ForeColor = LauncherUi.ColorMutedText }, 0, 5);
+            bannerText.Dock = DockStyle.Fill;
+            bannerText.AccessibleName = "분석에 사용할 배너 목록";
+            panel.Controls.Add(bannerText, 0, 6);
+            return panel;
         }
 
         private static TableLayoutPanel CreateGrid(int rows)
@@ -3189,7 +3210,7 @@ namespace ReportAutomationLauncher
             grid.RowCount = rows;
             grid.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 148));
             grid.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
-            grid.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 96));
+            grid.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 138));
             for (int i = 0; i < rows; i++)
             {
                 grid.RowStyles.Add(new RowStyle(SizeType.AutoSize));
@@ -3212,6 +3233,7 @@ namespace ReportAutomationLauncher
         private static void AddPathRow(TableLayoutPanel grid, int row, string label, TextBox textBox, string buttonText, EventHandler handler)
         {
             AddLabel(grid, row, label);
+            textBox.AccessibleName = label;
             textBox.Dock = DockStyle.Fill;
             textBox.Margin = new Padding(0, LauncherUi.SpaceXs, LauncherUi.SpaceSm, LauncherUi.SpaceXs);
             grid.Controls.Add(textBox, 1, row);
@@ -4019,10 +4041,10 @@ namespace ReportAutomationLauncher
                 return;
             }
 
-            runButton.Text = "실행 중...";
-            runButton.Enabled = false;
-            closeButton.Enabled = false;
+            reportRunning = true;
             workflowTabs.SelectedIndex = 3;
+            draftReviewTabs.SelectedIndex = 3;
+            UpdateWorkflowStatus();
             resultSummaryText.Text = "실행 중입니다. Excel이 백그라운드에서 열리고 산출 시트를 생성합니다.";
             draftPreviewText.Text = "문장 초안을 기다리는 중입니다.";
             draftPreviewStatusLabel.Text = "실행 중...";
@@ -4080,9 +4102,8 @@ namespace ReportAutomationLauncher
                 {
                     BeginInvoke(new Action(delegate()
                     {
-                        runButton.Text = "실행";
-                        runButton.Enabled = true;
-                        closeButton.Enabled = true;
+                        reportRunning = false;
+                        UpdateWorkflowStatus();
                     }));
                 }
             });
