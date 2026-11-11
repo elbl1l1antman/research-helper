@@ -13,6 +13,10 @@ OPTIONAL_ROLE_STYLES = {
     "header": "표머리행", "banner_horizontal": "표가로배너",
     "banner_vertical": "표세로배너", "base": "표BASE",
 }
+MARGIN_SIDES = ("top", "bottom", "left", "right")
+LINE_GROUPS = ("outer", "inner_horizontal", "inner_vertical", "header_bottom")
+# Hancom 13.0.0.711: map the saved HWPX meaning, not the similar API name.
+HWP_LINE_NAMES = {"none": "None", "solid": "Solid", "dot": "Dash", "dash": "Dot", "double_slim": "DoubleSlim"}
 _DEFAULT_PATH = Path(__file__).with_name("config") / "default_hwp_style_config.json"
 _HEX_COLOR = re.compile(r"^[0-9A-Fa-f]{6}$")
 
@@ -93,6 +97,12 @@ def validate_hwp_style_config(config: Dict[str, Any]) -> Dict[str, Any]:
         style["fill_color"] = _color(style.get("fill_color"), f"{prefix}.fill_color")
         if style.get("vertical_alignment") not in {"top", "center", "bottom"}:
             raise ValueError(f"{prefix}.vertical_alignment: expected top, center, or bottom")
+        if "margins_mm" in style:
+            margins = _object(style["margins_mm"], f"{prefix}.margins_mm")
+            if set(margins) != set(MARGIN_SIDES):
+                raise ValueError(f"{prefix}.margins_mm: expected top, bottom, left, right")
+            for side in MARGIN_SIDES:
+                margins[side] = _number(margins[side], f"{prefix}.margins_mm.{side}", 0, 20)
 
     border = _object(normalized.get("table_border"), "table_border")
     border["inner_width_mm"] = _number(border.get("inner_width_mm"), "table_border.inner_width_mm", 0.1, 5.0)
@@ -101,6 +111,16 @@ def validate_hwp_style_config(config: Dict[str, Any]) -> Dict[str, Any]:
     border.setdefault("show_side_borders", False)
     if not isinstance(border["show_side_borders"], bool):
         raise ValueError("table_border.show_side_borders: expected boolean")
+    if "edges" in border:
+        for group, raw in _object(border["edges"], "table_border.edges").items():
+            field = f"table_border.edges.{group}"
+            if group not in LINE_GROUPS:
+                raise ValueError(f"{field}: unknown edge group")
+            line = _object(raw, field)
+            if not isinstance(line.get("type"), str) or line["type"] not in HWP_LINE_NAMES:
+                raise ValueError(f"{field}.type: unsupported line type")
+            line["width_mm"] = _number(line.get("width_mm"), f"{field}.width_mm", 0.1, 5)
+            line["color"] = _color(line.get("color"), f"{field}.color")
     return normalized
 
 
@@ -117,3 +137,7 @@ def style_name_for_cell_role(role: str, config: Dict[str, Any] | None = None) ->
     if role == "value":
         return "표숫자"
     return "표보기"
+
+
+def margin_units(mm: float) -> int:
+    return int(mm * 7200 / 25.4)

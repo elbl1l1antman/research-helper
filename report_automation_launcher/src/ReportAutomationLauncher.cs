@@ -166,6 +166,15 @@ namespace ReportAutomationLauncher
         {
             { "표머리행", "표배너" }, { "표가로배너", "표배너" }, { "표세로배너", "표보기" }, { "표BASE", "표배너" }
         };
+        internal static readonly string[] MarginSides = { "top", "bottom", "left", "right" };
+        internal static readonly Dictionary<string, string> LineGroups = new Dictionary<string, string>
+        {
+            { "outer", "외곽선" }, { "inner_horizontal", "내부 가로선" }, { "inner_vertical", "내부 세로선" }, { "header_bottom", "머리행 아래선" }
+        };
+        internal static readonly Dictionary<string, string> LineTypes = new Dictionary<string, string>
+        {
+            { "none", "없음" }, { "solid", "실선" }, { "dot", "점선" }, { "dash", "파선" }, { "double_slim", "가는 이중선" }
+        };
         private readonly string path;
         private readonly JavaScriptSerializer serializer = new JavaScriptSerializer();
         private readonly Action<string> recoveryLog;
@@ -294,6 +303,13 @@ namespace ReportAutomationLauncher
                 string vertical = Convert.ToString(Value(style, "vertical_alignment"));
                 if (!(new[] { "top", "center", "bottom" }).Contains(vertical))
                     throw new InvalidOperationException(name + ".vertical_alignment 값이 올바르지 않습니다.");
+                if (style.ContainsKey("margins_mm"))
+                {
+                    string field = name + ".margins_mm";
+                    var margins = Map(style["margins_mm"], field);
+                    RequireExactKeys(margins, MarginSides, field);
+                    foreach (string side in MarginSides) margins[side] = Number(margins, side, 0, 20, field);
+                }
             }
 
             Dictionary<string, object> border = Map(Value(copy, "table_border"), "table_border");
@@ -303,6 +319,16 @@ namespace ReportAutomationLauncher
             if (!border.ContainsKey("show_side_borders")) border["show_side_borders"] = false;
             if (!(border["show_side_borders"] is bool))
                 throw new InvalidOperationException("table_border.show_side_borders 값은 부울이어야 합니다.");
+            if (border.ContainsKey("edges"))
+                foreach (var item in Map(border["edges"], "table_border.edges"))
+                {
+                    string field = "table_border.edges." + item.Key;
+                    if (!LineGroups.ContainsKey(item.Key)) throw new InvalidOperationException(field + " 위치가 올바르지 않습니다.");
+                    var line = Map(item.Value, field);
+                    if (!LineTypes.ContainsKey(Convert.ToString(Value(line, "type")))) throw new InvalidOperationException(field + " 종류가 올바르지 않습니다.");
+                    line["width_mm"] = Number(line, "width_mm", 0.1, 5, field);
+                    line["color"] = ColorValue(line, "color", field);
+                }
             return copy;
         }
 
@@ -1152,6 +1178,8 @@ namespace ReportAutomationLauncher
         private readonly NumericUpDown outerBorder = new NumericUpDown();
         private readonly TextBox borderColor = new TextBox();
         private readonly CheckBox showSideBorders = new CheckBox();
+        private readonly Button importedLines = new Button { AutoSize = true };
+        private Dictionary<string, object> edges = new Dictionary<string, object>();
 
         internal string SelectedPresetName { get; private set; }
 
@@ -1192,6 +1220,7 @@ namespace ReportAutomationLauncher
             top.Controls.Add(new Label { Text = "서식 이름", AutoSize = true, Margin = new Padding(18, 8, 8, 0) });
             nameText.Width = 220;
             top.Controls.Add(nameText);
+            top.Controls.Add(MakeButton("글꼴 선택", ChooseFont));
             top.Controls.Add(MakeButton("템플릿 셀 가져오기", ImportTemplateCell));
             root.Controls.Add(top, 0, 0);
 
@@ -1223,6 +1252,8 @@ namespace ReportAutomationLauncher
             showSideBorders.AutoSize = true;
             showSideBorders.Margin = new Padding(16, 6, 0, 0);
             borderPanel.Controls.Add(showSideBorders);
+            importedLines.Click += ShowImportedLines;
+            borderPanel.Controls.Add(importedLines);
             root.Controls.Add(borderPanel, 0, 4);
 
             var buttons = new FlowLayoutPanel { Dock = DockStyle.Fill, AutoSize = true, FlowDirection = FlowDirection.RightToLeft };
@@ -1274,6 +1305,7 @@ namespace ReportAutomationLauncher
             tableGrid.Columns.Add(new DataGridViewTextBoxColumn { Name = "StyleName", HeaderText = "표 스타일", ReadOnly = true });
             tableGrid.Columns.Add(new DataGridViewTextBoxColumn { Name = "Fill", HeaderText = "배경 RGB" });
             tableGrid.Columns.Add(new DataGridViewComboBoxColumn { Name = "Vertical", HeaderText = "세로 정렬", DataSource = new[] { "top", "center", "bottom" } });
+            tableGrid.Columns.Add(new DataGridViewTextBoxColumn { Name = "Margins", HeaderText = "여백: 상/하/좌/우(mm)", FillWeight = 150 });
         }
 
         private static void ConfigureNumber(NumericUpDown control, decimal minimum, decimal maximum, decimal increment)
@@ -1320,13 +1352,16 @@ namespace ReportAutomationLauncher
             foreach (string styleName in HwpStylePresetStore.TableStyleNames.Concat(HwpStylePresetStore.RoleStyleDefaults.Keys))
             {
                 var style = (Dictionary<string, object>)cells[cells.ContainsKey(styleName) ? styleName : HwpStylePresetStore.RoleStyleDefaults[styleName]];
-                tableGrid.Rows.Add(styleName, style["fill_color"], style["vertical_alignment"]);
+                tableGrid.Rows.Add(styleName, style["fill_color"], style["vertical_alignment"],
+                    style.ContainsKey("margins_mm") ? FormatMargins((Dictionary<string, object>)style["margins_mm"]) : "");
             }
             Dictionary<string, object> border = (Dictionary<string, object>)config["table_border"];
             innerBorder.Value = Convert.ToDecimal(border["inner_width_mm"]);
             outerBorder.Value = Convert.ToDecimal(border["outer_width_mm"]);
             borderColor.Text = Convert.ToString(border["color"]);
             showSideBorders.Checked = (bool)border["show_side_borders"];
+            edges = border.ContainsKey("edges") ? (Dictionary<string, object>)border["edges"] : new Dictionary<string, object>();
+            UpdateImportedLines();
         }
 
         internal Dictionary<string, object> ReadEditor()
@@ -1355,13 +1390,22 @@ namespace ReportAutomationLauncher
             {
                 string name = Convert.ToString(row.Cells["StyleName"].Value);
                 if (!styles.ContainsKey(name)) continue;
-                cells[name] = new Dictionary<string, object>
+                var cell = new Dictionary<string, object>
                 {
                     { "fill_color", CellText(row, "Fill") },
                     { "vertical_alignment", CellText(row, "Vertical") }
                 };
+                string margins = CellText(row, "Margins", true);
+                if (margins.Length > 0)
+                {
+                    string[] values = margins.Split('/');
+                    if (values.Length != 4) throw new InvalidOperationException(name + " 여백은 상/하/좌/우 네 값을 입력하세요.");
+                    cell["margins_mm"] = HwpStylePresetStore.MarginSides.Select((side, i) => new { side, i }).ToDictionary(
+                        item => item.side, item => (object)HwpStylePresetStore.ParseFiniteDouble(values[item.i].Trim(), name + " 여백"));
+                }
+                cells[name] = cell;
             }
-            return HwpStylePresetStore.Normalize(new Dictionary<string, object>
+            var config = new Dictionary<string, object>
             {
                 { "schema_version", "1.0" }, { "preset_name", nameText.Text.Trim() },
                 { "paragraph_styles", styles }, { "table_cell_styles", cells },
@@ -1373,7 +1417,63 @@ namespace ReportAutomationLauncher
                         { "show_side_borders", showSideBorders.Checked }
                     }
                 }
+            };
+            if (edges.Count > 0) ((Dictionary<string, object>)config["table_border"])["edges"] = edges;
+            return HwpStylePresetStore.Normalize(config);
+        }
+
+        private static string FormatMargins(Dictionary<string, object> values)
+        {
+            return string.Join(" / ", HwpStylePresetStore.MarginSides.Select(side => Convert.ToString(values[side])));
+        }
+
+        private void ChooseFont(object sender, EventArgs e)
+        {
+            if (paragraphGrid.CurrentRow == null) return;
+            ExecuteEditorAction(delegate
+            {
+                paragraphGrid.EndEdit();
+                var row = paragraphGrid.CurrentRow;
+                string name = CellText(row, "StyleName");
+                float size = (float)Math.Max(6, Math.Min(30, CellNumber(row, "Size")));
+                FontStyle weight = Convert.ToBoolean(row.Cells["Bold"].Value) ? FontStyle.Bold : FontStyle.Regular;
+                using (var font = new Font(CellText(row, "Font"), size, weight))
+                using (var dialog = new FontDialog { Font = font, FontMustExist = true, ShowEffects = false, AllowVerticalFonts = false, MinSize = 6, MaxSize = 30 })
+                {
+                    if (dialog.ShowDialog(this) != DialogResult.OK) return;
+                    row.Cells["Font"].Value = dialog.Font.Name;
+                    row.Cells["Size"].Value = dialog.Font.SizeInPoints;
+                    row.Cells["Bold"].Value = dialog.Font.Bold;
+                    if (HwpStylePresetStore.RoleStyleDefaults.ContainsKey(name)) row.Cells["Enabled"].Value = true;
+                }
             });
+        }
+
+        private void UpdateImportedLines()
+        {
+            importedLines.Text = "가져온 선 (" + edges.Count + ")";
+        }
+
+        private static string LineText(Dictionary<string, object> line)
+        {
+            return HwpStylePresetStore.LineTypes[Convert.ToString(line["type"])] + " · " + line["width_mm"] + " mm · #" + line["color"];
+        }
+
+        private void ShowImportedLines(object sender, EventArgs e)
+        {
+            if (edges.Count == 0) return;
+            var menu = new ContextMenuStrip();
+            foreach (var pair in edges)
+            {
+                string key = pair.Key;
+                menu.Items.Add(HwpStylePresetStore.LineGroups[key] + ": " + LineText((Dictionary<string, object>)pair.Value) + " · 기본값으로", null, delegate
+                {
+                    edges.Remove(key);
+                    UpdateImportedLines();
+                });
+            }
+            menu.Closed += delegate { menu.Dispose(); };
+            menu.Show(importedLines, new Point(0, importedLines.Height));
         }
 
         private async void ImportTemplateCell(object sender, EventArgs e)
@@ -1420,22 +1520,35 @@ namespace ReportAutomationLauncher
             if (tables.Length == 0) throw new InvalidOperationException("가져올 수 있는 셀 서식이 없습니다.");
             using (var dialog = new Form { Text = target + "에 가져올 셀과 속성", StartPosition = FormStartPosition.CenterParent, Size = new Size(680, 490), MinimumSize = new Size(480, 390) })
             {
-                var layout = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 4, Padding = new Padding(12) };
+                var layout = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 5, Padding = new Padding(12) };
                 layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
                 layout.RowStyles.Add(new RowStyle(SizeType.Percent, 55));
                 layout.RowStyles.Add(new RowStyle(SizeType.Percent, 45));
+                layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
                 layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
                 dialog.Controls.Add(layout);
                 var table = new ComboBox { Dock = DockStyle.Top, DropDownStyle = ComboBoxStyle.DropDownList };
                 var cells = new ListBox { Dock = DockStyle.Fill, HorizontalScrollbar = true };
                 var fields = new CheckedListBox { Dock = DockStyle.Fill, CheckOnClick = true };
+                var lineTarget = new ComboBox { Width = 180, DropDownStyle = ComboBoxStyle.DropDownList };
+                var groupKeys = HwpStylePresetStore.LineGroups.Keys.ToArray();
+                lineTarget.Items.AddRange(groupKeys.Select(key => (object)HwpStylePresetStore.LineGroups[key]).ToArray());
+                var linePanel = new FlowLayoutPanel { Dock = DockStyle.Fill, AutoSize = true };
+                linePanel.Controls.Add(new Label { Text = "선 적용 위치", AutoSize = true, Margin = new Padding(0, 6, 8, 0) });
+                linePanel.Controls.Add(lineTarget);
                 var accept = new Button { Text = "선택 적용", AutoSize = true, Anchor = AnchorStyles.Right };
                 layout.Controls.Add(table, 0, 0);
                 layout.Controls.Add(cells, 0, 1);
                 layout.Controls.Add(fields, 0, 2);
-                layout.Controls.Add(accept, 0, 3);
+                layout.Controls.Add(linePanel, 0, 3);
+                layout.Controls.Add(accept, 0, 4);
                 var labels = new Dictionary<string, string> { { "font_family", "글꼴" }, { "font_size_pt", "크기(pt)" }, { "bold", "굵게" },
                     { "alignment", "가로 정렬" }, { "vertical_alignment", "세로 정렬" }, { "fill_color", "배경 RGB" } };
+                labels.Add("margins_mm", "여백(상/하/좌/우 mm)");
+                labels.Add("line_top", "위쪽 선");
+                labels.Add("line_bottom", "아래쪽 선");
+                labels.Add("line_left", "왼쪽 선");
+                labels.Add("line_right", "오른쪽 선");
                 var keys = new List<string>();
                 Dictionary<string, object>[] anchors = null;
                 Dictionary<string, object> style = null;
@@ -1448,7 +1561,10 @@ namespace ReportAutomationLauncher
                     foreach (var item in labels.Where(item => style.ContainsKey(item.Key)))
                     {
                         keys.Add(item.Key);
-                        fields.Items.Add(item.Value + ": " + Convert.ToString(style[item.Key]));
+                        object value = style[item.Key];
+                        string detail = item.Key.StartsWith("line_", StringComparison.Ordinal) ? LineText((Dictionary<string, object>)value)
+                            : item.Key == "margins_mm" ? FormatMargins((Dictionary<string, object>)value) : Convert.ToString(value);
+                        fields.Items.Add(item.Value + ": " + detail);
                     }
                 };
                 table.SelectedIndexChanged += delegate
@@ -1458,17 +1574,26 @@ namespace ReportAutomationLauncher
                     cells.Items.AddRange(anchors.Select(c => (object)string.Format("{0}행 {1}열 ({2}×{3})  {4}", c["row"], c["col"], c["rowspan"], c["colspan"], c["text"])).ToArray());
                     cells.SelectedIndex = 0;
                 };
+                Dictionary<string, object> result = null;
                 accept.Click += delegate
                 {
-                    if (fields.CheckedIndices.Count > 0) dialog.DialogResult = DialogResult.OK;
-                    else MessageBox.Show(dialog, "가져올 속성을 하나 이상 선택하세요.");
+                    if (fields.CheckedIndices.Count == 0) { MessageBox.Show(dialog, "가져올 속성을 하나 이상 선택하세요."); return; }
+                    var picked = fields.CheckedIndices.Cast<int>().Select(i => keys[i]).ToArray();
+                    var lines = picked.Where(key => key.StartsWith("line_", StringComparison.Ordinal)).ToArray();
+                    if (lines.Length > 1 || (lines.Length == 1 && lineTarget.SelectedIndex < 0))
+                    {
+                        MessageBox.Show(dialog, "기준 선 하나와 적용 위치를 선택하세요.");
+                        return;
+                    }
+                    result = picked.Except(lines).ToDictionary(key => key, key => style[key]);
+                    if (lines.Length == 1) result["edge"] = new Dictionary<string, object> { { groupKeys[lineTarget.SelectedIndex], style[lines[0]] } };
+                    dialog.DialogResult = DialogResult.OK;
                 };
                 table.Items.AddRange(tables.Select(t => (object)string.Format("표 {0} ({1}행 × {2}열)", t["table_index"], t["rows"], t["cols"])).ToArray());
                 table.SelectedIndex = 0;
                 LauncherUi.ApplyToForm(dialog);
                 LauncherUi.ApplyTree(dialog);
-                return dialog.ShowDialog(this) == DialogResult.OK
-                    ? fields.CheckedIndices.Cast<int>().ToDictionary(i => keys[i], i => style[keys[i]]) : null;
+                return dialog.ShowDialog(this) == DialogResult.OK ? result : null;
             }
         }
 
@@ -1483,7 +1608,11 @@ namespace ReportAutomationLauncher
             }
             if (values.ContainsKey("fill_color")) cell.Cells["Fill"].Value = values["fill_color"];
             if (values.ContainsKey("vertical_alignment")) cell.Cells["Vertical"].Value = values["vertical_alignment"];
-            if (HwpStylePresetStore.RoleStyleDefaults.ContainsKey(target)) paragraph.Cells["Enabled"].Value = true;
+            if (values.ContainsKey("margins_mm")) cell.Cells["Margins"].Value = FormatMargins((Dictionary<string, object>)values["margins_mm"]);
+            if (values.ContainsKey("edge"))
+                foreach (var line in (Dictionary<string, object>)values["edge"]) edges[line.Key] = line.Value;
+            UpdateImportedLines();
+            if (values.Keys.Any(key => key != "edge") && HwpStylePresetStore.RoleStyleDefaults.ContainsKey(target)) paragraph.Cells["Enabled"].Value = true;
         }
 
         private static string CellText(DataGridViewRow row, string name, bool allowEmpty = false)
@@ -5963,15 +6092,24 @@ namespace ReportAutomationLauncher
                 var store = new HwpStylePresetStore(Path.Combine(directory, "presets.json"));
                 using (var dialog = new HwpStylePresetDialog(store, HwpStylePresetStore.BuiltInName))
                 {
-                    dialog.ApplyTemplateCell("표머리행", new Dictionary<string, object> { { "fill_color", "DDEBF7" }, { "font_size_pt", 11.0 } });
+                    dialog.ApplyTemplateCell("표머리행", new Dictionary<string, object> {
+                        { "fill_color", "DDEBF7" }, { "font_size_pt", 11.0 },
+                        { "margins_mm", new Dictionary<string, object> { { "top", 0.5 }, { "bottom", 0.5 }, { "left", 1.0 }, { "right", 2.0 } } },
+                        { "edge", new Dictionary<string, object> { { "header_bottom", new Dictionary<string, object> {
+                            { "type", "dot" }, { "width_mm", 0.4 }, { "color", "1F4E79" } } } } }
+                    });
                     var edited = dialog.ReadEditor();
                     edited["preset_name"] = "역할 검증";
                     store.Save(edited, false);
                     var saved = store.Get("역할 검증");
                     var cells = (Dictionary<string, object>)saved["table_cell_styles"];
                     var styles = (Dictionary<string, object>)saved["paragraph_styles"];
+                    var header = (Dictionary<string, object>)cells["표머리행"];
+                    var savedBorder = (Dictionary<string, object>)saved["table_border"];
                     if (cells.ContainsKey("표가로배너") || cells.ContainsKey("표세로배너") ||
-                        Convert.ToString(((Dictionary<string, object>)cells["표머리행"])["fill_color"]) != "DDEBF7" ||
+                        Convert.ToString(header["fill_color"]) != "DDEBF7" ||
+                        Convert.ToDouble(((Dictionary<string, object>)header["margins_mm"])["right"]) != 2.0 ||
+                        Convert.ToString(((Dictionary<string, object>)((Dictionary<string, object>)savedBorder["edges"])["header_bottom"])["type"]) != "dot" ||
                         Convert.ToString(((Dictionary<string, object>)cells["표배너"])["fill_color"]) != "E7E7E7" ||
                         Convert.ToDouble(((Dictionary<string, object>)styles["표머리행"])["font_size_pt"]) != 11.0)
                         throw new InvalidOperationException("Self-check failed: selected role properties did not round-trip independently");

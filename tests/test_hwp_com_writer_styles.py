@@ -224,6 +224,20 @@ def insert_fake_clipboard_table(table):
 
 
 class HwpComWriterStyleTests(unittest.TestCase):
+    def test_custom_header_line_is_written_on_both_shared_edges(self):
+        config = copy.deepcopy(DEFAULT_HWP_STYLE_CONFIG)
+        config["table_border"]["edges"] = {"header_bottom": {"type": "dot", "width_mm": 0.4, "color": "1F4E79"}}
+        config["table_cell_styles"]["표배너"]["margins_mm"] = {"top": 0.5, "bottom": 0.5, "left": 1, "right": 2}
+        with patch.object(FakeHwp, "HwpLineType", staticmethod(lambda name: {"Solid": 1, "Dash": 2}[name])):
+            header, value = FakeHwp(), FakeHwp()
+            apply_cell_appearance(header, config, "표배너", 1, 1, 3, 3, {"warnings": []}, data_start_row=1, header_edge_row=2)
+            apply_cell_appearance(value, config, "표숫자", 2, 1, 3, 3, {"warnings": []}, data_start_row=1, header_edge_row=2)
+        self.assertIn(("border_type", 1, 1, 1, 2), header.events)
+        self.assertIn(("border_type", 1, 1, 2, 1), value.events)
+        margin = header.HParameterSet.HShapeObject.ShapeTableCell
+        self.assertEqual((margin.HasMargin, margin.MarginLeft, margin.MarginRight, margin.MarginTop), (1, 283, 566, 141))
+        self.assertFalse(hasattr(value.HParameterSet.HShapeObject.ShapeTableCell, "HasMargin"))
+
     def test_body_adds_one_metadata_row_per_fragment_without_mutating_package(self):
         from tests.test_hwp_table_layout import sample_table
         table = sample_table()

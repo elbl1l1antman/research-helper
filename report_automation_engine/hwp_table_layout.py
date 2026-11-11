@@ -6,8 +6,10 @@ import unicodedata
 
 try:
     from .report_table_matrix import resolve_table_metadata
+    from .hwp_style_config import margin_units, style_name_for_cell_role
 except ImportError:
     from report_table_matrix import resolve_table_metadata
+    from hwp_style_config import margin_units, style_name_for_cell_role
 
 
 def _text_units(text):
@@ -54,7 +56,7 @@ def prepare_report_table(table):
     return result
 
 
-def plan_table_parts(table, body_width, font_size_pt):
+def plan_table_parts(table, body_width, font_size_pt, style_config=None):
     """Repeat left labels/BASE, split data columns, and project header merges.
 
     Header banners may be repeated across fragments. Body merges are atomic:
@@ -67,6 +69,14 @@ def plan_table_parts(table, body_width, font_size_pt):
         raise ValueError("표 matrix가 비어 있거나 행별 열 수가 다릅니다.")
     count = len(matrix[0])
     header_rows = _header_row_count(matrix)
+    cell_styles = (style_config or {}).get("table_cell_styles", {})
+
+    def horizontal_margin(cell, row):
+        role = cell.get("role")
+        if role == "banner_horizontal" and row == header_rows - 1:
+            role = "header"
+        margins = cell_styles.get(style_name_for_cell_role(role, style_config), {}).get("margins_mm")
+        return sum(margin_units(margins[side]) for side in ("left", "right")) if margins else 0
     prefix = max((col + 1 for row in matrix for col, cell in enumerate(row) if cell.get("role") in {"stub", "banner_vertical"} and not cell.get("covered_by")), default=0)
     while prefix < count and any(row[prefix].get("role") == "base" for row in matrix):
         prefix += 1
@@ -80,7 +90,9 @@ def plan_table_parts(table, body_width, font_size_pt):
             units = max(4, min(text_width, 4 if col == 0 and prefix > 1 else 9))
         else:
             units = max(4, text_width, min(5, max((_text_units(cell.get("display_text", "")) for cell in labels), default=0)))
-        widths.append(math.ceil(units * font_size_pt * 100 + 600))
+        padding = max((horizontal_margin(row[col], index) for index, row in enumerate(matrix)
+                       if not row[col].get("covered_by") and int(row[col].get("colspan") or 1) == 1), default=0)
+        widths.append(math.ceil(units * font_size_pt * 100 + max(600, padding)))
 
     # A small clearance avoids clipboard pixel rounding and outer border clipping.
     budget = int(body_width) - 500
@@ -130,6 +142,10 @@ def plan_table_parts(table, body_width, font_size_pt):
         minimum = [widths[col] for col in columns]
         allocated = [int(value * budget / sum(minimum)) for value in minimum]
         allocated[-1] += budget - sum(allocated)
+        for row_index, row in enumerate(part["matrix"]):
+            for col_index, cell in enumerate(row):
+                if not cell.get("covered_by") and horizontal_margin(cell, row_index) >= sum(allocated[col_index:col_index + cell["colspan"]]):
+                    raise ValueError(f"{row_index + 1}행 {col_index + 1}열: 셀 여백을 빼면 글자가 들어갈 폭이 없습니다.")
         part.update(source_columns=[col + 1 for col in columns], repeated_columns=list(range(1, prefix + 1)),
                     column_widths_hwpunit=allocated, body_width_hwpunit=int(body_width),
                     part_index=index, part_count=len(selections), layout_prepared=True)

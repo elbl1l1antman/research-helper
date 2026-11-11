@@ -73,6 +73,9 @@
 
 **Files:** `hwp_com_writer.py`, `hwp_table_layout.py`, `hwp_style_config.py`, 기본 스타일 JSON, `ReportAutomationLauncher.cs`, `tests/test_hwp_com_writer_styles.py`, `tests/test_hwp_table_layout.py`.
 
+[선·여백 적용과 검증 기록](../../hwp_role_styles.md). 역할별 여백과 선 그룹은 구현했다.
+COM 명령 실패 시 후속 작업을 막는 보강과 실제 다페이지 보고서 검수는 별도다.
+
 - [ ] [이전 계획의 Task 1](2026-11-11-hwp-table-formatting-integration.md)을 수행한다. 입력·선택·병합이 실패하면 후속 입력과 저장을 막는다. 다른 표에 들어가거나 불확실한 붙여넣기 상태에서 대체 표를 추가하지 않는다.
 - [ ] 프리셋에 `outer`, `inner_horizontal`, `inner_vertical`, `header_bottom` 선 그룹을 둔다. 각 그룹은 선 종류·굵기(mm)·색을 지정할 수 있다. 기본은 기존 선 정책을 유지한다. 같은 공유 경계에서는 `header_bottom`이 내부 가로선보다 우선하고, 양쪽 셀에 같은 결정을 적용한다. 좌우 외곽선 숨김과 BASE 안내행 무테두리는 더 높은 우선순위다. 셀 배경을 먼저 적용하고 테두리 적용이 그 배경을 지우지 않는지 확인한다.
 - [ ] 셀 여백은 상/하/좌/우 mm로 설정한다. 지정하지 않은 경우 기존 여백 유지. 너비 계획에서 `셀 전체 폭 - 좌우 여백`을 내용 폭으로 사용한다. 표 생성의 열 폭 산식과 클립보드 임시 표의 줄바꿈 높이를 같은 결정값으로 계산한다. 여백을 뺀 값이 0 이하인 셀은 HWP에 삽입하기 전에 차단한다. 병합 셀은 병합 전체 폭을 사용한다.

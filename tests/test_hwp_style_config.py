@@ -19,6 +19,20 @@ from report_automation_engine.hwp_style_config import (
 
 
 class HwpStyleConfigTests(unittest.TestCase):
+    def test_imported_lines_and_margins_are_validated(self):
+        config = copy.deepcopy(DEFAULT_HWP_STYLE_CONFIG)
+        config["table_border"]["edges"] = {"header_bottom": {"type": "double_slim", "width_mm": 0.4, "color": "1f4e79"}}
+        config["table_cell_styles"]["표숫자"]["margins_mm"] = {"top": 0.5, "bottom": 0.5, "left": 1, "right": 2}
+        result = validate_hwp_style_config(config)
+        self.assertEqual(result["table_border"]["edges"]["header_bottom"]["color"], "1F4E79")
+        config["table_cell_styles"]["표숫자"]["margins_mm"]["right"] = -1
+        with self.assertRaisesRegex(ValueError, "margins_mm.right"):
+            validate_hwp_style_config(config)
+        config["table_cell_styles"]["표숫자"].pop("margins_mm")
+        config["table_border"]["edges"]["header_bottom"]["type"] = "guess"
+        with self.assertRaisesRegex(ValueError, "header_bottom.type"):
+            validate_hwp_style_config(config)
+
     def test_optional_role_style_keeps_legacy_fallback_and_requires_pair(self):
         config = copy.deepcopy(DEFAULT_HWP_STYLE_CONFIG)
         config["paragraph_styles"]["표머리행"] = {**config["paragraph_styles"]["표배너"], "font_size_pt": 11}

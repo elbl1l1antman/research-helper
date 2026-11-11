@@ -74,6 +74,25 @@ def write_fixture(path: Path, header: bytes | None = HEADER_XML.encode("utf-8"))
 
 
 class HwpxStyleRegistryTests(unittest.TestCase):
+    def test_cell_import_reads_effective_margin_and_saved_line_type(self):
+        from report_automation_engine.hwp_template_probe import inspect_cell_styles
+
+        header = HEADER_XML.replace('<hh:borderFill id="1"/>', '<hh:borderFill id="1"><hh:bottomBorder type="DOT" width="0.4 mm" color="#1F4E79"/></hh:borderFill>')
+        section = ('<section><tbl rowCnt="1" colCnt="2"><inMargin left="283" right="283" top="141" bottom="141"/>'
+                   '<tr><tc hasMargin="0" borderFillIDRef="1"><subList vertAlign="CENTER"/><cellAddr rowAddr="0" colAddr="0"/>'
+                   '<cellSpan rowSpan="1" colSpan="1"/><cellMargin left="999" right="999" top="999" bottom="999"/></tc>'
+                   '<tc hasMargin="1" borderFillIDRef="1"><subList vertAlign="CENTER"/><cellAddr rowAddr="0" colAddr="1"/>'
+                   '<cellSpan rowSpan="1" colSpan="1"/><cellMargin left="283" right="566" top="226" bottom="340"/></tc></tr></tbl></section>')
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory) / "template.hwpx"
+            with zipfile.ZipFile(source, "w") as archive:
+                archive.writestr("Contents/header.xml", header)
+                archive.writestr("Contents/section0.xml", section)
+            first, second = inspect_cell_styles(source)[0]["cells"]
+            self.assertEqual(first["style"]["line_bottom"], {"type": "dot", "width_mm": 0.4, "color": "1F4E79"})
+            for item, units in [(first, [283, 283, 141, 141]), (second, [283, 566, 226, 340])]:
+                self.assertEqual([int(item["style"]["margins_mm"][side] * 7200 / 25.4) for side in ("left", "right", "top", "bottom")], units)
+
     def test_cell_import_reads_selected_anchor_not_table_mode(self):
         from report_automation_engine.hwp_template_probe import inspect_cell_styles
 

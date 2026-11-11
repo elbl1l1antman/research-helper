@@ -11,6 +11,7 @@ import argparse
 import collections
 import gc
 import json
+import math
 import re
 import shutil
 import time
@@ -21,8 +22,10 @@ from xml.etree import ElementTree as ET
 
 try:
     from .hwp_com_writer import close_hwp, create_hwp_object, now, save_as_hwpx, set_visible, write_json
+    from .hwp_style_config import HWP_LINE_NAMES, MARGIN_SIDES
 except ImportError:  # pragma: no cover
     from hwp_com_writer import close_hwp, create_hwp_object, now, save_as_hwpx, set_visible, write_json  # type: ignore
+    from hwp_style_config import HWP_LINE_NAMES, MARGIN_SIDES
 
 
 def probe_templates(paths: List[str | Path], output_dir: str | Path, visible: bool = False, table_detail_limit: int = 30) -> Dict[str, Any]:
@@ -271,6 +274,7 @@ def inspect_cell_styles(path: Path) -> list[dict]:
             root = ET.fromstring(archive.read(section))
             for table in descendants_by_local_name(root, "tbl"):
                 cells = []
+                default_margin = first_child_by_local_name(table, "inMargin")
                 for row in children_by_local_name(table, "tr"):
                     for cell in children_by_local_name(row, "tc"):
                         addr = first_child_by_local_name(cell, "cellAddr")
@@ -290,9 +294,25 @@ def inspect_cell_styles(path: Path) -> list[dict]:
                         vertical = body.get("vertAlign", "").lower()
                         if vertical in {"top", "center", "bottom"}:
                             style["vertical_alignment"] = vertical
-                        color = fills.get(cell.get("borderFillIDRef"), {}).get("fill_color", "").removeprefix("#")
+                        appearance = fills.get(cell.get("borderFillIDRef"), {})
+                        color = appearance.get("fill_color", "").removeprefix("#")
                         if re.fullmatch(r"[0-9A-Fa-f]{6}", color):
                             style["fill_color"] = color.upper()
+                        for side in MARGIN_SIDES:
+                            line = appearance.get("borders", {}).get(side + "Border", {})
+                            kind = line.get("type", "").lower()
+                            shade = line.get("color", "").removeprefix("#")
+                            measure = re.fullmatch(r"(\d+(?:\.\d+)?)\s*mm", line.get("width", ""))
+                            if kind in HWP_LINE_NAMES and measure and re.fullmatch(r"[0-9A-Fa-f]{6}", shade):
+                                width = float(measure.group(1))
+                                if 0.1 <= width <= 5:
+                                    style["line_" + side] = {"type": kind, "width_mm": width, "color": shade.upper()}
+                        margin = first_child_by_local_name(cell, "cellMargin") if cell.get("hasMargin") == "1" else default_margin
+                        if margin is not None and all(margin.get(side, "").isdecimal() for side in MARGIN_SIDES):
+                            # Round upward so the desktop API's truncation preserves the stored unit.
+                            mm = {side: math.ceil(int(margin.get(side)) * 25.4 / 7200 * 10000) / 10000 for side in MARGIN_SIDES}
+                            if max(mm.values()) <= 20:
+                                style["margins_mm"] = mm
                         if style:
                             cells.append({"row": int(addr.get("rowAddr")) + 1, "col": int(addr.get("colAddr")) + 1,
                                           "rowspan": int(span.get("rowSpan")), "colspan": int(span.get("colSpan")),

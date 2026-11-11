@@ -20,14 +20,14 @@ from pathlib import Path
 from typing import Any, Dict, List
 
 try:
-    from .hwp_style_config import REQUIRED_STYLE_NAMES, load_hwp_style_config, style_name_for_cell_role
+    from .hwp_style_config import HWP_LINE_NAMES, REQUIRED_STYLE_NAMES, load_hwp_style_config, margin_units, style_name_for_cell_role
     from .hwpx_style_registry import register_named_styles
     from .report_package import split_narrative_blocks
     from .report_table_matrix import resolve_table_metadata
     from .hwp_table_layout import plan_table_parts, prepare_report_table, _text_units
     from .hwp_page_setup import normalize_page_setup, apply_page_setup
 except ImportError:
-    from hwp_style_config import REQUIRED_STYLE_NAMES, load_hwp_style_config, style_name_for_cell_role
+    from hwp_style_config import HWP_LINE_NAMES, REQUIRED_STYLE_NAMES, load_hwp_style_config, margin_units, style_name_for_cell_role
     from hwpx_style_registry import register_named_styles
     from report_package import split_narrative_blocks
     from report_table_matrix import resolve_table_metadata
@@ -555,12 +555,24 @@ def write_body(
                     # Resolve metadata before splitting so every fragment carries the same unit.
                     metadata = resolve_table_metadata(table)
                     source = {**table, "base_label": metadata["base_label"], "unit": metadata["unit"]}
-                    parts = [prepare_report_table(part) for part in plan_table_parts(source, width, font_size)]
+                    parts = [prepare_report_table(part) for part in plan_table_parts(source, width, font_size, style_config)]
                     if "확인 필요" in (metadata["base_label"], metadata["unit"]):
                         report["warnings"].append(f"{key}: BASE 조건 또는 단위를 확인해 주세요.")
                     for warning in dict.fromkeys(part["header_repeat_warning"] for part in parts if part.get("header_repeat_warning")):
                         report["warnings"].append(f"{key}: {warning}")
                 else:
+                    if style_config and any("margins_mm" in item for item in style_config["table_cell_styles"].values()):
+                        rows = table_rows_for_hwp(table)
+                        count = len(rows[0])
+                        size, remainder = divmod(width - 500, count)
+                        for row in range(len(rows)):
+                            for col in range(count):
+                                name = style_name_for_cell_role(table_cell_role(table, row, col), style_config)
+                                margins = style_config["table_cell_styles"][name].get("margins_mm", {})
+                                if size <= sum(margin_units(margins.get(side, 0)) for side in ("left", "right")):
+                                    raise ValueError(f"{row + 1}행 {col + 1}열: 셀 여백을 빼면 글자가 들어갈 폭이 없습니다.")
+                        table = {**table, "column_widths_hwpunit": [size] * (count - 1) + [size + remainder],
+                                 "body_width_hwpunit": width, "layout_prepared": True}
                     parts = [table]
             except ValueError as exc:
                 raise HwpWriterError("layout", "table_split", f"{key}: {exc}") from exc
@@ -771,7 +783,7 @@ def insert_hwp_table(
                         col_idx,
                         len(rows),
                         len(row),
-                        report, cell_role=role,
+                        report, cell_role=role, header_edge_row=1 if not (table or {}).get("matrix") else None,
                     )
                 if not (row_idx == len(rows) - 1 and col_idx == len(row) - 1):
                     run_action(hwp, "TableRightCell", report, "table")
@@ -1179,11 +1191,11 @@ def apply_cell_appearance(
     colspan: int = 1,
     cell_role: str = "",
     data_start_row: int = 0,
+    header_edge_row: int | None = None,
 ) -> None:
     cell_style = config["table_cell_styles"][style_name]
     border = config["table_border"]
-    inner = border_width_code(float(border["inner_width_mm"]))
-    outer = border_width_code(float(border["outer_width_mm"]))
+    edges = border.get("edges", {})
     report["stage"] = "style"
     report["action"] = "CellBorderFill"
     try:
@@ -1206,7 +1218,6 @@ def apply_cell_appearance(
         # Repeated headers need their own bottom edge on continuation pages.
         set_parameter_item(params, "NoNeighborCell", int(metadata or row_index == data_start_row))
         selected = params.SelCellsBorderFill
-        color = hwp_color(hwp, border["color"])
         solid = hwp.HwpLineType("Solid")
         # BorderFill writes the fill too; selected-cell defaults can erase CellFill.
         for target in (params, selected):
@@ -1216,20 +1227,40 @@ def apply_cell_appearance(
             set_parameter_item(fill, "WinBrushHatchColor", 0)
             set_parameter_item(fill, "WinBrushFaceStyle", -1)
             set_parameter_item(fill, "WindowsBrush", 1)
-        for side, width in {
-            "Left": outer if col_index == 0 else inner,
-            "Right": outer if col_index + colspan == col_count else inner,
-            "Top": outer if row_index == data_start_row else inner,
-            "Bottom": outer if row_index + rowspan == row_count else inner,
+        for side, perimeter in {
+            "Left": col_index == 0,
+            "Right": col_index + colspan == col_count,
+            "Top": row_index == data_start_row,
+            "Bottom": row_index + rowspan == row_count,
         }.items():
+            vertical = side in {"Left", "Right"}
+            group = "outer" if perimeter else "inner_vertical" if vertical else "inner_horizontal"
+            line = edges.get(group)
+            if not vertical and not perimeter and header_edge_row == (row_index if side == "Top" else row_index + rowspan):
+                line = edges.get("header_bottom", line)
+            hidden = metadata or (vertical and perimeter and not border.get("show_side_borders", False))
+            line_type = solid
+            if hidden or (line and line["type"] == "none"):
+                line_type = 0
+            elif line:
+                line_type = hwp.HwpLineType(HWP_LINE_NAMES[line["type"]])
+            width = border_width_code(line["width_mm"] if line else border["outer_width_mm" if perimeter else "inner_width_mm"])
+            color = hwp_color(hwp, line["color"] if line else border["color"])
             for target in (params, selected):
-                outside = (side == "Left" and col_index == 0) or (side == "Right" and col_index + colspan == col_count)
-                hidden = metadata or (outside and not border.get("show_side_borders", False))
-                set_parameter_item(target, f"BorderType{side}", 0 if hidden else solid)
+                set_parameter_item(target, f"BorderType{side}", line_type)
                 set_parameter_item(target, f"BorderWidth{side}", width)
                 set_parameter_item(target, f"BorderColor{side}", color)
         if not hwp.HAction.Execute("CellBorderFill", params.HSet):
             raise RuntimeError("CellBorderFill action returned False")
+        if not metadata and (margins := cell_style.get("margins_mm")) is not None:
+            params = hwp.HParameterSet.HShapeObject
+            hwp.HAction.GetDefault("TablePropertyDialog", params.HSet)
+            cell = params.ShapeTableCell
+            set_parameter_item(cell, "HasMargin", 1)
+            for side, mm in margins.items():
+                set_parameter_item(cell, "Margin" + side.title(), margin_units(mm))
+            if not hwp.HAction.Execute("TablePropertyDialog", params.HSet):
+                raise HwpWriterError("style", "TablePropertyDialog", f"셀 여백 적용 실패: {style_name}")
         run_action(hwp, "Cancel", report, "style")
         horizontal = "Right" if metadata else str(config["paragraph_styles"][style_name]["alignment"]).title()
         vertical = str(cell_style["vertical_alignment"]).title()
@@ -1472,16 +1503,21 @@ def prepare_layout_range(workbook, table, style_config):
         row, col = merged["row"], merged["col"]
         sheet.Range(sheet.Cells(row, col), sheet.Cells(row + merged["rowspan"] - 1, col + merged["colspan"] - 1)).Merge()
     heights = [15.0] * rows
-    for row in table["matrix"]:
-        for cell in row:
+    for row_index, row in enumerate(table["matrix"]):
+        for col_index, cell in enumerate(row):
             if cell.get("covered_by"):
                 continue
             first = cell["col"] - 1
-            available = sum(widths[first:first + cell["colspan"]]) / 100 - 6
+            role = table_cell_role(table, row_index, col_index)
+            name = style_name_for_cell_role(role, style_config)
+            margins = style_config["table_cell_styles"][name].get("margins_mm") if style_config and role != "metadata" else None
+            horizontal = sum(margin_units(margins[side]) for side in ("left", "right")) / 100 if margins else 6
+            vertical = sum(margin_units(margins[side]) for side in ("top", "bottom")) / 100 if margins else 4
+            available = sum(widths[first:first + cell["colspan"]]) / 100 - horizontal
             if available <= 0:
                 raise ValueError("셀 너비가 여백보다 작습니다.")
             lines = max(1, math.ceil(_text_units(cell.get("display_text", "")) * font_size / available))
-            height = (lines * font_size * 1.6 + 4) / cell["rowspan"]
+            height = (lines * font_size * 1.6 + vertical) / cell["rowspan"]
             if height > 409:
                 raise ValueError("셀 내용이 Excel 임시 표의 최대 행 높이를 초과합니다.")
             for index in range(cell["row"] - 1, cell["row"] - 1 + cell["rowspan"]):
@@ -1598,6 +1634,7 @@ def apply_table_matrix_styles(
                 continue
             cells.append((row_index, col_index, value, len(row), int(cell.get("rowspan") or 1), int(cell.get("colspan") or 1)))
     visited_lists = set()
+    visual_header = table.get("visual_header_row")
     for position, (row_index, col_index, value, col_count, rowspan, colspan) in enumerate(cells):
         visited_lists.add(int(hwp.GetPos()[0]))
         style_name = style_name_for_cell_role(table_cell_role(table, row_index, col_index), style_config)
@@ -1624,6 +1661,7 @@ def apply_table_matrix_styles(
             colspan=colspan,
             cell_role=table_cell_role(table, row_index, col_index),
             data_start_row=int(table.get("data_start_row", 0)),
+            header_edge_row=visual_header + 1 if visual_header is not None else None,
         )
         if "header_row_count" in table:
             apply_cell_header(hwp, row_index + rowspan <= table["header_row_count"], report)

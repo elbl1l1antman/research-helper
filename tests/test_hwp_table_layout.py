@@ -24,6 +24,14 @@ def sample_table():
 
 
 class TableLayoutTests(unittest.TestCase):
+    def test_large_margins_are_included_before_allocating_columns(self):
+        from report_automation_engine.hwp_style_config import DEFAULT_HWP_STYLE_CONFIG
+
+        config = copy.deepcopy(DEFAULT_HWP_STYLE_CONFIG)
+        config["table_cell_styles"]["표숫자"]["margins_mm"] = {"top": 1, "bottom": 1, "left": 20, "right": 20}
+        with self.assertRaisesRegex(ValueError, "본문 폭"):
+            plan_table_parts(sample_table(), 17000, 8.5, config)
+
     def test_header_only_merged_banner_keeps_existing_split_behavior(self):
         table = sample_table()
         table["matrix"] = table["matrix"][:1]
