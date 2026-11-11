@@ -22,11 +22,21 @@ def resolve_table_metadata(table: Dict[str, Any], metadata: Dict[str, Any] | Non
     supplied = metadata or {}
     base = str(supplied.get("base_label") or table.get("base_label") or "").strip()
     unit = str(supplied.get("unit") or table.get("unit") or "").strip()
-    for label in ([base] if base else labels):
-        match = re.search(r"BASE\s*[:：]\s*(.*?)(?=\s*(?:[,|]\s*)?단위\s*[:：]|\]|$)", label, re.I)
-        if match:
-            base = match.group(1).strip(" ,|")
-            break
+    base_pattern = r"BASE\s*[:：]\s*(.*?)(?=\s*(?:[,|]\s*)?단위\s*[:：]|\]|$)"
+    match = re.search(base_pattern, base, re.I)
+    if match:
+        base = match.group(1).strip(" ,|")
+    elif not supplied.get("base_label"):
+        for label in labels:
+            match = re.match(base_pattern, label.strip(" ["), re.I)
+            if match:
+                explicit = match.group(1).strip(" ,|")
+                # Older table lists may concatenate every answer label after the BASE condition.
+                suffix = base[len(explicit):].lstrip() + " "
+                repeats_label = any(value.strip() and suffix.startswith(value.strip() + " ") for value in labels if value != label)
+                if explicit and (not base or (base.startswith(explicit + " ") and repeats_label)):
+                    base = explicit
+                break
     if not unit:
         units = []
         for label in labels:

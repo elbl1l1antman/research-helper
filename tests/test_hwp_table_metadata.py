@@ -46,6 +46,15 @@ class TableMetadataTests(unittest.TestCase):
             self.assertEqual(table["row_count"], 2)
             self.assertEqual(table["matrix"][1][1]["display_text"], "63.3%")
 
+    def test_source_base_does_not_repeat_answer_headers(self):
+        table = {"base_label": "전체 응답자 보기1 보기2",
+                 "matrix": [[{"role": "base", "display_text": "BASE:전체 응답자"},
+                             {"role": "banner_horizontal", "display_text": "보기1"}]]}
+        self.assertEqual(self.resolve(table)["base_label"], "전체 응답자")
+        self.assertEqual(self.resolve(table, {"base_label": "전체 응답자 별도 기준"})["base_label"], "전체 응답자 별도 기준")
+        table["base_label"] = "전체 응답자 (n=120)"
+        self.assertEqual(self.resolve(table)["base_label"], "전체 응답자 (n=120)")
+
     def test_render_row_is_merged_and_source_table_remains_unchanged(self):
         self.assertTrue(hasattr(layout, "prepare_report_table"))
         table = layout.plan_table_parts(sample_table(), 18000, 8.5)[0]

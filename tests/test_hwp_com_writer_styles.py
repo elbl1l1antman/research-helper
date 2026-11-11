@@ -14,6 +14,7 @@ from report_automation_engine.hwp_com_writer import (
     apply_cell_appearance,
     apply_table_matrix_styles,
     apply_named_style,
+    compact_row_heights,
     finalize_hwp_resources,
     insert_clipboard_table,
     insert_hwp_table,
@@ -335,6 +336,27 @@ class HwpComWriterStyleTests(unittest.TestCase):
         verify_table_width(control, table)
         self.assertEqual(table["actual_width_hwpunit"], 39500)
         self.assertEqual(position, {"TreatAsChar": 0, "HorzRelTo": 2, "HorzAlign": 0, "HorzOffset": 0})
+        table["header_row_count"] = 2
+        verify_table_width(control, table)
+        self.assertEqual(position["PageBreak"], 2)
+        self.assertEqual(position["RepeatHeader"], 1)
+        self.assertLess(position["CellMarginTop"], 141)
+
+    def test_compact_heights_follow_role_and_expand_only_where_needed(self):
+        config = copy.deepcopy(DEFAULT_HWP_STYLE_CONFIG)
+        config["paragraph_styles"]["표배너"].update(font_size_pt=11, line_spacing_percent=130)
+        config["paragraph_styles"]["표숫자"].update(font_size_pt=8.5, line_spacing_percent=110)
+        matrix = [[{"row": row, "col": 1, "rowspan": 1, "colspan": 1, "role": role, "display_text": value}]
+                  for row, (role, value) in enumerate([
+                      ("banner_horizontal", "분류"), ("banner_horizontal", "구분"),
+                      ("value", "3.3"), ("banner_horizontal", "긴 문항입니다 " * 6)
+                  ], 1)]
+        table = {"matrix": matrix, "row_count": len(matrix), "column_widths_hwpunit": [6500]}
+        first, second, number, wrapped = compact_row_heights(table, config)
+        self.assertEqual(first, second)
+        self.assertLess(number, first)
+        self.assertLess(number, 12)
+        self.assertGreater(wrapped, first)
 
     def test_body_width_respects_page_direction_margins_and_binding(self):
         hwp = FakeHwp()

@@ -20,14 +20,14 @@ from pathlib import Path
 from typing import Any, Dict, List
 
 try:
-    from .hwp_style_config import HWP_LINE_NAMES, REQUIRED_STYLE_NAMES, load_hwp_style_config, margin_units, style_name_for_cell_role
+    from .hwp_style_config import DEFAULT_HWP_STYLE_CONFIG, HWP_LINE_NAMES, REQUIRED_STYLE_NAMES, load_hwp_style_config, margin_units, style_name_for_cell_role
     from .hwpx_style_registry import register_named_styles
     from .report_package import split_narrative_blocks
     from .report_table_matrix import resolve_table_metadata
     from .hwp_table_layout import plan_table_parts, prepare_report_table, _text_units
     from .hwp_page_setup import normalize_page_setup, apply_page_setup
 except ImportError:
-    from hwp_style_config import HWP_LINE_NAMES, REQUIRED_STYLE_NAMES, load_hwp_style_config, margin_units, style_name_for_cell_role
+    from hwp_style_config import DEFAULT_HWP_STYLE_CONFIG, HWP_LINE_NAMES, REQUIRED_STYLE_NAMES, load_hwp_style_config, margin_units, style_name_for_cell_role
     from hwpx_style_registry import register_named_styles
     from report_package import split_narrative_blocks
     from report_table_matrix import resolve_table_metadata
@@ -1482,9 +1482,9 @@ def prepare_layout_range(workbook, table, style_config):
     area = sheet.Range(sheet.Cells(1, 1), sheet.Cells(rows, cols))
     area.NumberFormat = "@"  # Parenthesized BASE counts must remain strings, not negative numbers.
     area.Value2 = tuple(tuple(row) for row in table_rows_for_hwp(table))
-    font_size = max(style_config["paragraph_styles"][name]["font_size_pt"] for name in style_config["table_cell_styles"]) if style_config else 9
-    area.Font.Name = style_config["paragraph_styles"]["표보기"]["font_family"] if style_config else "맑은 고딕"
-    area.Font.Size = font_size
+    body_style = (style_config or DEFAULT_HWP_STYLE_CONFIG)["paragraph_styles"]["표보기"]
+    area.Font.Name = body_style["font_family"]
+    area.Font.Size = body_style["font_size_pt"]
     area.WrapText = True
     widths = table["column_widths_hwpunit"]
     for index, width in enumerate(widths, 1):
@@ -1502,29 +1502,50 @@ def prepare_layout_range(workbook, table, style_config):
     for merged in table.get("merged_ranges", []):
         row, col = merged["row"], merged["col"]
         sheet.Range(sheet.Cells(row, col), sheet.Cells(row + merged["rowspan"] - 1, col + merged["colspan"] - 1)).Merge()
-    heights = [15.0] * rows
+    for index, height in enumerate(compact_row_heights(table, style_config), 1):
+        sheet.Rows.Item(index).RowHeight = height
+    return area
+
+
+# Imported per-role margins still override these table defaults.
+COMPACT_VERTICAL_MARGIN_MM = 0.3
+
+
+def compact_row_heights(table, style_config):
+    config = style_config or DEFAULT_HWP_STYLE_CONFIG
+    widths = table["column_widths_hwpunit"]
+    heights = [0.0] * table["row_count"]
+    spans = []
     for row_index, row in enumerate(table["matrix"]):
         for col_index, cell in enumerate(row):
             if cell.get("covered_by"):
                 continue
             first = cell["col"] - 1
             role = table_cell_role(table, row_index, col_index)
-            name = style_name_for_cell_role(role, style_config)
-            margins = style_config["table_cell_styles"][name].get("margins_mm") if style_config and role != "metadata" else None
-            horizontal = sum(margin_units(margins[side]) for side in ("left", "right")) / 100 if margins else 6
-            vertical = sum(margin_units(margins[side]) for side in ("top", "bottom")) / 100 if margins else 4
+            name = style_name_for_cell_role(role, config)
+            paragraph = config["paragraph_styles"][name]
+            font_size = paragraph["font_size_pt"]
+            spacing = max(1.0, paragraph["line_spacing_percent"] / 100)
+            margins = config["table_cell_styles"][name].get("margins_mm") if role != "metadata" else None
+            horizontal = sum(margin_units(margins[side]) for side in ("left", "right")) / 100 if margins else 10.2
+            vertical = sum(margin_units(margins[side]) for side in ("top", "bottom")) / 100 if margins else 2 * margin_units(COMPACT_VERTICAL_MARGIN_MM) / 100
             available = sum(widths[first:first + cell["colspan"]]) / 100 - horizontal
             if available <= 0:
                 raise ValueError("셀 너비가 여백보다 작습니다.")
             lines = max(1, math.ceil(_text_units(cell.get("display_text", "")) * font_size / available))
-            height = (lines * font_size * 1.6 + vertical) / cell["rowspan"]
-            if height > 409:
-                raise ValueError("셀 내용이 Excel 임시 표의 최대 행 높이를 초과합니다.")
-            for index in range(cell["row"] - 1, cell["row"] - 1 + cell["rowspan"]):
-                heights[index] = max(heights[index], height)
-    for index, height in enumerate(heights, 1):
-        sheet.Rows.Item(index).RowHeight = height
-    return area
+            height = lines * font_size * spacing + vertical
+            if cell["rowspan"] == 1:
+                heights[row_index] = max(heights[row_index], height)
+            else:
+                spans.append((row_index, row_index + cell["rowspan"], height))
+    heights = [max(10.0, height) for height in heights]
+    for start, end, height in spans:
+        extra = max(0, height - sum(heights[start:end])) / (end - start)
+        for index in range(start, end):
+            heights[index] += extra
+    if max(heights) > 409:
+        raise ValueError("셀 내용이 Excel 임시 표의 최대 행 높이를 초과합니다.")
+    return heights
 
 
 def verify_table_width(control, table):
@@ -1540,7 +1561,9 @@ def verify_table_width(control, table):
             properties.SetItem(key, value)
         if "header_row_count" in table:
             properties.SetItem("RepeatHeader", 1)
-            properties.SetItem("PageBreak", 1)
+            properties.SetItem("PageBreak", 2)  # Saved HWPX CELL: continue even within tall rows.
+            properties.SetItem("CellMarginTop", margin_units(COMPACT_VERTICAL_MARGIN_MM))
+            properties.SetItem("CellMarginBottom", margin_units(COMPACT_VERTICAL_MARGIN_MM))
         control.Properties = properties
         table["actual_width_hwpunit"] = actual
     except Exception as exc:

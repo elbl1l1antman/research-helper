@@ -1254,6 +1254,7 @@ namespace ReportAutomationLauncher
             borderPanel.Controls.Add(showSideBorders);
             importedLines.Click += ShowImportedLines;
             borderPanel.Controls.Add(importedLines);
+            borderPanel.Controls.Add(MakeButton("셀 배경색", ChooseCellFill));
             root.Controls.Add(borderPanel, 0, 4);
 
             var buttons = new FlowLayoutPanel { Dock = DockStyle.Fill, AutoSize = true, FlowDirection = FlowDirection.RightToLeft };
@@ -1451,7 +1452,7 @@ namespace ReportAutomationLauncher
 
         private void UpdateImportedLines()
         {
-            importedLines.Text = "가져온 선 (" + edges.Count + ")";
+            importedLines.Text = "선 설정 (" + edges.Count + ")";
         }
 
         private static string LineText(Dictionary<string, object> line)
@@ -1461,19 +1462,98 @@ namespace ReportAutomationLauncher
 
         private void ShowImportedLines(object sender, EventArgs e)
         {
-            if (edges.Count == 0) return;
             var menu = new ContextMenuStrip();
-            foreach (var pair in edges)
+            foreach (var pair in HwpStylePresetStore.LineGroups)
             {
                 string key = pair.Key;
-                menu.Items.Add(HwpStylePresetStore.LineGroups[key] + ": " + LineText((Dictionary<string, object>)pair.Value) + " · 기본값으로", null, delegate
-                {
-                    edges.Remove(key);
-                    UpdateImportedLines();
-                });
+                string detail = edges.ContainsKey(key) ? LineText((Dictionary<string, object>)edges[key]) : "기본값";
+                menu.Items.Add(pair.Value + ": " + detail, null, delegate { ExecuteEditorAction(() => EditLine(key)); });
             }
             menu.Closed += delegate { menu.Dispose(); };
             menu.Show(importedLines, new Point(0, importedLines.Height));
+        }
+
+        private void ChooseCellFill(object sender, EventArgs e)
+        {
+            tableGrid.EndEdit();
+            var row = tableGrid.CurrentRow;
+            if (row == null) return;
+            string rgb = ChooseRgb(Convert.ToString(row.Cells["Fill"].Value));
+            if (rgb != null) ApplyTemplateCell(CellText(row, "StyleName"), new Dictionary<string, object> { { "fill_color", rgb } });
+        }
+
+        private string ChooseRgb(string rgb)
+        {
+            int value;
+            Color color = int.TryParse(rgb.Trim().TrimStart('#'), System.Globalization.NumberStyles.HexNumber,
+                System.Globalization.CultureInfo.InvariantCulture, out value) && value >= 0 && value <= 0xFFFFFF
+                ? Color.FromArgb(255, (value >> 16) & 255, (value >> 8) & 255, value & 255) : Color.White;
+            using (var picker = new ColorDialog { Color = color, FullOpen = true })
+                return picker.ShowDialog(Form.ActiveForm ?? this) == DialogResult.OK ? (picker.Color.ToArgb() & 0xFFFFFF).ToString("X6") : null;
+        }
+
+        private void EditLine(string key)
+        {
+            var line = edges.ContainsKey(key) ? (Dictionary<string, object>)edges[key] : null;
+            var types = HwpStylePresetStore.LineTypes.ToArray();
+            using (var dialog = new Form {
+                Text = HwpStylePresetStore.LineGroups[key], StartPosition = FormStartPosition.CenterParent,
+                ClientSize = new Size(420, 166), FormBorderStyle = FormBorderStyle.FixedDialog,
+                MaximizeBox = false, MinimizeBox = false, ShowInTaskbar = false
+            })
+            {
+                var grid = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 3, Padding = new Padding(12), AutoSize = true };
+                grid.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+                grid.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+                grid.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+                dialog.Controls.Add(grid);
+                var type = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Dock = DockStyle.Fill };
+                type.Items.Add("기본값");
+                type.Items.AddRange(types.Select(pair => (object)pair.Value).ToArray());
+                type.SelectedIndex = line == null ? 0 : Array.FindIndex(types, pair => pair.Key == Convert.ToString(line["type"])) + 1;
+                var width = new NumericUpDown { Dock = DockStyle.Fill };
+                ConfigureNumber(width, 0.1M, 5M, 0.01M);
+                width.Value = line == null ? (key == "outer" ? outerBorder.Value : innerBorder.Value) : Convert.ToDecimal(line["width_mm"]);
+                var rgb = new TextBox { Text = line == null ? borderColor.Text : Convert.ToString(line["color"]), Dock = DockStyle.Fill };
+                var pick = MakeButton("색상 선택", delegate { rgb.Text = ChooseRgb(rgb.Text) ?? rgb.Text; });
+                grid.Controls.Add(new Label { Text = "선 종류", AutoSize = true, Anchor = AnchorStyles.Left }, 0, 0);
+                grid.Controls.Add(type, 1, 0);
+                grid.Controls.Add(new Label { Text = "굵기(mm)", AutoSize = true, Anchor = AnchorStyles.Left }, 0, 1);
+                grid.Controls.Add(width, 1, 1);
+                grid.Controls.Add(new Label { Text = "색상(RGB)", AutoSize = true, Anchor = AnchorStyles.Left }, 0, 2);
+                grid.Controls.Add(rgb, 1, 2);
+                grid.Controls.Add(pick, 2, 2);
+                var buttons = new FlowLayoutPanel { AutoSize = true, Dock = DockStyle.Fill, FlowDirection = FlowDirection.RightToLeft };
+                var cancel = MakeButton("취소", delegate { dialog.DialogResult = DialogResult.Cancel; });
+                var apply = MakeButton("적용", delegate
+                {
+                    if (type.SelectedIndex == 0) edges.Remove(key);
+                    else
+                    {
+                        string color = rgb.Text.Trim().TrimStart('#').ToUpperInvariant();
+                        if (!System.Text.RegularExpressions.Regex.IsMatch(color, @"\A[0-9A-F]{6}\z"))
+                        {
+                            MessageBox.Show(dialog, "색상은 6자리 RGB로 입력하세요.", dialog.Text, MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                            return;
+                        }
+                        edges[key] = new Dictionary<string, object> { { "type", types[type.SelectedIndex - 1].Key }, { "width_mm", Convert.ToDouble(width.Value) }, { "color", color } };
+                    }
+                    UpdateImportedLines();
+                    dialog.DialogResult = DialogResult.OK;
+                });
+                Action refresh = () => { width.Enabled = rgb.Enabled = pick.Enabled = type.SelectedIndex > 0 && types[type.SelectedIndex - 1].Key != "none"; };
+                type.SelectedIndexChanged += delegate { refresh(); };
+                refresh();
+                buttons.Controls.Add(apply);
+                buttons.Controls.Add(cancel);
+                grid.Controls.Add(buttons, 0, 3);
+                grid.SetColumnSpan(buttons, 3);
+                dialog.AcceptButton = apply;
+                dialog.CancelButton = cancel;
+                LauncherUi.ApplyToForm(dialog);
+                LauncherUi.ApplyTree(dialog);
+                dialog.ShowDialog(this);
+            }
         }
 
         private async void ImportTemplateCell(object sender, EventArgs e)
