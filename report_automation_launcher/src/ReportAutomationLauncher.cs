@@ -1794,6 +1794,9 @@ namespace ReportAutomationLauncher
         private readonly ComboBox reportProfileCombo = new ComboBox();
         private readonly ComboBox styleProfileCombo = new ComboBox();
         private readonly TextBox narrativeExampleText = new TextBox();
+        private readonly ComboBox tableExampleCombo = new ComboBox();
+        private readonly DataGridView tableExampleGrid = new DataGridView();
+        private readonly TextBox tableExampleOutput = new TextBox();
         private readonly CheckBox analysisCheck = new CheckBox();
         private readonly CheckBox chartCheck = new CheckBox();
         private readonly CheckBox tableCheck = new CheckBox();
@@ -1987,6 +1990,19 @@ namespace ReportAutomationLauncher
                         throw new InvalidOperationException("보고서 유형·문체별 분석문 예시가 올바르지 않습니다.");
                 }
             }
+            var expected = new[] { "52.0%로 가장 높게", "복수응답 기준", "52.0%로 가장 높게", "72.6점", "78.4점" };
+            for (int index = 0; index < expected.Length; index++)
+            {
+                tableExampleCombo.SelectedIndex = index;
+                if (tableExampleGrid.Rows.Count != 3 || tableExampleOutput.Lines.Length != 2 ||
+                    !tableExampleOutput.Text.Contains(expected[index]))
+                    throw new InvalidOperationException("집계표 유형별 실제 산출 예시가 올바르지 않습니다.");
+            }
+            tableExampleCombo.SelectedIndex = 2;
+            if (tableExampleGrid.Rows[0].Cells[3].Style.BackColor != LauncherUi.ColorSurfaceStrong ||
+                tableExampleGrid.Rows[1].Cells[3].Style.BackColor == LauncherUi.ColorSurfaceStrong ||
+                tableExampleGrid.Rows[0].Cells[2].Style.BackColor == LauncherUi.ColorSurfaceStrong)
+                throw new InvalidOperationException("교차표의 전체 비율 셀만 표시되어야 합니다.");
 
             for (int index = 0; index < workflowTabs.TabCount; index++)
             {
@@ -2486,6 +2502,7 @@ namespace ReportAutomationLauncher
                 page.Controls[0].Dock = DockStyle.Top;
                 tabs.TabPages.Add(page);
             }
+            tabs.TabPages.Insert(2, CreateStepPage("집계표별 산출 예시", BuildTableExamplePage()));
             return tabs;
         }
 
@@ -3074,7 +3091,7 @@ namespace ReportAutomationLauncher
             var grid = CreateGrid(5);
             group.Controls.Add(grid);
 
-            AddLabel(grid, 0, "보고서 유형");
+            AddLabel(grid, 0, "보고서 유형 (참고)");
             reportProfileCombo.DropDownStyle = ComboBoxStyle.DropDownList;
             reportProfileCombo.Items.Add("인식도/만족도 조사형");
             reportProfileCombo.Items.Add("산업 실태조사형");
@@ -3102,7 +3119,7 @@ namespace ReportAutomationLauncher
             AddLabel(grid, 3, "분석문 작성 예시");
             var caption = new Label
             {
-                Text = "가상 조사: 디지털 상담 지원 서비스(500개 기업) · 유형과 문체는 자동 산출에 미반영",
+                Text = "작성 참고 · 디지털 상담 지원 서비스(가상, 500개 기업)",
                 AutoSize = true, ForeColor = LauncherUi.ColorMutedText,
                 Margin = new Padding(3, 8, 0, 5)
             };
@@ -3161,6 +3178,140 @@ namespace ReportAutomationLauncher
             reportProfileCombo.SelectedIndexChanged += updateExample;
             styleProfileCombo.SelectedIndexChanged += updateExample;
             return group;
+        }
+
+        private Control BuildTableExamplePage()
+        {
+            var panel = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2, RowCount = 2 };
+            panel.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 59));
+            panel.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 41));
+            panel.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+            panel.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+            var toolbar = new FlowLayoutPanel { Dock = DockStyle.Fill, AutoSize = true };
+            toolbar.Controls.Add(new Label { Text = "집계표 유형", AutoSize = true, Margin = new Padding(0, 8, 8, 0) });
+            tableExampleCombo.DropDownStyle = ComboBoxStyle.DropDownList;
+            tableExampleCombo.Width = 214;
+            tableExampleCombo.AccessibleName = "산출 예시에 사용할 집계표 유형";
+            tableExampleCombo.Items.AddRange(new object[] { "단일응답 비율표", "복수응답 비율표", "배너 교차표", "만족도 척도표", "100점 점수표" });
+            toolbar.Controls.Add(tableExampleCombo);
+            panel.Controls.Add(toolbar, 0, 0);
+            panel.SetColumnSpan(toolbar, 2);
+
+            var input = new GroupBox { Text = "가상 집계표 · 문장에 사용한 값 강조", Dock = DockStyle.Fill };
+            tableExampleGrid.Dock = DockStyle.Fill;
+            tableExampleGrid.AccessibleName = "가상 입력 집계표";
+            tableExampleGrid.ReadOnly = true;
+            tableExampleGrid.AllowUserToAddRows = false;
+            tableExampleGrid.AllowUserToDeleteRows = false;
+            tableExampleGrid.AllowUserToResizeRows = false;
+            tableExampleGrid.RowHeadersVisible = false;
+            tableExampleGrid.AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.Fill;
+            tableExampleGrid.ColumnHeadersHeightSizeMode = DataGridViewColumnHeadersHeightSizeMode.AutoSize;
+            tableExampleGrid.EnableHeadersVisualStyles = false;
+            tableExampleGrid.ColumnHeadersDefaultCellStyle.BackColor = LauncherUi.ColorSurfaceAlt;
+            tableExampleGrid.ColumnHeadersDefaultCellStyle.WrapMode = DataGridViewTriState.True;
+            tableExampleGrid.BackgroundColor = LauncherUi.ColorSurface;
+            tableExampleGrid.BorderStyle = BorderStyle.FixedSingle;
+            tableExampleGrid.GridColor = LauncherUi.ColorBorder;
+            tableExampleGrid.DefaultCellStyle.SelectionBackColor = LauncherUi.ColorSurfaceStrong;
+            tableExampleGrid.DefaultCellStyle.SelectionForeColor = LauncherUi.ColorText;
+            tableExampleGrid.AlternatingRowsDefaultCellStyle.BackColor = LauncherUi.ColorRowAlt;
+            input.Controls.Add(tableExampleGrid);
+            panel.Controls.Add(input, 0, 1);
+
+            var output = new GroupBox { Text = "Excel 매크로 산출 · 분석문_기본", Dock = DockStyle.Fill };
+            var result = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 3 };
+            result.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+            result.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+            result.RowStyles.Add(new RowStyle(SizeType.Absolute, 70));
+            var title = new Label { AutoSize = true, Font = LauncherUi.SectionFont() };
+            tableExampleOutput.Multiline = true;
+            tableExampleOutput.ReadOnly = true;
+            tableExampleOutput.ScrollBars = ScrollBars.Vertical;
+            tableExampleOutput.Dock = DockStyle.Fill;
+            tableExampleOutput.AccessibleName = "집계표에서 자동 생성한 기본 분석문";
+            var source = new Label { Dock = DockStyle.Fill, ForeColor = LauncherUi.ColorMutedText, Margin = new Padding(3, 8, 3, 0) };
+            result.Controls.Add(title, 0, 0);
+            result.Controls.Add(tableExampleOutput, 0, 1);
+            result.Controls.Add(source, 0, 2);
+            output.Controls.Add(result);
+            panel.Controls.Add(output, 1, 1);
+
+            var titles = new[] { "주 이용 채널", "필요한 지원(복수응답)", "규모별 주 이용 채널", "서비스 이용 만족도", "세부 항목 만족도(100점)" };
+            var tables = new[]
+            {
+                new[] { new[] { "구분", "사례수", "%" }, new[] { "웹사이트", "33", "33.0" },
+                    new[] { "오프라인 창구", "15", "15.0" }, new[] { "모바일 앱", "52", "52.0" } },
+                new[] { new[] { "구분", "사례수", "%" }, new[] { "컨설팅", "27", "27.0" },
+                    new[] { "인력 양성", "54", "54.0" }, new[] { "사업비 지원", "40", "40.0" } },
+                new[] { new[] { "구분", "사례수", "모바일 앱\nN", "모바일 앱\n%", "웹사이트\nN", "웹사이트\n%", "오프라인 창구\nN", "오프라인 창구\n%" },
+                    new[] { "전체", "100", "52", "52.0", "33", "33.0", "15", "15.0" },
+                    new[] { "소규모", "40", "16", "40.0", "16", "40.0", "8", "20.0" },
+                    new[] { "중대형", "60", "36", "60.0", "17", "28.3", "7", "11.7" } },
+                new[] { new[] { "구분", "사례수", "만족(합)\nN", "만족(합)\n%", "불만족(합)\nN", "불만족(합)\n%", "100점\n평균" },
+                    new[] { "전체", "100", "68", "68.0", "13", "13.0", "72.6" },
+                    new[] { "소규모", "40", "24", "60.0", "8", "20.0", "65.0" },
+                    new[] { "중대형", "60", "44", "73.3", "5", "8.3", "77.7" } },
+                new[] { new[] { "항목", "사례수", "100점 점수" }, new[] { "처리 속도", "100", "69.2" },
+                    new[] { "상담 품질", "100", "78.4" }, new[] { "이용 편의", "100", "74.1" } }
+            };
+            // These are the VBA outputs for the sample tables, not a second implementation of the writer.
+            var sentences = new[,]
+            {
+                { "주 이용 채널은 '모바일 앱'이 52.0%로 가장 높게 나타남",
+                    "다음으로 '웹사이트'(33.0%), '오프라인 창구'(15.0%) 순으로 나타남" },
+                { "필요한 지원(복수응답)은 복수응답 기준으로 '인력 양성'이 54.0%로 가장 높게 나타남",
+                    "다음으로 '사업비 지원'(40.0%), '컨설팅'(27.0%) 순으로 나타남" },
+                { "규모별 주 이용 채널은 '모바일 앱'이 52.0%로 가장 높게 나타남",
+                    "다음으로 '웹사이트'(33.0%), '오프라인 창구'(15.0%) 순으로 나타남" },
+                { "서비스 이용 만족도에 대해 조사한 결과, '만족(합)' 응답은 68.0%, 100점 평균은 72.6점으로 나타남",
+                    "반면, '불만족(합)'은 13.0%로 나타남" },
+                { "‘세부 항목 만족도’를 100점 환산 기준으로 분석한 결과, '상담 품질'이 78.4점으로 가장 높게 나타남",
+                    "그다음으로는 '이용 편의'(74.1점), '처리 속도'(69.2점) 등의 순으로 높게 나타남" }
+            };
+            var sources = new[]
+            {
+                "문장에 사용: 응답 항목별 %를 높은 순서로 정렬. 사례수는 순위에 사용하지 않음.",
+                "문장에 사용: 응답 항목별 %와 제목의 ‘복수응답’ 표시. 비율 합계가 100%를 넘을 수 있음.",
+                "문장에 사용: ‘전체’ 행의 %만 비교. 사례수와 소규모·중대형의 차이는 기본 문장에 넣지 않음.",
+                "문장에 사용: ‘전체’ 행의 만족(합) %, 100점 평균, 불만족(합) %. 점수를 비율 순위에 넣지 않음.",
+                "문장에 사용: 항목별 100점 점수. 비율(%) 대신 점수를 순위로 비교."
+            };
+            tableExampleCombo.SelectedIndexChanged += delegate
+            {
+                int index = tableExampleCombo.SelectedIndex;
+                if (index < 0) return;
+                title.Text = titles[index];
+                source.Text = sources[index];
+                tableExampleOutput.Text = sentences[index, 0] + Environment.NewLine + sentences[index, 1];
+                tableExampleGrid.Columns.Clear();
+                for (int column = 0; column < tables[index][0].Length; column++)
+                {
+                    tableExampleGrid.Columns.Add(new DataGridViewTextBoxColumn
+                    {
+                        HeaderText = tables[index][0][column], MinimumWidth = 54, SortMode = DataGridViewColumnSortMode.NotSortable,
+                        DefaultCellStyle = new DataGridViewCellStyle
+                        {
+                            Alignment = column == 0 ? DataGridViewContentAlignment.MiddleLeft : DataGridViewContentAlignment.MiddleRight
+                        }
+                    });
+                }
+                for (int row = 1; row < tables[index].Length; row++)
+                    tableExampleGrid.Rows.Add(tables[index][row]);
+                if (index == 2 || index == 3)
+                {
+                    foreach (int column in new[] { 3, 5, index == 2 ? 7 : 6 })
+                        tableExampleGrid.Rows[0].Cells[column].Style.BackColor = LauncherUi.ColorSurfaceStrong;
+                }
+                else
+                {
+                    foreach (DataGridViewRow row in tableExampleGrid.Rows)
+                        row.Cells[2].Style.BackColor = LauncherUi.ColorSurfaceStrong;
+                }
+                tableExampleGrid.ClearSelection();
+            };
+            tableExampleCombo.SelectedIndex = 0;
+            return panel;
         }
 
         private Control BuildBannerPanel()
