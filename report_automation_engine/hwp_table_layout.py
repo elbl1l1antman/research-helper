@@ -27,6 +27,8 @@ def prepare_report_table(table):
     result = copy.deepcopy(table)
     matrix = result["matrix"]
     headers = _header_row_count(matrix)
+    # Repeating a merged header can be unsafe even when its visual role is known.
+    result["visual_header_row"] = headers if headers else None
     crosses_body = any(not cell.get("covered_by") and row_index < headers and row_index + int(cell.get("rowspan") or 1) > headers
                        for row_index, row in enumerate(matrix) for cell in row)
     if crosses_body:

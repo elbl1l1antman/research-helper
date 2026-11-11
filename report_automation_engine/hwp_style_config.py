@@ -9,6 +9,10 @@ from typing import Any, Dict
 
 REQUIRED_STYLE_NAMES = ("보고서 본문1", "보고서 본문2", "표보기", "표배너", "표숫자")
 TABLE_STYLE_NAMES = ("표보기", "표배너", "표숫자")
+OPTIONAL_ROLE_STYLES = {
+    "header": "표머리행", "banner_horizontal": "표가로배너",
+    "banner_vertical": "표세로배너", "base": "표BASE",
+}
 _DEFAULT_PATH = Path(__file__).with_name("config") / "default_hwp_style_config.json"
 _HEX_COLOR = re.compile(r"^[0-9A-Fa-f]{6}$")
 
@@ -57,11 +61,12 @@ def validate_hwp_style_config(config: Dict[str, Any]) -> Dict[str, Any]:
     _text(normalized.get("preset_name"), "preset_name")
 
     paragraph_styles = _object(normalized.get("paragraph_styles"), "paragraph_styles")
-    if set(paragraph_styles) != set(REQUIRED_STYLE_NAMES):
+    optional = set(paragraph_styles) & set(OPTIONAL_ROLE_STYLES.values())
+    if set(paragraph_styles) != set(REQUIRED_STYLE_NAMES) | optional:
         missing = [name for name in REQUIRED_STYLE_NAMES if name not in paragraph_styles]
-        extra = [name for name in paragraph_styles if name not in REQUIRED_STYLE_NAMES]
-        raise ValueError(f"paragraph_styles: fixed style names required; missing={missing}, extra={extra}")
-    for name in REQUIRED_STYLE_NAMES:
+        extra = [name for name in paragraph_styles if name not in REQUIRED_STYLE_NAMES and name not in optional]
+        raise ValueError(f"paragraph_styles: unknown or missing style; missing={missing}, extra={extra}")
+    for name in paragraph_styles:
         style = _object(paragraph_styles[name], f"paragraph_styles.{name}")
         prefix = f"paragraph_styles.{name}"
         _text(style.get("font_family"), f"{prefix}.font_family")
@@ -80,9 +85,9 @@ def validate_hwp_style_config(config: Dict[str, Any]) -> Dict[str, Any]:
             raise ValueError(f"{prefix}.alignment: expected left, center, right, or justify")
 
     cell_styles = _object(normalized.get("table_cell_styles"), "table_cell_styles")
-    if set(cell_styles) != set(TABLE_STYLE_NAMES):
-        raise ValueError(f"table_cell_styles: fixed style names required: {TABLE_STYLE_NAMES}")
-    for name in TABLE_STYLE_NAMES:
+    if set(cell_styles) != set(TABLE_STYLE_NAMES) | optional:
+        raise ValueError(f"table_cell_styles: matching paragraph and cell styles required: {sorted(set(TABLE_STYLE_NAMES) | optional)}")
+    for name in cell_styles:
         style = _object(cell_styles[name], f"table_cell_styles.{name}")
         prefix = f"table_cell_styles.{name}"
         style["fill_color"] = _color(style.get("fill_color"), f"{prefix}.fill_color")
@@ -103,7 +108,10 @@ def load_hwp_style_config(path: Path | None) -> Dict[str, Any]:
     return validate_hwp_style_config(DEFAULT_HWP_STYLE_CONFIG if path is None else _read_json(Path(path)))
 
 
-def style_name_for_cell_role(role: str) -> str:
+def style_name_for_cell_role(role: str, config: Dict[str, Any] | None = None) -> str:
+    separate = OPTIONAL_ROLE_STYLES.get(role)
+    if separate and separate in (config or {}).get("table_cell_styles", {}):
+        return separate
     if role in {"banner_horizontal", "base", "header", "title"}:
         return "표배너"
     if role == "value":

@@ -162,6 +162,10 @@ namespace ReportAutomationLauncher
         internal const string BuiltInName = "기본 보고서";
         internal static readonly string[] StyleNames = { "보고서 본문1", "보고서 본문2", "표보기", "표배너", "표숫자" };
         internal static readonly string[] TableStyleNames = { "표보기", "표배너", "표숫자" };
+        internal static readonly Dictionary<string, string> RoleStyleDefaults = new Dictionary<string, string>
+        {
+            { "표머리행", "표배너" }, { "표가로배너", "표배너" }, { "표세로배너", "표보기" }, { "표BASE", "표배너" }
+        };
         private readonly string path;
         private readonly JavaScriptSerializer serializer = new JavaScriptSerializer();
         private readonly Action<string> recoveryLog;
@@ -264,8 +268,9 @@ namespace ReportAutomationLauncher
             copy["preset_name"] = presetName;
 
             Dictionary<string, object> paragraph = Map(Value(copy, "paragraph_styles"), "paragraph_styles");
-            RequireExactKeys(paragraph, StyleNames, "paragraph_styles");
-            foreach (string name in StyleNames)
+            string[] optional = paragraph.Keys.Where(RoleStyleDefaults.ContainsKey).ToArray();
+            RequireExactKeys(paragraph, StyleNames.Concat(optional).ToArray(), "paragraph_styles");
+            foreach (string name in paragraph.Keys)
             {
                 Dictionary<string, object> style = Map(paragraph[name], name);
                 RequireText(style, "font_family", name);
@@ -281,8 +286,8 @@ namespace ReportAutomationLauncher
             }
 
             Dictionary<string, object> cells = Map(Value(copy, "table_cell_styles"), "table_cell_styles");
-            RequireExactKeys(cells, TableStyleNames, "table_cell_styles");
-            foreach (string name in TableStyleNames)
+            RequireExactKeys(cells, TableStyleNames.Concat(optional).ToArray(), "table_cell_styles");
+            foreach (string name in cells.Keys)
             {
                 Dictionary<string, object> style = Map(cells[name], name);
                 style["fill_color"] = ColorValue(style, "fill_color", name);
@@ -1187,11 +1192,12 @@ namespace ReportAutomationLauncher
             top.Controls.Add(new Label { Text = "서식 이름", AutoSize = true, Margin = new Padding(18, 8, 8, 0) });
             nameText.Width = 220;
             top.Controls.Add(nameText);
+            top.Controls.Add(MakeButton("템플릿 셀 가져오기", ImportTemplateCell));
             root.Controls.Add(top, 0, 0);
 
             var help = new Label
             {
-                Text = "고정된 5개 스타일의 글꼴·문단 설정과 표 셀 배경·테두리를 지정합니다. 사용자 서식은 최대 3개입니다.",
+                Text = "개별 스타일이 꺼져 있으면 공통 표 서식을 사용합니다. 사용자 서식은 최대 3개입니다.",
                 AutoSize = true,
                 ForeColor = LauncherUi.ColorMutedText,
                 Margin = new Padding(0, 6, 0, 10)
@@ -1247,6 +1253,7 @@ namespace ReportAutomationLauncher
             paragraphGrid.RowHeadersVisible = false;
             paragraphGrid.AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.Fill;
             paragraphGrid.Columns.Add(new DataGridViewTextBoxColumn { Name = "StyleName", HeaderText = "스타일", ReadOnly = true, FillWeight = 110 });
+            paragraphGrid.Columns.Add(new DataGridViewCheckBoxColumn { Name = "Enabled", HeaderText = "개별", FillWeight = 48 });
             paragraphGrid.Columns.Add(new DataGridViewTextBoxColumn { Name = "Font", HeaderText = "글꼴", FillWeight = 110 });
             paragraphGrid.Columns.Add(new DataGridViewTextBoxColumn { Name = "Size", HeaderText = "크기(pt)", FillWeight = 65 });
             paragraphGrid.Columns.Add(new DataGridViewCheckBoxColumn { Name = "Bold", HeaderText = "굵게", FillWeight = 48 });
@@ -1300,16 +1307,19 @@ namespace ReportAutomationLauncher
             nameText.Text = Convert.ToString(config["preset_name"]);
             paragraphGrid.Rows.Clear();
             Dictionary<string, object> styles = (Dictionary<string, object>)config["paragraph_styles"];
-            foreach (string styleName in HwpStylePresetStore.StyleNames)
+            foreach (string styleName in HwpStylePresetStore.StyleNames.Concat(HwpStylePresetStore.RoleStyleDefaults.Keys))
             {
-                Dictionary<string, object> style = (Dictionary<string, object>)styles[styleName];
-                paragraphGrid.Rows.Add(styleName, style["font_family"], style["font_size_pt"], style["bold"], style["bullet"], style["line_spacing_percent"], style["left_indent_mm"], style["first_line_indent_mm"], style["alignment"]);
+                bool separate = HwpStylePresetStore.RoleStyleDefaults.ContainsKey(styleName);
+                bool enabled = styles.ContainsKey(styleName);
+                var style = (Dictionary<string, object>)styles[enabled ? styleName : HwpStylePresetStore.RoleStyleDefaults[styleName]];
+                int index = paragraphGrid.Rows.Add(styleName, separate ? (object)enabled : null, style["font_family"], style["font_size_pt"], style["bold"], style["bullet"], style["line_spacing_percent"], style["left_indent_mm"], style["first_line_indent_mm"], style["alignment"]);
+                paragraphGrid.Rows[index].Cells["Enabled"].ReadOnly = !separate;
             }
             tableGrid.Rows.Clear();
             Dictionary<string, object> cells = (Dictionary<string, object>)config["table_cell_styles"];
-            foreach (string styleName in HwpStylePresetStore.TableStyleNames)
+            foreach (string styleName in HwpStylePresetStore.TableStyleNames.Concat(HwpStylePresetStore.RoleStyleDefaults.Keys))
             {
-                Dictionary<string, object> style = (Dictionary<string, object>)cells[styleName];
+                var style = (Dictionary<string, object>)cells[cells.ContainsKey(styleName) ? styleName : HwpStylePresetStore.RoleStyleDefaults[styleName]];
                 tableGrid.Rows.Add(styleName, style["fill_color"], style["vertical_alignment"]);
             }
             Dictionary<string, object> border = (Dictionary<string, object>)config["table_border"];
@@ -1319,12 +1329,16 @@ namespace ReportAutomationLauncher
             showSideBorders.Checked = (bool)border["show_side_borders"];
         }
 
-        private Dictionary<string, object> ReadEditor()
+        internal Dictionary<string, object> ReadEditor()
         {
+            paragraphGrid.EndEdit();
+            tableGrid.EndEdit();
             var styles = new Dictionary<string, object>();
             foreach (DataGridViewRow row in paragraphGrid.Rows)
             {
-                styles[Convert.ToString(row.Cells["StyleName"].Value)] = new Dictionary<string, object>
+                string name = Convert.ToString(row.Cells["StyleName"].Value);
+                if (HwpStylePresetStore.RoleStyleDefaults.ContainsKey(name) && !Convert.ToBoolean(row.Cells["Enabled"].Value)) continue;
+                styles[name] = new Dictionary<string, object>
                 {
                     { "font_family", CellText(row, "Font") },
                     { "font_size_pt", CellNumber(row, "Size") },
@@ -1339,7 +1353,9 @@ namespace ReportAutomationLauncher
             var cells = new Dictionary<string, object>();
             foreach (DataGridViewRow row in tableGrid.Rows)
             {
-                cells[Convert.ToString(row.Cells["StyleName"].Value)] = new Dictionary<string, object>
+                string name = Convert.ToString(row.Cells["StyleName"].Value);
+                if (!styles.ContainsKey(name)) continue;
+                cells[name] = new Dictionary<string, object>
                 {
                     { "fill_color", CellText(row, "Fill") },
                     { "vertical_alignment", CellText(row, "Vertical") }
@@ -1358,6 +1374,116 @@ namespace ReportAutomationLauncher
                     }
                 }
             });
+        }
+
+        private async void ImportTemplateCell(object sender, EventArgs e)
+        {
+            if (tableGrid.CurrentRow == null) return;
+            string target = CellText(tableGrid.CurrentRow, "StyleName");
+            string preset = Convert.ToString(presetCombo.SelectedItem);
+            using (var file = new OpenFileDialog { Filter = "한글 문서 (*.hwpx)|*.hwpx", Title = target + "에 가져올 HWPX 선택" })
+            {
+                if (file.ShowDialog(this) != DialogResult.OK) return;
+                string output = null;
+                var button = (Button)sender;
+                button.Enabled = false;
+                try
+                {
+                    output = Path.GetTempFileName();
+                    string input = file.FileName;
+                    await System.Threading.Tasks.Task.Run(() => MainForm.RunTemplateTool("hwp_template_probe.py",
+                        "--cell-style-output " + MainForm.QuoteArg(output) + " " + MainForm.QuoteArg(input), 30000));
+                    if (IsDisposed || Convert.ToString(presetCombo.SelectedItem) != preset) return;
+                    var reader = new JavaScriptSerializer { MaxJsonLength = int.MaxValue };
+                    var catalog = (Dictionary<string, object>)reader.DeserializeObject(File.ReadAllText(output));
+                    var values = SelectTemplateCell(target, (object[])catalog["tables"]);
+                    if (values != null) ApplyTemplateCell(target, values);
+                }
+                catch (Exception ex)
+                {
+                    if (!IsDisposed) MessageBox.Show(this, ex.Message, "셀 서식 가져오기", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                }
+                finally
+                {
+                    if (output != null)
+                    {
+                        try { File.Delete(output); } catch (IOException) { } catch (UnauthorizedAccessException) { }
+                    }
+                    if (!button.IsDisposed) button.Enabled = true;
+                }
+            }
+        }
+
+        private Dictionary<string, object> SelectTemplateCell(string target, object[] source)
+        {
+            var tables = source.Cast<Dictionary<string, object>>().Where(t => ((object[])t["cells"]).Length > 0).ToArray();
+            if (tables.Length == 0) throw new InvalidOperationException("가져올 수 있는 셀 서식이 없습니다.");
+            using (var dialog = new Form { Text = target + "에 가져올 셀과 속성", StartPosition = FormStartPosition.CenterParent, Size = new Size(680, 490), MinimumSize = new Size(480, 390) })
+            {
+                var layout = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 4, Padding = new Padding(12) };
+                layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+                layout.RowStyles.Add(new RowStyle(SizeType.Percent, 55));
+                layout.RowStyles.Add(new RowStyle(SizeType.Percent, 45));
+                layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+                dialog.Controls.Add(layout);
+                var table = new ComboBox { Dock = DockStyle.Top, DropDownStyle = ComboBoxStyle.DropDownList };
+                var cells = new ListBox { Dock = DockStyle.Fill, HorizontalScrollbar = true };
+                var fields = new CheckedListBox { Dock = DockStyle.Fill, CheckOnClick = true };
+                var accept = new Button { Text = "선택 적용", AutoSize = true, Anchor = AnchorStyles.Right };
+                layout.Controls.Add(table, 0, 0);
+                layout.Controls.Add(cells, 0, 1);
+                layout.Controls.Add(fields, 0, 2);
+                layout.Controls.Add(accept, 0, 3);
+                var labels = new Dictionary<string, string> { { "font_family", "글꼴" }, { "font_size_pt", "크기(pt)" }, { "bold", "굵게" },
+                    { "alignment", "가로 정렬" }, { "vertical_alignment", "세로 정렬" }, { "fill_color", "배경 RGB" } };
+                var keys = new List<string>();
+                Dictionary<string, object>[] anchors = null;
+                Dictionary<string, object> style = null;
+                cells.SelectedIndexChanged += delegate
+                {
+                    fields.Items.Clear();
+                    keys.Clear();
+                    if (cells.SelectedIndex < 0) return;
+                    style = (Dictionary<string, object>)anchors[cells.SelectedIndex]["style"];
+                    foreach (var item in labels.Where(item => style.ContainsKey(item.Key)))
+                    {
+                        keys.Add(item.Key);
+                        fields.Items.Add(item.Value + ": " + Convert.ToString(style[item.Key]));
+                    }
+                };
+                table.SelectedIndexChanged += delegate
+                {
+                    cells.Items.Clear();
+                    anchors = ((object[])tables[table.SelectedIndex]["cells"]).Cast<Dictionary<string, object>>().ToArray();
+                    cells.Items.AddRange(anchors.Select(c => (object)string.Format("{0}행 {1}열 ({2}×{3})  {4}", c["row"], c["col"], c["rowspan"], c["colspan"], c["text"])).ToArray());
+                    cells.SelectedIndex = 0;
+                };
+                accept.Click += delegate
+                {
+                    if (fields.CheckedIndices.Count > 0) dialog.DialogResult = DialogResult.OK;
+                    else MessageBox.Show(dialog, "가져올 속성을 하나 이상 선택하세요.");
+                };
+                table.Items.AddRange(tables.Select(t => (object)string.Format("표 {0} ({1}행 × {2}열)", t["table_index"], t["rows"], t["cols"])).ToArray());
+                table.SelectedIndex = 0;
+                LauncherUi.ApplyToForm(dialog);
+                LauncherUi.ApplyTree(dialog);
+                return dialog.ShowDialog(this) == DialogResult.OK
+                    ? fields.CheckedIndices.Cast<int>().ToDictionary(i => keys[i], i => style[keys[i]]) : null;
+            }
+        }
+
+        internal void ApplyTemplateCell(string target, Dictionary<string, object> values)
+        {
+            var paragraph = paragraphGrid.Rows.Cast<DataGridViewRow>().Single(row => CellText(row, "StyleName") == target);
+            var cell = tableGrid.Rows.Cast<DataGridViewRow>().Single(row => CellText(row, "StyleName") == target);
+            foreach (var item in new[] { "font_family:Font", "font_size_pt:Size", "bold:Bold", "alignment:Align" })
+            {
+                string[] mapping = item.Split(':');
+                if (values.ContainsKey(mapping[0])) paragraph.Cells[mapping[1]].Value = values[mapping[0]];
+            }
+            if (values.ContainsKey("fill_color")) cell.Cells["Fill"].Value = values["fill_color"];
+            if (values.ContainsKey("vertical_alignment")) cell.Cells["Vertical"].Value = values["vertical_alignment"];
+            if (HwpStylePresetStore.RoleStyleDefaults.ContainsKey(target)) paragraph.Cells["Enabled"].Value = true;
         }
 
         private static string CellText(DataGridViewRow row, string name, bool allowEmpty = false)
@@ -3528,7 +3654,7 @@ namespace ReportAutomationLauncher
             }
         }
 
-        private void RunTemplateTool(string scriptName, string arguments, int timeoutMs)
+        internal static void RunTemplateTool(string scriptName, string arguments, int timeoutMs)
         {
             string pythonPath = PathResolver.ResolvePythonPath();
             string scriptPath = PathResolver.ResolveEngineToolPath(scriptName);
@@ -3554,13 +3680,15 @@ namespace ReportAutomationLauncher
             StandaloneBundle.ConfigurePythonProcess(startInfo);
             using (Process process = Process.Start(startInfo))
             {
+                var stdoutTask = process.StandardOutput.ReadToEndAsync();
+                var stderrTask = process.StandardError.ReadToEndAsync();
                 if (!process.WaitForExit(timeoutMs))
                 {
                     try { process.Kill(); } catch { }
                     throw new TimeoutException("템플릿 도구 실행 시간이 초과되었습니다.");
                 }
-                string stdout = process.StandardOutput.ReadToEnd();
-                string stderr = process.StandardError.ReadToEnd();
+                string stdout = stdoutTask.Result;
+                string stderr = stderrTask.Result;
                 if (process.ExitCode != 0)
                 {
                     throw new InvalidOperationException(string.IsNullOrWhiteSpace(stderr) ? stdout.Trim() : stderr.Trim());
@@ -3568,7 +3696,7 @@ namespace ReportAutomationLauncher
             }
         }
 
-        private static string QuoteArg(string value)
+        internal static string QuoteArg(string value)
         {
             return "\"" + (value ?? "").Replace("\"", "\\\"") + "\"";
         }
@@ -5832,8 +5960,21 @@ namespace ReportAutomationLauncher
                 string arguments = BuildHwpWriterArguments("writer.py", options, "output.hwpx", "writer_report.json", "render_plan.json");
                 if (arguments.IndexOf(" --style-config " + Quote(expected), StringComparison.Ordinal) < 0)
                     throw new InvalidOperationException("Self-check failed: --style-config forwarding");
-                using (var dialog = new HwpStylePresetDialog(new HwpStylePresetStore(Path.Combine(directory, "presets.json")), HwpStylePresetStore.BuiltInName))
+                var store = new HwpStylePresetStore(Path.Combine(directory, "presets.json"));
+                using (var dialog = new HwpStylePresetDialog(store, HwpStylePresetStore.BuiltInName))
                 {
+                    dialog.ApplyTemplateCell("표머리행", new Dictionary<string, object> { { "fill_color", "DDEBF7" }, { "font_size_pt", 11.0 } });
+                    var edited = dialog.ReadEditor();
+                    edited["preset_name"] = "역할 검증";
+                    store.Save(edited, false);
+                    var saved = store.Get("역할 검증");
+                    var cells = (Dictionary<string, object>)saved["table_cell_styles"];
+                    var styles = (Dictionary<string, object>)saved["paragraph_styles"];
+                    if (cells.ContainsKey("표가로배너") || cells.ContainsKey("표세로배너") ||
+                        Convert.ToString(((Dictionary<string, object>)cells["표머리행"])["fill_color"]) != "DDEBF7" ||
+                        Convert.ToString(((Dictionary<string, object>)cells["표배너"])["fill_color"]) != "E7E7E7" ||
+                        Convert.ToDouble(((Dictionary<string, object>)styles["표머리행"])["font_size_pt"]) != 11.0)
+                        throw new InvalidOperationException("Self-check failed: selected role properties did not round-trip independently");
                     dialog.Size = dialog.MinimumSize;
                     dialog.PerformLayout();
                     var root = (TableLayoutPanel)dialog.Controls[0];

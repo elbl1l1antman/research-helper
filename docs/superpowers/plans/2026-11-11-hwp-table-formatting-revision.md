@@ -61,6 +61,9 @@
 
 **Files:** `hwp_style_config.py`, `hwpx_style_registry.py`, `hwp_template_probe.py`, `hwp_template_table_recognizer.py`, `ReportAutomationLauncher.cs`의 기존 서식 편집기 및 해당 테스트.
 
+[구현·검증 기록](../../hwp_role_styles.md). 기존 스타일 설정 구조를 확장해 별도 스키마를
+만들지 않았다. 사용자 선택 셀의 속성은 기존 탐색기의 최빈값 처리와 분리했다.
+
 - [ ] 기존 5개 이름 스타일은 유지한다. 셀 적용 역할은 `metadata`, `header`, `banner_horizontal`, `banner_vertical`, `stub`, `base`, `value`로 구분한다. `metadata`는 생성용 BASE 안내행, `base`는 원본 사례수/BASE 데이터다. 여러 페이지에 반복할 수 있는지는 `header_row_count`로만 판단하고, 시각적인 역할을 그 값으로 덮지 않는다.
 - [ ] 선택 역할마다 기존 프리셋의 글꼴·크기·굵기·가로/세로 정렬·배경을 기본으로 사용하고, 지정한 값만 덮는다. 기본은 기존 `표배너`/`표보기`/`표숫자` 매핑이다. 머리행과 배너가 서로 다른 색·정렬을 가질 수 있어야 한다. 임의 좌표별 편집기는 이번 범위 밖이며, 템플릿에서 사용자 지정 역할을 매핑하는 방식으로 셀을 지정한다.
 - [ ] 선택한 HWPX 표에서 대표 셀의 `cellAddr`, 병합 span, `borderFillIDRef`, `charPrIDRef`, `cellMargin`, 정렬을 읽는다. 최빈값이 아닌 사용자가 고른 머리행·배너·값 셀에 연결한다. 읽은 값은 미리보기에서 확인한 뒤 프리셋에 저장한다. 적용 우선순위는 **기본값 → 사용자가 가져와 저장한 값 → 사용자가 변경한 값**이다. BASE 안내행 오른쪽 정렬·무테두리 등 보호 규칙은 최종 적용한다.

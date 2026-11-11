@@ -74,6 +74,49 @@ def write_fixture(path: Path, header: bytes | None = HEADER_XML.encode("utf-8"))
 
 
 class HwpxStyleRegistryTests(unittest.TestCase):
+    def test_cell_import_reads_selected_anchor_not_table_mode(self):
+        from report_automation_engine.hwp_template_probe import inspect_cell_styles
+
+        header = HEADER_XML.replace('<hh:borderFill id="1"/>', '<hh:borderFill id="1"/><hh:borderFill id="2"><hc:winBrush faceColor="#E7E7E7"/></hh:borderFill>')
+        cells = []
+        for row in range(12):
+            fill = 2 if row == 0 else 1
+            cells.append(f'<hp:tr><hp:tc borderFillIDRef="{fill}"><hp:subList vertAlign="CENTER">'
+                         f'<hp:p paraPrIDRef="0"><hp:run charPrIDRef="0"><hp:t>cell {row}</hp:t></hp:run></hp:p>'
+                         f'</hp:subList><hp:cellAddr rowAddr="{row}" colAddr="0"/><hp:cellSpan rowSpan="1" colSpan="2"/></hp:tc></hp:tr>')
+        section = f'<hp:sec xmlns:hp="{HP}"><hp:tbl rowCnt="12" colCnt="2">{"".join(cells)}</hp:tbl></hp:sec>'
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "template.hwpx"
+            with zipfile.ZipFile(path, "w") as archive:
+                archive.writestr("Contents/header.xml", header)
+                archive.writestr("Contents/section0.xml", section)
+            original = path.read_bytes()
+            table, = inspect_cell_styles(path)
+            first, *rest = table["cells"]
+            self.assertEqual((first["row"], first["col"], first["colspan"]), (1, 1, 2))
+            self.assertEqual(first["style"], {"fill_color": "E7E7E7", "alignment": "left",
+                "vertical_alignment": "center", "font_family": "함초롬돋움", "font_size_pt": 10, "bold": False})
+            self.assertTrue(all("fill_color" not in cell["style"] for cell in rest))
+            self.assertEqual(path.read_bytes(), original)
+
+    def test_optional_role_registers_named_style_without_editing_template(self):
+        config = copy.deepcopy(DEFAULT_HWP_STYLE_CONFIG)
+        config["paragraph_styles"]["표세로배너"] = {**config["paragraph_styles"]["표보기"], "font_size_pt": 12}
+        config["table_cell_styles"]["표세로배너"] = dict(config["table_cell_styles"]["표보기"])
+        with tempfile.TemporaryDirectory() as directory:
+            source, output = Path(directory) / "base.hwpx", Path(directory) / "out.hwpx"
+            write_fixture(source)
+            original = source.read_bytes()
+            mapping = register_named_styles(source, output, config)
+            self.assertEqual(set(mapping), {*REQUIRED_STYLE_NAMES, "표세로배너"})
+            self.assertEqual(source.read_bytes(), original)
+            with zipfile.ZipFile(output) as archive:
+                header = ET.fromstring(archive.read("Contents/header.xml"))
+            style = descendants(header, "style")[mapping["표세로배너"]]
+            self.assertEqual(style.attrib["name"], "표세로배너")
+            char = next(item for item in descendants(header, "charPr") if item.get("id") == style.get("charPrIDRef"))
+            self.assertEqual(char.get("height"), "1200")
+
     def test_duplicate_style_references_follow_survivor_before_id_reuse(self) -> None:
         root = ET.fromstring(HEADER_XML)
         styles = child(child(root, "refList"), "styles")

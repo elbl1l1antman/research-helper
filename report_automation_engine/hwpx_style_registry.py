@@ -9,9 +9,9 @@ from typing import Any, Dict
 from xml.etree import ElementTree as ET
 
 try:
-    from .hwp_style_config import REQUIRED_STYLE_NAMES, validate_hwp_style_config
+    from .hwp_style_config import validate_hwp_style_config
 except ImportError:
-    from hwp_style_config import REQUIRED_STYLE_NAMES, validate_hwp_style_config
+    from hwp_style_config import validate_hwp_style_config
 
 
 HH = "http://www.hancom.co.kr/hwpml/2011/head"
@@ -245,14 +245,14 @@ def _update_header(header: bytes, config: Dict[str, Any], payloads: Dict[str, by
     styles = _required_child(ref_list, "styles")
     bullets = _ensure_bullets(ref_list, para_properties)
     style_config = config["paragraph_styles"]
-    families = list(dict.fromkeys(style_config[name]["font_family"] for name in REQUIRED_STYLE_NAMES))
+    families = list(dict.fromkeys(style["font_family"] for style in style_config.values()))
     font_ids = _ensure_fonts(fontfaces, families)
 
     seen_names = {}
     remap = {}
     for style in list(styles):
         name = style.attrib.get("name")
-        if name not in REQUIRED_STYLE_NAMES:
+        if name not in style_config:
             continue
         if name in seen_names:
             remap[style.attrib["id"]] = seen_names[name]
@@ -270,7 +270,7 @@ def _update_header(header: bytes, config: Dict[str, Any], payloads: Dict[str, by
             if _remap_style_references(member_root, remap):
                 payloads[member] = ET.tostring(member_root, encoding="utf-8", xml_declaration=True)
 
-    for name in REQUIRED_STYLE_NAMES:
+    for name in style_config:
         settings = style_config[name]
         style = next((node for node in list(styles) if node.attrib.get("name") == name), None)
         char_pr = _property_for_style(char_properties, styles, style, "charPrIDRef")
@@ -300,7 +300,7 @@ def _update_header(header: bytes, config: Dict[str, Any], payloads: Dict[str, by
     mapping = {
         node.attrib["name"]: index
         for index, node in enumerate(list(styles))
-        if node.attrib.get("name") in REQUIRED_STYLE_NAMES
+        if node.attrib.get("name") in style_config
     }
     return ET.tostring(root, encoding="utf-8", xml_declaration=True), mapping
 

@@ -23,6 +23,12 @@ class FakeControl:
 
 
 class HwpComWriterTableTests(unittest.TestCase):
+    def test_visual_header_role_does_not_depend_on_repeating_flags(self):
+        table = {"visual_header_row": 2, "header_row_count": 1, "matrix": [
+            [{"role": "metadata"}], [{"role": "banner_horizontal"}], [{"role": "banner_horizontal"}],
+        ]}
+        self.assertEqual([table_cell_role(table, row, 0) for row in range(3)], ["metadata", "banner_horizontal", "header"])
+
     def test_table_rows_for_hwp_uses_cell_contract_display_text(self):
         table = {
             "matrix": [

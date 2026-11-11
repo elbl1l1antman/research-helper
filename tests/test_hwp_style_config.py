@@ -19,6 +19,19 @@ from report_automation_engine.hwp_style_config import (
 
 
 class HwpStyleConfigTests(unittest.TestCase):
+    def test_optional_role_style_keeps_legacy_fallback_and_requires_pair(self):
+        config = copy.deepcopy(DEFAULT_HWP_STYLE_CONFIG)
+        config["paragraph_styles"]["표머리행"] = {**config["paragraph_styles"]["표배너"], "font_size_pt": 11}
+        with self.assertRaisesRegex(ValueError, "표머리행"):
+            validate_hwp_style_config(config)
+        config["table_cell_styles"]["표머리행"] = {"fill_color": "ddebf7", "vertical_alignment": "center"}
+        result = validate_hwp_style_config(config)
+        self.assertEqual(result["table_cell_styles"]["표머리행"]["fill_color"], "DDEBF7")
+        self.assertEqual(style_name_for_cell_role("header", result), "표머리행")
+        self.assertEqual(style_name_for_cell_role("banner_horizontal", result), "표배너")
+        self.assertEqual(style_name_for_cell_role("banner_vertical", result), "표보기")
+        self.assertEqual(style_name_for_cell_role("value", result), "표숫자")
+
     def test_default_contract_and_role_mapping(self) -> None:
         self.assertEqual(
             REQUIRED_STYLE_NAMES,

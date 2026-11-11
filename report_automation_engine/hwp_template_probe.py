@@ -11,6 +11,7 @@ import argparse
 import collections
 import gc
 import json
+import re
 import shutil
 import time
 import zipfile
@@ -235,6 +236,73 @@ def extract_char_prs(root: ET.Element) -> Dict[str, Dict[str, Any]]:
     return result
 
 
+def inspect_cell_styles(path: Path) -> list[dict]:
+    """Read selectable cell properties, without applying a template-wide style guess."""
+    if path.suffix.lower() != ".hwpx":
+        raise ValueError("셀 서식 가져오기는 HWPX 파일만 지원합니다.")
+    with zipfile.ZipFile(path) as archive:
+        sections = [name for name in archive.namelist() if re.fullmatch(r"Contents/section\d+\.xml", name)]
+        sections.sort(key=lambda name: int(name[len("Contents/section"):-4]))
+        members = ["Contents/header.xml", *sections]
+        if sum(archive.getinfo(name).file_size for name in members) > 32 * 1024 * 1024:
+            raise ValueError("셀 서식 검사 범위가 32MB를 초과합니다.")
+        header = ET.fromstring(archive.read(members[0]))
+        fills = extract_border_fills(header)
+        fonts = {(face.get("lang"), font.get("id")): font.get("face", "")
+                 for face in descendants_by_local_name(header, "fontface") for font in face}
+        chars = {}
+        for prop in descendants_by_local_name(header, "charPr"):
+            fields = {"bold": first_child_by_local_name(prop, "bold") is not None}
+            height = prop.get("height", "")
+            if height.isdecimal() and 600 <= int(height) <= 3000:
+                fields["font_size_pt"] = int(height) / 100
+            ref = first_child_by_local_name(prop, "fontRef")
+            if ref is not None:
+                korean = fonts.get(("HANGUL", ref.get("hangul")), "")
+                latin = fonts.get(("LATIN", ref.get("latin")), "")
+                if korean and korean == latin:
+                    fields["font_family"] = korean
+            chars[prop.get("id")] = fields
+        alignments = {prop.get("id"): align.get("horizontal", "").lower()
+                      for prop in descendants_by_local_name(header, "paraPr")
+                      if (align := first_child_by_local_name(prop, "align")) is not None}
+        tables = []
+        for section in sections:
+            root = ET.fromstring(archive.read(section))
+            for table in descendants_by_local_name(root, "tbl"):
+                cells = []
+                for row in children_by_local_name(table, "tr"):
+                    for cell in children_by_local_name(row, "tc"):
+                        addr = first_child_by_local_name(cell, "cellAddr")
+                        span = first_child_by_local_name(cell, "cellSpan")
+                        body = first_child_by_local_name(cell, "subList")
+                        if addr is None or span is None or body is None:
+                            continue
+                        paragraphs = children_by_local_name(body, "p")
+                        runs = [run for p in paragraphs for run in children_by_local_name(p, "run")]
+                        properties = [chars.get(run.get("charPrIDRef"), {}) for run in runs]
+                        # Mixed text styles cannot be represented by one role preset.
+                        style = {key: value for key, value in (properties[0] if properties else {}).items()
+                                 if all(item.get(key) == value for item in properties)}
+                        horizontal = {alignments.get(p.get("paraPrIDRef")) for p in paragraphs}
+                        if len(horizontal) == 1 and (value := next(iter(horizontal))) in {"left", "center", "right", "justify"}:
+                            style["alignment"] = value
+                        vertical = body.get("vertAlign", "").lower()
+                        if vertical in {"top", "center", "bottom"}:
+                            style["vertical_alignment"] = vertical
+                        color = fills.get(cell.get("borderFillIDRef"), {}).get("fill_color", "").removeprefix("#")
+                        if re.fullmatch(r"[0-9A-Fa-f]{6}", color):
+                            style["fill_color"] = color.upper()
+                        if style:
+                            cells.append({"row": int(addr.get("rowAddr")) + 1, "col": int(addr.get("colAddr")) + 1,
+                                          "rowspan": int(span.get("rowSpan")), "colspan": int(span.get("colSpan")),
+                                          "text": normalize_text(" ".join(t.text or "" for run in runs
+                                                  for t in children_by_local_name(run, "t")))[:80], "style": style})
+                tables.append({"table_index": len(tables) + 1, "rows": int(table.get("rowCnt", "0")),
+                               "cols": int(table.get("colCnt", "0")), "cells": cells})
+    return tables
+
+
 def walk_section(node: ET.Element, section_name: str, paragraphs: List[str], tables: List[Dict[str, Any]], style_defs: Dict[str, Any]) -> None:
     for child in list(node):
         local = local_name(child.tag)
@@ -390,11 +458,26 @@ def sanitize_filename(name: str) -> str:
 
 def run_cli(argv: List[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Probe HWP/HWPX report templates.")
-    parser.add_argument("--output-dir", required=True)
+    output = parser.add_mutually_exclusive_group(required=True)
+    output.add_argument("--output-dir")
+    output.add_argument("--cell-style-output", type=Path)
     parser.add_argument("--visible", action="store_true")
     parser.add_argument("--table-detail-limit", type=int, default=30, help="상세 기록할 표 개수입니다. 0이면 전체 표를 기록합니다.")
     parser.add_argument("templates", nargs="+")
     args = parser.parse_args(argv)
+
+    if args.cell_style_output:
+        if len(args.templates) != 1:
+            parser.error("셀 서식을 읽을 HWPX 파일 하나를 지정하세요.")
+        source = Path(args.templates[0]).resolve()
+        target = args.cell_style_output.resolve()
+        if source == target or (target.exists() and source.samefile(target)):
+            parser.error("원본 파일과 검사 결과 경로가 같습니다.")
+        try:
+            write_json(target, {"tables": inspect_cell_styles(source)})
+        except (OSError, ValueError, TypeError, KeyError, ET.ParseError, zipfile.BadZipFile) as exc:
+            parser.exit(2, f"HWPX 셀 서식을 읽지 못했습니다: {exc}\n")
+        return 0
 
     report = probe_templates(args.templates, args.output_dir, args.visible, args.table_detail_limit)
     print(

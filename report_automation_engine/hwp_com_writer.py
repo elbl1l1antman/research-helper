@@ -311,8 +311,8 @@ def register_styles_or_raise(
     missing = [name for name in REQUIRED_STYLE_NAMES if name not in indexes]
     if missing:
         raise HwpWriterError("style", "register_named_styles", f"등록된 HWP 스타일 인덱스가 없습니다: {missing}")
-    report["style_index_map"] = {name: int(indexes[name]) for name in REQUIRED_STYLE_NAMES}
-    report["style_application_counts"] = {name: 0 for name in REQUIRED_STYLE_NAMES}
+    report["style_index_map"] = {name: int(index) for name, index in indexes.items()}
+    report["style_application_counts"] = {name: 0 for name in indexes}
     report["working_template_path"] = str(working_template)
     return report["style_index_map"]
 
@@ -550,7 +550,7 @@ def write_body(
         if table:
             try:
                 width = current_body_width(hwp, report)
-                font_size = max(style_config["paragraph_styles"][name]["font_size_pt"] for name in ("표보기", "표배너", "표숫자")) if style_config else 9
+                font_size = max(style_config["paragraph_styles"][name]["font_size_pt"] for name in style_config["table_cell_styles"]) if style_config else 9
                 if table.get("matrix"):
                     # Resolve metadata before splitting so every fragment carries the same unit.
                     metadata = resolve_table_metadata(table)
@@ -728,7 +728,8 @@ def insert_hwp_table(
     report["stage"] = "table"
     report["action"] = "TableCreate"
     try:
-        apply_table_style_before_create(hwp, table_style_profile, report)
+        if style_indexes is None:
+            apply_table_style_before_create(hwp, table_style_profile, report)
         params = hwp.HParameterSet.HTableCreation
         hwp.HAction.GetDefault("TableCreate", params.HSet)
         params.Rows = len(rows)
@@ -756,7 +757,8 @@ def insert_hwp_table(
         final_cell_styles = bool(table and "header_row_count" in table and style_config and style_indexes)
         for row_idx, row in enumerate(rows):
             for col_idx, value in enumerate(row):
-                style_name = style_name_for_cell_role(table_cell_role(table or {}, row_idx, col_idx))
+                role = table_cell_role(table or {}, row_idx, col_idx)
+                style_name = style_name_for_cell_role(role, style_config)
                 if style_indexes is not None and not final_cell_styles:
                     apply_named_style(hwp, require_style_index(style_indexes, style_name), report, style_name)
                 insert_text(hwp, value, report)
@@ -769,7 +771,7 @@ def insert_hwp_table(
                         col_idx,
                         len(rows),
                         len(row),
-                        report,
+                        report, cell_role=role,
                     )
                 if not (row_idx == len(rows) - 1 and col_idx == len(row) - 1):
                     run_action(hwp, "TableRightCell", report, "table")
@@ -1120,7 +1122,10 @@ def table_rows_for_hwp(table: Dict[str, Any]) -> List[List[str]]:
 def table_cell_role(table: Dict[str, Any], row_index: int, col_index: int) -> str:
     matrix = table.get("matrix") or []
     try:
-        return str(matrix[row_index][col_index].get("role") or "unknown")
+        role = str(matrix[row_index][col_index].get("role") or "unknown")
+        if role == "banner_horizontal" and row_index == table.get("visual_header_row"):
+            return "header"
+        return role
     except (IndexError, TypeError, AttributeError):
         if row_index == 0:
             return "header"
@@ -1228,8 +1233,11 @@ def apply_cell_appearance(
         run_action(hwp, "Cancel", report, "style")
         horizontal = "Right" if metadata else str(config["paragraph_styles"][style_name]["alignment"]).title()
         vertical = str(cell_style["vertical_alignment"]).title()
-        if not run_action(hwp, f"TableCellAlign{horizontal}{vertical}", report, "style"):
+        cell_alignment = "Left" if horizontal == "Justify" else horizontal
+        if not run_action(hwp, f"TableCellAlign{cell_alignment}{vertical}", report, "style"):
             raise RuntimeError(f"cell alignment action returned False: {horizontal}/{vertical}")
+        if horizontal == "Justify" and not run_action(hwp, "ParagraphShapeAlignJustify", report, "style"):
+            raise RuntimeError("Justify action returned False")
     except HwpWriterError:
         raise
     except Exception as exc:
@@ -1443,7 +1451,7 @@ def prepare_layout_range(workbook, table, style_config):
     area = sheet.Range(sheet.Cells(1, 1), sheet.Cells(rows, cols))
     area.NumberFormat = "@"  # Parenthesized BASE counts must remain strings, not negative numbers.
     area.Value2 = tuple(tuple(row) for row in table_rows_for_hwp(table))
-    font_size = max(style_config["paragraph_styles"][name]["font_size_pt"] for name in ("표보기", "표배너", "표숫자")) if style_config else 9
+    font_size = max(style_config["paragraph_styles"][name]["font_size_pt"] for name in style_config["table_cell_styles"]) if style_config else 9
     area.Font.Name = style_config["paragraph_styles"]["표보기"]["font_family"] if style_config else "맑은 고딕"
     area.Font.Size = font_size
     area.WrapText = True
@@ -1592,7 +1600,7 @@ def apply_table_matrix_styles(
     visited_lists = set()
     for position, (row_index, col_index, value, col_count, rowspan, colspan) in enumerate(cells):
         visited_lists.add(int(hwp.GetPos()[0]))
-        style_name = style_name_for_cell_role(table_cell_role(table, row_index, col_index))
+        style_name = style_name_for_cell_role(table_cell_role(table, row_index, col_index), style_config)
         # Select the cell's text list, not the cell block (Delete on a block is not text deletion).
         if not run_action(hwp, "MoveListBegin", report, "style"):
             raise HwpWriterError("style", "MoveListBegin", "붙여넣은 표 셀 텍스트 시작 위치를 찾지 못했습니다.")
