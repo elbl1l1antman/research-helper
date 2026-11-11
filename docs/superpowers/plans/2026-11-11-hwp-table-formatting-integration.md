@@ -1,5 +1,7 @@
 # HWPX 표·서식 안정화 Implementation Plan
 
+> **실행 보류:** [개정 계획](2026-11-11-hwp-table-formatting-revision.md)이 우선한다. 이 문서의 Task 1~2는 안전장치와 검증 코드의 상세 참고용이며, Task 3의 `실선/없음`만으로 표 서식 보강을 완료 처리하지 않는다.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** 집계표의 표시값·병합·서식을 보존하는 편집 가능한 HWPX 표를 만들고, 잘못된 셀 입력을 차단한다.
