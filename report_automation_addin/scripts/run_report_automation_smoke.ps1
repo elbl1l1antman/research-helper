@@ -61,7 +61,8 @@ try {
 
     if ($TableRangeOverrides) {
         $macroName = "'" + $addinWorkbook.Name + "'!ReportAutomation_RunWithOptionsAndRangesSilent"
-        $excel.Run($macroName, "전체", "", $TableRangeOverrides) | Out-Null
+        $result = $excel.Run($macroName, "전체", "", $TableRangeOverrides)
+        if ($result -ne $true -or $result -is [string]) { throw "Excel output failed: $result" }
     }
     else {
         $macroName = "'" + $addinWorkbook.Name + "'!ReportAutomation_GenerateExcelOutputsSilent"
