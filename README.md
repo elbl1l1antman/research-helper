@@ -1,6 +1,6 @@
 # ReportAutomation
 
-Current version: `0.0.35`
+Current version: `0.0.36`
 
 `ReportAutomation`은 엑셀 집계표를 기반으로 조사 보고서 작성용 산출물을 자동 생성하는 런처 기반 프로젝트입니다.
 
@@ -460,7 +460,7 @@ python -m pip install -r requirements.txt
 정책:
 
 - semantic versioning 사용: `MAJOR.MINOR.PATCH`
-- push/publish 요청 시 버전 확인
+- 작업 커밋 후 버전을 확인하고 작업 브랜치를 원격에 푸시
 - 코드, 문서, 빌드 산출물이 바뀌면 필요한 경우 버전 증가
 - 릴리스 기준점은 Git tag로 기록: `v0.0.1`, `v0.0.2`, ...
 

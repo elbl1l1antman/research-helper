@@ -1,11 +1,12 @@
 # Versioning
 
-Current version: `0.0.35`
+Current version: `0.0.36`
 
 ## Policy
 
 - Use semantic versioning: `MAJOR.MINOR.PATCH`.
-- Every requested push or publish should include an explicit version check.
+- Push completed local commits to their remote work branch by default. Merging into `main` and publishing a GitHub Release remain separate decisions.
+- Check the version before each push or publish.
 - If code, docs, or packaged binaries changed, bump `VERSION` before pushing.
 - Create a matching Git tag for release points: `v0.0.1`, `v0.0.2`, ...
 - Keep deprecated assets under `old/legacy/` with a short note explaining what replaced them.
@@ -15,6 +16,9 @@ Current version: `0.0.35`
   - Major: breaking file format, CLI, template, or workflow change.
 
 ## Current Baseline
+
+`0.0.36` removes manual Excel add-in selection from the launcher, loads the bundled
+add-in automatically, and keeps connection diagnostics available on failure.
 
 `0.0.35` packages the editable HWPX starter and two built-in table presets,
 improves horizontal and vertical banner detection, and generates Excel output
