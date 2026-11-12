@@ -44,6 +44,13 @@ try {
     $fixtureCode = "import sys; from openpyxl import Workbook; w=Workbook(); s=w.active; s.append(['\uC774\uC6A9 \uACBD\uD5D8']); s.append(['\uAD6C\uBD84','\uD45C\uBCF8\uC218','\uC788\uC74C','\uC5C6\uC74C']); s.append(['\uC804\uCCB4',100,65,35]); w.save(sys.argv[1]); w.close()"
     & $result.python -E -s -X utf8 -c $fixtureCode $fixture
     if ($LASTEXITCODE -ne 0) { throw 'Standalone Excel fixture creation failed.' }
+    $fixtureHash = (Get-FileHash -LiteralPath $fixture).Hash
+    $failedOutput = Join-Path $directory 'failed run'
+    $failedRun = Start-Process -FilePath $copy -ArgumentList @('--workbook', ('"' + $fixture + '"'), '--addin', ('"' + $missingAddin + '"'), '--out', ('"' + $failedOutput + '"')) -WorkingDirectory $directory -WindowStyle Hidden -Wait -PassThru
+    if ($failedRun.ExitCode -ne 1 -or -not (Test-Path -LiteralPath ($failedOutput + '.excel_addin.json'))) { throw 'Missing add-in did not block the normal workflow with a diagnostic.' }
+    $failedReport = Get-Content -LiteralPath ($failedOutput + '.excel_addin.json') -Raw -Encoding UTF8 | ConvertFrom-Json
+    if ($failedReport.stage -ne 'file_check' -or (Get-FileHash -LiteralPath $fixture).Hash -ne $fixtureHash -or
+        (Get-ChildItem -LiteralPath $directory -Filter '*_report_alpha_*')) { throw 'Add-in failure touched the source workbook or created a copy.' }
     $draft = Join-Path $directory 'variant draft.txt'
     & $result.python -E -s -X utf8 $result.engine --excel $fixture --raw-tables --max-tables 1 --output $draft
     if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $draft) -or -not (Get-Content -LiteralPath $draft -Raw -Encoding UTF8).Contains('65')) { throw 'Bundled raw-table narrative extraction failed.' }

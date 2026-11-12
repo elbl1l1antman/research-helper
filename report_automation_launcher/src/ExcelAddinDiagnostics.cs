@@ -18,6 +18,11 @@ namespace ReportAutomationLauncher
     // Keep this shared by diagnostics and actual runs so they report the same failure honestly.
     internal static class ExcelAddinDiagnostics
     {
+        internal static void RequireFile(string path)
+        {
+            if (!File.Exists(path)) throw new ExcelAddinOpenException(NewReport(path), null);
+        }
+
         internal static object Open(object excel, string path)
         {
             var report = NewReport(path);
@@ -33,11 +38,10 @@ namespace ReportAutomationLauncher
                 report["stage"] = "addin_open";
                 report["hresult"] = "0x" + ex.ErrorCode.ToString("X8");
                 report["error"] = ex.Message;
-                report["message"] = "추가기능 파일은 존재하지만 Excel에서 열지 못했습니다." + Environment.NewLine +
+                report["message"] = "Excel에서 보고서 자동화 추가기능을 열지 못했습니다 (" + report["hresult"] + ")." + Environment.NewLine +
                     report["addin_path"] + Environment.NewLine +
-                    "Excel에서 이 경로에 접근할 수 있는지, 파일 차단 및 회사 보안 정책을 확인하세요. " +
-                    "파일 영역에서 사용자가 확인한 추가기능 경로를 직접 선택할 수 있습니다. " +
-                    "이 오류만으로 매크로 보안이 원인이라고 단정할 수 없으며 보안 설정은 자동 변경하지 않습니다.";
+                    "런처를 다시 실행해 보세요. 반복되면 산출 결과의 진행 기록과 Excel 연결 오류 기록을 관리자에게 전달하세요. " +
+                    "파일 접근 및 차단 상태를 확인할 수 있으며, 런처는 보안 설정을 변경하지 않습니다.";
                 throw new ExcelAddinOpenException(report, ex);
             }
         }
@@ -102,7 +106,8 @@ namespace ReportAutomationLauncher
                 { "addin_path", fullPath }, { "file_exists", File.Exists(fullPath) },
                 { "excel_version", "" }, { "hresult", "" }, { "error", "" },
                 { "macro_execution_verified", false },
-                { "message", "추가기능 파일을 찾을 수 없습니다. 경로를 확인하세요: " + fullPath }
+                { "message", "보고서 자동화 추가기능을 찾을 수 없습니다: " + fullPath + Environment.NewLine +
+                    "내장 추가기능은 런처를 닫고 다시 실행하세요. 별도 경로를 지정한 경우 해당 경로를 확인하세요." }
             };
         }
     }

@@ -348,8 +348,8 @@ EXE는 매번 같은 이름으로 갱신하며 버전별 실행 파일을 따로
 첫 실행 시 사용자 로컬 캐시에 실행 구성요소를 준비합니다.
 [독립 실행·빌드 안내](docs/standalone_launcher.md)
 
-Excel이 추가기능을 열지 못하면 파일 영역의 **연결 검사**로 실제 Excel 접근 여부를
-확인할 수 있습니다. [연결 진단과 오류 기록](docs/excel_addin_diagnostics.md)
+원본 집계표만 선택하면 런처가 내장 Excel 추가기능을 자동으로 엽니다. 연결 실패 시
+산출 화면에 오류와 진단 파일 위치가 표시됩니다. [연결 진단과 오류 기록](docs/excel_addin_diagnostics.md)
 
 빌드:
 
