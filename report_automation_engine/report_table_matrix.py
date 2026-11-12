@@ -26,17 +26,16 @@ def resolve_table_metadata(table: Dict[str, Any], metadata: Dict[str, Any] | Non
     match = re.search(base_pattern, base, re.I)
     if match:
         base = match.group(1).strip(" ,|")
-    elif not supplied.get("base_label"):
-        for label in labels:
-            match = re.match(base_pattern, label.strip(" ["), re.I)
-            if match:
-                explicit = match.group(1).strip(" ,|")
-                # Older table lists may concatenate every answer label after the BASE condition.
-                suffix = base[len(explicit):].lstrip() + " "
-                repeats_label = any(value.strip() and suffix.startswith(value.strip() + " ") for value in labels if value != label)
-                if explicit and (not base or (base.startswith(explicit + " ") and repeats_label)):
-                    base = explicit
-                break
+    for label in labels:
+        match = re.match(base_pattern, label.strip(" ["), re.I)
+        if match:
+            explicit = match.group(1).strip(" ,|")
+            # The VBA table list can include adjacent header labels in its BASE text.
+            suffix = base[len(explicit):].lstrip() + " "
+            repeats_label = any(value.strip() and suffix.startswith(value.strip() + " ") for value in labels if value != label)
+            if explicit and (not base or (base.startswith(explicit + " ") and repeats_label)):
+                base = explicit
+            break
     if not unit:
         units = []
         for label in labels:

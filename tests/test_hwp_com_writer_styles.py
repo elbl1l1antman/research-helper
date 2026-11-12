@@ -21,6 +21,7 @@ from report_automation_engine.hwp_com_writer import (
     insert_narrative_blocks,
     leave_hwp_table,
     current_body_width,
+    qa_summary,
     verify_table_width,
     write_body,
     write_hwp_document,
@@ -35,6 +36,17 @@ STYLE_INDEXES = {
     "표배너": 13,
     "표숫자": 14,
 }
+
+
+def test_hwp_qa_summary_only_counts_included_sections():
+    package = {
+        "sections": [{"table_key": "T1"}, {"table_key": "T2"}],
+        "qa": [{"table_key": "T1", "severity": "warning", "message": "internal details"},
+               {"table_key": "T2", "severity": "error"}],
+    }
+    assert qa_summary(package, 1).startswith("수록 표 1개 · 오류 0건 · 경고 1건.")
+    assert qa_summary(package, 0).startswith("수록 표 2개 · 오류 1건 · 경고 1건.")
+    assert "internal details" not in qa_summary(package, 1)
 
 
 class FakeAction:
@@ -405,7 +417,7 @@ class HwpComWriterStyleTests(unittest.TestCase):
 
                 write_body(hwp, {"sections": [section]}, report, style_indexes=STYLE_INDEXES, style_config=config)
 
-                self.assertEqual([event[1] for event in hwp.events if event[0] == "text"], ["Title", *expected, "source: T001"])
+                self.assertEqual([event[1] for event in hwp.events if event[0] == "text"], ["Title", *expected])
                 self.assertEqual([block["text"] for block in section["narrative_blocks"]], texts)
 
     def test_apply_named_style_uses_style_action_and_counts(self):

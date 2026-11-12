@@ -40,13 +40,27 @@ Public Sub ReportAutomation_WriteNarratives(ByVal wsNarr As Worksheet, ByVal wsC
 
         ' points는 분석문/차트/삽입표에 공통으로 쓰는 핵심 수치 목록이다.
         ' 각 원소는 Array(category, percent, weighted_n, raw_n, source_cell) 구조를 따른다.
-        Dim points As Collection
-        Set points = ReportAutomation_ExtractKeyPoints(dataWs, rec)
+        Dim points As Collection, profileTotal As Double, title As String, warning As String
+        profileTotal = ReportAutomation_ProfileTotal(dataWs, rec)
+        title = CStr(rec(IDX_TITLE))
+        warning = CStr(rec(IDX_WARNING))
+        If profileTotal > 0 Then
+            Set points = New Collection
+            title = "응답자 특성"
+            If warning = "BASE 행 확인 필요" Then warning = ""
+        Else
+            Set points = ReportAutomation_ExtractKeyPoints(dataWs, rec)
+        End If
 
         ' 보고서 본문용 문장과 리뷰용 수치 요약을 각각 생성한다.
         Dim narrative As String, summary As String
-        narrative = ReportAutomation_BuildNarrative(CStr(rec(IDX_TITLE)), CStr(rec(IDX_BASIS)), points, titlePrefixes)
-        summary = ReportAutomation_FormatPointSummary(points)
+        If profileTotal > 0 Then
+            narrative = ReportAutomation_WriteProfileNarrative(wsChart, chartRow, dataWs, rec, bannerSetting, profileTotal)
+            summary = "전체 " & Format(profileTotal, "#,##0") & "명"
+        Else
+            narrative = ReportAutomation_BuildNarrative(title, CStr(rec(IDX_BASIS)), points, titlePrefixes)
+            summary = ReportAutomation_FormatPointSummary(points)
+        End If
 
         ' 전체 기준 수치를 차트 데이터와 삽입용 표 데이터로 펼친다.
         Dim p As Long, pointRec As Variant
@@ -75,21 +89,22 @@ Public Sub ReportAutomation_WriteNarratives(ByVal wsNarr As Worksheet, ByVal wsC
             insertRow = insertRow + 1
         Next p
 
-        ReportAutomation_AppendBannerChartRows wsChart, chartRow, dataWs, rec, bannerSetting, narrative
+        If profileTotal = 0 Then ReportAutomation_AppendBannerChartRows wsChart, chartRow, dataWs, rec, bannerSetting, narrative
         wsNarr.Cells(narrRow, 1).Value = rec(IDX_TABLE_KEY)
-        wsNarr.Cells(narrRow, 2).Value = rec(IDX_TITLE)
+        wsNarr.Cells(narrRow, 2).Value = title
         wsNarr.Cells(narrRow, 3).Value = narrative
         wsNarr.Cells(narrRow, 6).Value = summary
-        wsNarr.Cells(narrRow, 7).Value = IIf(points.Count = 0, "확인 필요", "자동 생성")
+        Dim missingPoints As Boolean: missingPoints = points.Count = 0 And profileTotal = 0
+        wsNarr.Cells(narrRow, 7).Value = IIf(missingPoints, "확인 필요", "자동 생성")
         wsNarr.Cells(narrRow, 9).Value = narrative
         narrRow = narrRow + 1
 
         ' 분석문 생성 실패 또는 구조 경고가 있는 표는 QA 시트에 남겨 수동 검토 대상으로 만든다.
-        If points.Count = 0 Or Len(CStr(rec(IDX_WARNING))) > 0 Then
+        If missingPoints Or Len(warning) > 0 Then
             wsQA.Cells(qaRow, 1).Value = rec(IDX_TABLE_KEY)
-            wsQA.Cells(qaRow, 2).Value = IIf(points.Count = 0, "수치 QA", "표 구조 QA")
+            wsQA.Cells(qaRow, 2).Value = IIf(missingPoints, "수치 QA", "표 구조 QA")
             wsQA.Cells(qaRow, 3).Value = "warning"
-            wsQA.Cells(qaRow, 4).Value = IIf(points.Count = 0, "분석문 생성에 사용할 전체 기준 비율 값을 찾지 못했습니다.", rec(IDX_WARNING))
+            wsQA.Cells(qaRow, 4).Value = IIf(missingPoints, "분석문 생성에 사용할 전체 기준 비율 값을 찾지 못했습니다.", warning)
             wsQA.Cells(qaRow, 5).Value = dataWs.Range(dataWs.Cells(CLng(rec(IDX_START_ROW)), ReportAutomation_FirstCol(rec)), dataWs.Cells(CLng(rec(IDX_END_ROW)), CLng(rec(IDX_LAST_COL)))).Address(False, False)
             wsQA.Cells(qaRow, 6).Value = Format(Now, "yyyy-mm-dd hh:nn:ss")
             qaRow = qaRow + 1

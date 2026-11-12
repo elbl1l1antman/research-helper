@@ -51,6 +51,8 @@ class TableMetadataTests(unittest.TestCase):
                  "matrix": [[{"role": "base", "display_text": "BASE:전체 응답자"},
                              {"role": "banner_horizontal", "display_text": "보기1"}]]}
         self.assertEqual(self.resolve(table)["base_label"], "전체 응답자")
+        self.assertEqual(self.resolve(table, {"base_label": "※BASE : 전체 응답자 보기1 보기2"})["base_label"],
+                         "전체 응답자")
         self.assertEqual(self.resolve(table, {"base_label": "전체 응답자 별도 기준"})["base_label"], "전체 응답자 별도 기준")
         table["base_label"] = "전체 응답자 (n=120)"
         self.assertEqual(self.resolve(table)["base_label"], "전체 응답자 (n=120)")

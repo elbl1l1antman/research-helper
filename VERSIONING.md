@@ -1,6 +1,6 @@
 # Versioning
 
-Current version: `0.0.37`
+Current version: `0.0.38`
 
 ## Policy
 
@@ -16,6 +16,9 @@ Current version: `0.0.37`
   - Major: breaking file format, CLI, template, or workflow change.
 
 ## Current Baseline
+
+`0.0.38` fixes HWP report section selection and respondent profile summaries,
+and adds a separate destination for report outputs.
 
 `0.0.37` adds live narrative and table examples to the HWP style editor and
 requires saving edits before applying a changed preset.

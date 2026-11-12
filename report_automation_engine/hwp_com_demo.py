@@ -238,7 +238,7 @@ def build_text_preview(raw_text: str) -> str:
     """Extract a compact text preview from the generated HWPX XML."""
 
     fragments: List[str] = []
-    for text in EXPECTED_TEXT + ["[차트 삽입 필요]", "source: DEMO_T001", "차트는 HWPX v1 writer"]:
+    for text in EXPECTED_TEXT + ["수록 표 1개 · 오류 0건 · 경고 1건"]:
         if text in raw_text and text not in fragments:
             fragments.append(text)
     return "\n".join(fragments) + "\n"

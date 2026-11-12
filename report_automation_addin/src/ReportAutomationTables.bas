@@ -332,6 +332,8 @@ End Function
 
 Private Function ReportAutomation_FindHeader(ByVal ws As Worksheet, ByRef values As Variant, ByVal firstRow As Long, ByVal lastRow As Long, ByVal firstCol As Long, ByVal lastCol As Long) As Long
     Dim r As Long, text As String, meaningful As Long
+    Dim profileTitle As Boolean
+    If firstRow > 1 Then profileTitle = ReportAutomation_IsProfileTitle(ReportAutomation_RowText(values, firstRow - 1, firstCol, lastCol))
     For r = firstRow To lastRow
         text = ReportAutomation_RowText(values, r, firstCol, lastCol)
         If Len(text) = 0 Then GoTo NextHeader
@@ -349,7 +351,10 @@ Private Function ReportAutomation_FindHeader(ByVal ws As Worksheet, ByRef values
                 Dim candidateCol As Long
                 candidateCol = ReportAutomation_FirstTextCol(values, r, firstCol, lastCol)
                 If candidateCol <= firstCol + 2 Then
-                    If ws.Cells(r, candidateCol).MergeArea.Column + ws.Cells(r, candidateCol).MergeArea.Columns.Count - 1 >= lastCol Then Exit Function
+                    If ws.Cells(r, candidateCol).MergeArea.Column + ws.Cells(r, candidateCol).MergeArea.Columns.Count - 1 >= lastCol Then
+                        ' A profile's single measure group can span the full measure area of a narrow sheet.
+                        If Not (profileTitle And candidateCol = firstCol + 2 And lastCol = candidateCol + 1) Then Exit Function
+                    End If
                 End If
             End If
         End If

@@ -1971,6 +1971,7 @@ namespace ReportAutomationLauncher
         private readonly TextBox llmModelText = new TextBox();
         private readonly TextBox llmApiKeyText = new TextBox();
         private readonly CheckBox copyWorkbookCheck = new CheckBox();
+        private readonly TextBox outputFolderText = new TextBox();
         private readonly CheckBox keepExcelOpenCheck = new CheckBox();
         private readonly Button runButton = new Button();
         private bool reportRunning;
@@ -2144,6 +2145,19 @@ namespace ReportAutomationLauncher
             hwpTemplateText.Text = bundledAddin;
             if (!runButton.Enabled)
                 throw new InvalidOperationException("입력이 준비된 한글 보고서의 실행 버튼이 비활성 상태입니다.");
+            var expectedScope = new[] { 1, 3, 0 };
+            for (int i = 0; i < expectedScope.Length; i++)
+            {
+                hwpMaxSectionsCombo.SelectedIndex = i;
+                if (ReadOptions().HwpMaxSections != expectedScope[i])
+                    throw new InvalidOperationException("한글 출력 범위가 선택값과 일치하지 않습니다.");
+            }
+            hwpMaxSectionsCombo.SelectedIndex = 0;
+            outputFolderText.Text = Path.GetTempPath();
+            if (copyWorkbookCheck.Enabled || !ReadOptions().CopyWorkbook ||
+                ReadOptions().ArtifactDirectory != Path.GetFullPath(Path.GetTempPath()))
+                throw new InvalidOperationException("저장 폴더 선택 시 Excel 작업 복사본이 필요합니다.");
+            outputFolderText.Clear();
 
             var examples = new HashSet<string>();
             for (int index = 0; index < reportProfileCombo.Items.Count; index++)
@@ -2409,7 +2423,7 @@ namespace ReportAutomationLauncher
         {
             var page = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, AutoScroll = true };
             var source = new GroupBox { Text = "원본 집계표", Dock = DockStyle.Top, AutoSize = true };
-            var input = CreateGrid(2);
+            var input = CreateGrid(4);
             source.Controls.Add(input);
             AddPathRow(input, 0, "Excel 집계표", workbookPathText, "Excel 파일 선택…", BrowseWorkbook);
             var checks = new FlowLayoutPanel { Dock = DockStyle.Fill, AutoSize = true };
@@ -2420,6 +2434,17 @@ namespace ReportAutomationLauncher
             AddLabel(input, 1, "산출 파일");
             input.Controls.Add(checks, 1, 1);
             input.SetColumnSpan(checks, 2);
+            AddPathRow(input, 2, "산출물 저장 폴더", outputFolderText, "폴더 선택…", BrowseOutputFolder);
+            var folderHint = new Label { Text = "비워 두면 원본 옆에 저장합니다. 폴더를 지정하면 원본을 보존하고 작업 복사본을 만듭니다.",
+                AutoSize = true, ForeColor = LauncherUi.ColorMutedText, Margin = new Padding(0, 4, 0, 0) };
+            input.Controls.Add(folderHint, 1, 3);
+            input.SetColumnSpan(folderHint, 2);
+            outputFolderText.TextChanged += delegate
+            {
+                bool custom = !string.IsNullOrWhiteSpace(outputFolderText.Text);
+                if (custom) copyWorkbookCheck.Checked = true;
+                copyWorkbookCheck.Enabled = !custom;
+            };
             page.Controls.Add(source, 0, 0);
 
             return page;
@@ -2495,10 +2520,10 @@ namespace ReportAutomationLauncher
             hwpLimitLabel.AutoSize = true;
             hwpLimitLabel.Margin = new Padding(12, 7, 6, 0);
             hwpMaxSectionsCombo.DropDownStyle = ComboBoxStyle.DropDownList;
-            hwpMaxSectionsCombo.Width = 120;
-            hwpMaxSectionsCombo.Items.Add("첫 문항만");
-            hwpMaxSectionsCombo.Items.Add("첫 3개 문항");
-            hwpMaxSectionsCombo.Items.Add("모든 문항");
+            hwpMaxSectionsCombo.Width = 145;
+            hwpMaxSectionsCombo.Items.Add("첫 표만 (시험 출력)");
+            hwpMaxSectionsCombo.Items.Add("첫 3개 표");
+            hwpMaxSectionsCombo.Items.Add("모든 표");
             var hwpDispatchLabel = new Label();
             hwpDispatchLabel.Text = "한글 연결 방식";
             hwpDispatchLabel.AutoSize = true;
@@ -3600,6 +3625,15 @@ namespace ReportAutomationLauncher
             }
         }
 
+        private void BrowseOutputFolder(object sender, EventArgs e)
+        {
+            using (var dialog = new FolderBrowserDialog { Description = "Excel 작업본, HWPX 보고서, QA 기록을 저장할 폴더를 선택하세요." })
+            {
+                if (Directory.Exists(outputFolderText.Text.Trim())) dialog.SelectedPath = outputFolderText.Text.Trim();
+                if (dialog.ShowDialog(this) == DialogResult.OK) outputFolderText.Text = dialog.SelectedPath;
+            }
+        }
+
         private void LoadBannerPreviewAsync()
         {
             LoadWorkbookPreviewAsync();
@@ -4397,7 +4431,7 @@ namespace ReportAutomationLauncher
                     {
                         try
                         {
-                            string path = Path.Combine(Path.GetDirectoryName(options.WorkbookPath), "excel_addin_error_" + DateTime.Now.ToString("yyyyMMdd_HHmmss") + ".json");
+                            string path = Path.Combine(options.ArtifactDirectory, "excel_addin_error_" + DateTime.Now.ToString("yyyyMMdd_HHmmss") + ".json");
                             ExcelAddinDiagnostics.Save(path, addinError.Report);
                             diagnosticPath = path;
                             Log("Excel 연결 오류 기록: " + diagnosticPath);
@@ -4442,7 +4476,10 @@ namespace ReportAutomationLauncher
             lines.Add("차트 출력: " + options.ChartOutputMode);
             lines.Add("삽입표 방식: " + options.TableInsertMode);
             lines.Add("LLM 문장 고도화: " + (options.UseLlm ? options.LlmProvider + " / " + options.LlmModel : "사용 안 함"));
-            lines.Add("작업 방식: " + (options.CopyWorkbook ? "원본 옆 복사본 생성" : "원본 파일 직접 산출"));
+            lines.Add("작업 방식: " + (options.CopyWorkbook ? "Excel 작업 복사본 생성" : "원본 파일 직접 산출"));
+            lines.Add("저장 폴더: " + options.ArtifactDirectory);
+            if (options.OutputType.IndexOf("HWP", StringComparison.OrdinalIgnoreCase) >= 0)
+                lines.Add("한글 출력 범위: " + (options.HwpMaxSections == 0 ? "모든 표" : "첫 " + options.HwpMaxSections + "개 표"));
             lines.Add("선택 배너: " + options.BannerSetting);
             lines.Add("구성요소: " + BuildComponentSummary(options));
             if (!string.IsNullOrWhiteSpace(options.LastGeneratedWorkbookPath))
@@ -5613,6 +5650,7 @@ namespace ReportAutomationLauncher
         {
             var options = new LauncherOptions();
             options.WorkbookPath = workbookPathText.Text.Trim();
+            options.OutputDirectory = outputFolderText.Text.Trim();
             options.OutputType = outputTypeCombo.SelectedItem == null ? "" : outputTypeCombo.SelectedItem.ToString();
             options.ReportProfile = reportProfileCombo.SelectedItem == null ? "" : reportProfileCombo.SelectedItem.ToString();
             options.StyleProfile = styleProfileCombo.SelectedItem == null ? "" : styleProfileCombo.SelectedItem.ToString();
@@ -5696,6 +5734,7 @@ namespace ReportAutomationLauncher
 
         private string ResolveHwpDiagnosticOutputDirectory()
         {
+            if (Directory.Exists(outputFolderText.Text.Trim())) return Path.GetFullPath(outputFolderText.Text.Trim());
             string workbookPath = workbookPathText.Text.Trim();
             if (!string.IsNullOrWhiteSpace(workbookPath))
             {
@@ -5721,16 +5760,7 @@ namespace ReportAutomationLauncher
 
         private int SelectedHwpMaxSections()
         {
-            string value = hwpMaxSectionsCombo.SelectedItem == null ? "" : hwpMaxSectionsCombo.SelectedItem.ToString();
-            if (value.StartsWith("3", StringComparison.OrdinalIgnoreCase))
-            {
-                return 3;
-            }
-            if (value.IndexOf("전체", StringComparison.OrdinalIgnoreCase) >= 0)
-            {
-                return 0;
-            }
-            return 1;
+            return hwpMaxSectionsCombo.SelectedIndex == 1 ? 3 : hwpMaxSectionsCombo.SelectedIndex == 2 ? 0 : 1;
         }
 
         private int SelectedDecimalPlaces()
@@ -5756,6 +5786,8 @@ namespace ReportAutomationLauncher
     internal sealed class LauncherOptions
     {
         public string WorkbookPath;
+        public string OutputDirectory;
+        public string ArtifactDirectory { get { return OutputDirectory ?? Path.GetDirectoryName(WorkbookPath); } }
         public string AddinPath;
         public string OutputType = "Excel 산출 시트";
         public string ReportProfile = "인식도/만족도 조사형";
@@ -5808,6 +5840,12 @@ namespace ReportAutomationLauncher
                 throw new FileNotFoundException("집계표 엑셀 파일을 찾을 수 없습니다.", WorkbookPath);
             }
             AddinPath = Path.GetFullPath(string.IsNullOrWhiteSpace(AddinPath) ? PathResolver.ResolveDefaultAddinPath() : AddinPath);
+            OutputDirectory = string.IsNullOrWhiteSpace(OutputDirectory) ? null : Path.GetFullPath(OutputDirectory);
+            if (OutputDirectory != null)
+            {
+                if (!CopyWorkbook) throw new InvalidOperationException("별도 저장 폴더를 사용하려면 Excel 작업 복사본을 만들어야 합니다.");
+                if (!Directory.Exists(OutputDirectory)) throw new DirectoryNotFoundException("산출물 저장 폴더를 찾을 수 없습니다: " + OutputDirectory);
+            }
             if (!string.IsNullOrWhiteSpace(HwpTemplatePath))
             {
                 HwpTemplatePath = Path.GetFullPath(HwpTemplatePath);
@@ -5920,6 +5958,8 @@ namespace ReportAutomationLauncher
 
             var options = new LauncherOptions();
             options.WorkbookPath = Get(values, "workbook", "");
+            if (flags.Contains("output-dir")) throw new InvalidOperationException("--output-dir <path> 값을 지정하세요.");
+            options.OutputDirectory = Get(values, "output-dir", "");
             options.AddinPath = Get(values, "addin", "");
             options.OutputType = Get(values, "output", "Excel 산출 시트");
             options.ReportProfile = Get(values, "report-profile", "인식도/만족도 조사형");
@@ -6141,6 +6181,22 @@ namespace ReportAutomationLauncher
         {
             options.Validate();
             ExcelAddinDiagnostics.RequireFile(options.AddinPath);
+            if (options.OutputDirectory != null)
+            {
+                try
+                {
+                    string probe = Path.Combine(options.ArtifactDirectory, ".research-helper-" + Guid.NewGuid().ToString("N") + ".tmp");
+                    using (new FileStream(probe, FileMode.CreateNew, FileAccess.Write, FileShare.None, 4096, FileOptions.DeleteOnClose)) { }
+                }
+                catch (IOException ex)
+                {
+                    throw new IOException("산출물 저장 폴더에 쓸 수 없습니다: " + options.ArtifactDirectory, ex);
+                }
+                catch (UnauthorizedAccessException ex)
+                {
+                    throw new IOException("산출물 저장 폴더에 쓸 수 없습니다: " + options.ArtifactDirectory, ex);
+                }
+            }
             string workbookToOpen = options.WorkbookPath;
             bool legacyFormat = Path.GetExtension(workbookToOpen).Equals(".xls", StringComparison.OrdinalIgnoreCase);
             bool originalEnableEvents = true;
@@ -6179,7 +6235,7 @@ namespace ReportAutomationLauncher
                         workbook = xl.Workbooks.Open(options.WorkbookPath, 0, true);
                         dynamic legacy = workbook;
                         bool hasMacros = legacy.HasVBProject;
-                        workbookToOpen = WorkingCopyPath(options.WorkbookPath, hasMacros ? ".xlsm" : ".xlsx");
+                        workbookToOpen = WorkingCopyPath(options, hasMacros ? ".xlsm" : ".xlsx");
                         if (File.Exists(workbookToOpen)) throw new IOException("작업 사본이 이미 있습니다: " + workbookToOpen);
                         legacy.SaveAs(workbookToOpen, hasMacros ? 52 : 51);
                         // SaveAs alone leaves the workbook in 65,536-row compatibility mode.
@@ -6199,7 +6255,7 @@ namespace ReportAutomationLauncher
                 }
                 else
                 {
-                    workbookToOpen = options.CopyWorkbook ? CreateWorkingCopy(options.WorkbookPath) : options.WorkbookPath;
+                    workbookToOpen = options.CopyWorkbook ? CreateWorkingCopy(options) : options.WorkbookPath;
                     workbook = xl.Workbooks.Open(workbookToOpen);
                 }
                 log("대상 파일: " + workbookToOpen);
@@ -6267,17 +6323,17 @@ namespace ReportAutomationLauncher
             return workbookToOpen;
         }
 
-        private static string CreateWorkingCopy(string sourcePath)
+        private static string CreateWorkingCopy(LauncherOptions options)
         {
-            string copyPath = WorkingCopyPath(sourcePath, Path.GetExtension(sourcePath));
-            File.Copy(sourcePath, copyPath, true);
+            string copyPath = WorkingCopyPath(options, Path.GetExtension(options.WorkbookPath));
+            File.Copy(options.WorkbookPath, copyPath, false);
             return copyPath;
         }
 
-        private static string WorkingCopyPath(string sourcePath, string extension)
+        private static string WorkingCopyPath(LauncherOptions options, string extension)
         {
-            return Path.Combine(Path.GetDirectoryName(sourcePath),
-                Path.GetFileNameWithoutExtension(sourcePath) + "_report_alpha_" + DateTime.Now.ToString("yyyyMMdd_HHmmss") + extension);
+            return Path.Combine(options.ArtifactDirectory,
+                Path.GetFileNameWithoutExtension(options.WorkbookPath) + "_report_alpha_" + DateTime.Now.ToString("yyyyMMdd_HHmmss") + extension);
         }
 
         internal static void WriteLauncherConfig(string workbookPath, LauncherOptions options)
@@ -6285,8 +6341,9 @@ namespace ReportAutomationLauncher
             string path = Path.Combine(Path.GetDirectoryName(workbookPath), Path.GetFileNameWithoutExtension(workbookPath) + "_launcher_config.txt");
             using (var writer = new StreamWriter(path, false, System.Text.Encoding.UTF8))
             {
-                writer.WriteLine("Workbook=" + workbookPath);
+                writer.WriteLine("Workbook=" + options.WorkbookPath);
                 writer.WriteLine("GeneratedWorkbook=" + workbookPath);
+                writer.WriteLine("OutputDirectory=" + options.ArtifactDirectory);
                 writer.WriteLine("Addin=" + options.AddinPath);
                 writer.WriteLine("OutputType=" + options.OutputType);
                 writer.WriteLine("ReportProfile=" + options.ReportProfile);
@@ -6538,7 +6595,7 @@ namespace ReportAutomationLauncher
             try
             {
                 var options = new LauncherOptions { LastReportPackagePath = Path.Combine(directory, "report_package.json") };
-                string emitted = Path.Combine(directory, "hwp_page_setup.json");
+                string emitted = Path.Combine(directory, "report_package_hwp_page_setup.json");
                 PrepareHwpPageSetup(options);
                 CheckPageSetup(options.HwpPageSetup == null && options.HwpPageSetupPath == null && !File.Exists(emitted), "fresh preserve mode does not emit JSON");
                 options.HwpPageSetup = defaults;
@@ -6625,7 +6682,7 @@ namespace ReportAutomationLauncher
                 catch (InvalidOperationException ex) { qaBlocked = ex.Message.Contains("T0001 missing source range"); }
                 if (!qaBlocked) throw new InvalidOperationException("Self-check failed: blocked QA did not surface the table error");
                 PrepareHwpStyleConfig(options);
-                string expected = Path.Combine(directory, "hwp_style_config.json");
+                string expected = Path.Combine(directory, "report_package_hwp_style_config.json");
                 if (!string.Equals(options.HwpStyleConfigPath, expected, StringComparison.OrdinalIgnoreCase) || !File.Exists(expected))
                     throw new InvalidOperationException("Self-check failed: normalized style config emission");
                 string arguments = BuildHwpWriterArguments("writer.py", options, "output.hwpx", "writer_report.json", "render_plan.json");
@@ -6782,6 +6839,7 @@ namespace ReportAutomationLauncher
                                       " --preflight-output " + Quote(preflightPath) +
                                       " --hwp-template " + Quote(options.OutputType.IndexOf("HWP", StringComparison.OrdinalIgnoreCase) >= 0 ? options.HwpTemplatePath : "") +
                                       " --output-type " + Quote(options.OutputType) +
+                                      " --source-file-name " + Quote(Path.GetFileName(options.WorkbookPath)) +
                                       " --report-profile " + Quote(options.ReportProfile) +
                                       " --style-profile " + Quote(options.StyleProfile) +
                                       " --banner " + Quote(options.BannerSetting) +
@@ -6887,7 +6945,8 @@ namespace ReportAutomationLauncher
                 {
                     var stdoutTask = process.StandardOutput.ReadToEndAsync();
                     var stderrTask = process.StandardError.ReadToEndAsync();
-                    if (!process.WaitForExit(180000))
+                    int timeout = options.HwpMaxSections == 0 ? 1800000 : Math.Max(1, Math.Min(options.HwpMaxSections, 10)) * 180000;
+                    if (!process.WaitForExit(timeout))
                     {
                         try { process.Kill(); } catch { }
                         log("HWPX 생성 시간이 길어져 이번 실행에서는 중단했습니다.");
@@ -6928,9 +6987,17 @@ namespace ReportAutomationLauncher
         private static void PrepareHwpStyleConfig(LauncherOptions options)
         {
             Dictionary<string, object> config = options.HwpStyleConfig ?? HwpStylePresetStore.DefaultConfig();
-            options.HwpStyleConfigPath = Path.Combine(Path.GetDirectoryName(options.LastReportPackagePath), "hwp_style_config.json");
+            options.HwpStyleConfigPath = HwpConfigPath(options, "_hwp_style_config.json");
             HwpStylePresetStore.WriteConfig(options.HwpStyleConfigPath, config);
             options.HwpStylePresetName = Convert.ToString(config["preset_name"]);
+        }
+
+        private static string HwpConfigPath(LauncherOptions options, string suffix)
+        {
+            string stem = Path.ChangeExtension(options.LastReportPackagePath, null);
+            const string packageSuffix = "_report_package";
+            if (stem.EndsWith(packageSuffix, StringComparison.Ordinal)) stem = stem.Substring(0, stem.Length - packageSuffix.Length);
+            return stem + suffix;
         }
 
         private static string BuildHwpWriterArguments(string toolPath, LauncherOptions options, string outputPath, string reportPath, string renderPlanPath)
@@ -6956,7 +7023,7 @@ namespace ReportAutomationLauncher
             // Null is authoritative: never reuse a previous run's file in template-preserve mode.
             options.HwpPageSetupPath = null;
             if (options.HwpPageSetup == null) return;
-            string path = Path.Combine(Path.GetDirectoryName(options.LastReportPackagePath), "hwp_page_setup.json");
+            string path = HwpConfigPath(options, "_hwp_page_setup.json");
             HwpPageSetup.WriteConfig(path, options.HwpPageSetup);
             options.HwpPageSetupPath = path;
         }

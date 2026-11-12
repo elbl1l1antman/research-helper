@@ -439,6 +439,30 @@ public static class RecognitionFixtureNative {
     Assert-Equal $chart.Cells.Item(4, 6).Value2 '62.5%' 'Chart display preserves the percent text.'
     Assert-Contains $narrative.Cells.Item(2, 3).Value2 '(n=8)' 'Selected subgroup states its sample count.'
 
+    $ws = New-Fixture 'RespondentProfile'
+    [void]$ownedSheets.Add($ws)
+    $profileTitle = (U @(0xC751, 0xB2F5, 0xC790, 0xD2B9, 0xC131, 0xD45C)).ToCharArray() -join ' '
+    Write-Row $ws 1 1 @("[ $profileTitle ]")
+    $ws.Range('A1:D1').Merge()
+    Write-Row $ws 2 3 @('Results')
+    $ws.Range('C2:D2').Merge()
+    $ws.Range('A2:B3').Merge()
+    Write-Row $ws 3 3 @($cases, '%')
+    $ws.Range('C4:C6').NumberFormat = '@'
+    Write-Row $ws 4 1 @("$square$total$square", $null, '(1000)', 100)
+    $ws.Range('A4:B4').Merge()
+    Write-Row $ws 5 1 @('Group', 'Alpha', '(450)', 45)
+    Write-Row $ws 6 2 @('Beta', '(550)', 55)
+    $ws.Range('A5:A6').Merge()
+    $ws.Activate() | Out-Null
+    $status = $excel.Run($macroExport, "$total," + $vertical + ': Group', '', '')
+    if ($status -is [string] -or $status -ne $true) { throw "Respondent profile export failed: $status" }
+    $narrative = @($fixtures.Worksheets | Where-Object { $_.Name.StartsWith($analysisPrefix) })[-1]
+    $profileText = [string]$narrative.Cells.Item(2, 3).Value2
+    Assert-Contains $profileText '1,000' 'Respondent profile uses the total sample count.'
+    Assert-Contains $profileText 'Beta 55.0%' 'Respondent profile groups response shares by banner.'
+    if ($profileText.Contains('Results') -or $profileText.Contains('100.0%')) { throw 'A profile measure became a ranked response.' }
+
     if ($WorkbookPath) {
         $WorkbookPath = (Resolve-Path -LiteralPath $WorkbookPath).Path
         # External input cannot execute macros; the already-loaded add-in remains callable.

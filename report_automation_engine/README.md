@@ -235,7 +235,7 @@ python -m report_automation_engine.hwp_table_mapping `
 - `{{BODY}}`를 찾지 못하면 생성하지 않고 writer report에 실패 사유를 남깁니다.
 - 셀 계약이 있으면 Excel 범위 clipboard 삽입을 먼저 시도합니다. 사용할 수 없거나 붙여넣기 검증이 실패하면 matrix 기반 `TableCreate`/셀 병합으로 전환합니다. 표 생성 실패 시 텍스트 표를 성공 산출물로 저장하지 않고 중단합니다.
 - clipboard로 붙인 셀도 계약의 `display_text`로 다시 채우고 역할별 스타일과 외형을 적용합니다. 병합에 가려진 `covered_by` 셀은 건너뜁니다.
-- 차트는 v1에서 직접 삽입하지 않고 `[차트 삽입 필요]` 문구로 표시합니다.
+- 차트는 v1에서 직접 삽입하지 않습니다. 보류된 차트는 작성 기록에 남기고 문서 본문에는 안내 문구를 삽입하지 않습니다.
 
 ## HWP 서식 계약과 표시문자
 

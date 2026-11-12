@@ -152,7 +152,7 @@ def write_hwp_document(
 
         excel, excel_workbook = open_excel_clipboard_source(package, package_file, writer_report)
 
-        replace_header_placeholders(hwp, package, writer_report)
+        replace_header_placeholders(hwp, package, writer_report, max_sections)
         if not find_placeholder(hwp, BODY_PLACEHOLDER):
             raise HwpWriterError("template", "find_body", "{{BODY}} placeholder를 문서 본문에서 찾지 못했습니다.")
         writer_report["placeholders"]["body_found"] = True
@@ -176,6 +176,7 @@ def write_hwp_document(
             excel_workbook,
             style_indexes,
             style_config,
+            report_file,
         )
         write_json(report_file, writer_report)
         save_as_hwpx(hwp, output_file, writer_report, report_file)
@@ -465,13 +466,13 @@ def open_document(hwp, path: Path, report: Dict[str, Any], checkpoint_path: Path
     raise HwpWriterError("document", "open", f"템플릿 사본을 아래한글로 열지 못했습니다: {last_error}")
 
 
-def replace_header_placeholders(hwp, package: Dict[str, Any], report: Dict[str, Any]) -> None:
+def replace_header_placeholders(hwp, package: Dict[str, Any], report: Dict[str, Any], max_sections: int | None = None) -> None:
     meta = package.get("meta", {})
     values = {
-        "report_title": str(meta.get("report_title") or meta.get("source_file_name") or "보고서 초안"),
+        "report_title": str(meta.get("report_title") or Path(str(meta.get("source_file_name") or "")).stem or "보고서 초안"),
         "project_name": str(meta.get("project_name") or meta.get("report_profile") or ""),
         "created_at": str(meta.get("created_at") or now()),
-        "qa_summary": qa_summary(package),
+        "qa_summary": qa_summary(package, max_sections),
     }
     for placeholder, value_key in REPORT_PLACEHOLDERS.items():
         if find_placeholder(hwp, placeholder):
@@ -530,6 +531,7 @@ def write_body(
     excel_workbook=None,
     style_indexes: Dict[str, int] | None = None,
     style_config: Dict[str, Any] | None = None,
+    checkpoint_path: Path | None = None,
 ) -> None:
     tables_by_key = {str(table.get("table_key", "")): table for table in package.get("tables", [])}
     charts_by_key = group_charts(package.get("charts", []))
@@ -581,32 +583,29 @@ def write_body(
             if len(parts) > 1:
                 report["warnings"].append(f"{key}: 본문 폭에 맞춰 {len(parts)}개 표로 가로 분할했습니다. 보기/BASE 열은 반복됩니다.")
             for part in parts:
-                write_table_part(hwp, part, title, report, table_style_profile, excel_workbook, style_indexes, style_config)
+                write_table_part(hwp, part, title, report, table_style_profile, excel_workbook, style_indexes, style_config, index)
             report["source_tables_written"] = report.get("source_tables_written", 0) + 1
         else:
             report["warnings"].append(f"삽입표 데이터 없음: {key}")
 
         if charts_by_key.get(key):
-            if style_indexes is not None:
-                apply_named_style(hwp, require_style_index(style_indexes, "보고서 본문1"), report, "보고서 본문1")
-            insert_text(hwp, f"[차트 삽입 필요] {title}", report)
-            run_action(hwp, "BreakPara", report, "body")
             report["charts_deferred"] += 1
 
-        if style_indexes is not None:
-            apply_named_style(hwp, require_style_index(style_indexes, "보고서 본문1"), report, "보고서 본문1")
-        insert_text(hwp, f"source: {key}", report)
-        run_action(hwp, "BreakPara", report, "body")
-        run_action(hwp, "BreakPara", report, "body")
+        if table and table.get("source_sheet") and table.get("source_range"):
+            if style_indexes is not None:
+                apply_named_style(hwp, require_style_index(style_indexes, "보고서 본문1"), report, "보고서 본문1")
+            insert_text(hwp, f"출처: 원본 집계표 ({table['source_sheet']}!{table['source_range']})", report)
+            run_action(hwp, "BreakPara", report, "body")
         report["sections_written"] += 1
+        write_checkpoint(report, checkpoint_path)
 
 
-def write_table_part(hwp, table, title, report, profile, workbook, style_indexes, style_config):
+def write_table_part(hwp, table, title, report, profile, workbook, style_indexes, style_config, index):
     if int(table.get("part_index") or 1) > 1:
         run_action(hwp, "BreakPage", report, "body")
     if style_indexes is not None:
         apply_named_style(hwp, require_style_index(style_indexes, "보고서 본문1"), report, "보고서 본문1")
-    caption = str(table.get("title") or title)
+    caption = f"〈표 {index}〉 {table.get('title') or title}"
     if int(table.get("part_count") or 1) > 1:
         caption += f" [{table['part_index']}/{table['part_count']}]"
     insert_text(hwp, caption, report)
@@ -1808,11 +1807,12 @@ def group_charts(rows: List[Dict[str, Any]]) -> Dict[str, List[Dict[str, Any]]]:
     return grouped
 
 
-def qa_summary(package: Dict[str, Any]) -> str:
-    qa = package.get("qa", [])
-    if not qa:
-        return "QA 이슈 없음"
-    return "\n".join(f"{item.get('severity', '')}: {item.get('message', '')}" for item in qa[:20])
+def qa_summary(package: Dict[str, Any], max_sections: int | None = None) -> str:
+    keys = {str(section.get("table_key", "")) for section in select_sections(package, max_sections)}
+    qa = [item for item in package.get("qa", []) if not item.get("table_key") or item["table_key"] in keys]
+    errors = sum(item.get("severity") == "error" for item in qa)
+    warnings = sum(item.get("severity") == "warning" for item in qa)
+    return f"수록 표 {len(keys)}개 · 오류 {errors}건 · 경고 {warnings}건. 상세 항목은 QA 검사 기록을 확인하세요."
 
 
 def display_percent(row: Dict[str, Any]) -> str:

@@ -34,7 +34,11 @@ def build_report_package(excel_path: str | Path, meta: Dict[str, Any] | None = N
         tables = group_cell_rows(cell_rows) if cell_rows else group_table_rows(read_rows(wb, "보고서_삽입표"), decimal_places)
         table_list = {clean(row.get("table_key")): row for row in read_rows(wb, "보고서_표목록")}
         for table in tables:
-            table.update(resolve_table_metadata(table, table_list.get(table["table_key"])))
+            listing = table_list.get(table["table_key"]) or {}
+            if listing.get("table_type") == "응답자 구성표":
+                table["title"] = listing["title"]
+                listing = {**listing, "unit": "명, %"}
+            table.update(resolve_table_metadata(table, listing))
             for field, label in (("base_label", "BASE 조건"), ("unit", "단위")):
                 if table[field] == "확인 필요":
                     table.setdefault("qa", []).append({"severity": "warning", "message": f"표 {label} 확인 필요: 보고서_표목록의 {field}를 지정하세요."})
@@ -419,6 +423,7 @@ def run_cli(argv: List[str] | None = None) -> int:
     parser.add_argument("--ppt-template", default="")
     parser.add_argument("--output-type", default="Excel 산출 시트")
     parser.add_argument("--report-profile", default="")
+    parser.add_argument("--source-file-name", default="")
     parser.add_argument("--style-profile", default="")
     parser.add_argument("--banner", default="")
     parser.add_argument("--decimal-places", default="1")
@@ -432,6 +437,7 @@ def run_cli(argv: List[str] | None = None) -> int:
             "style_profile": args.style_profile,
             "banner": args.banner,
             "decimal_places": args.decimal_places,
+            **({"source_file_name": args.source_file_name} if args.source_file_name else {}),
         },
     )
     templates = [
