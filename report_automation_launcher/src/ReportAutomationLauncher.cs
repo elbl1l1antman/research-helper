@@ -1207,6 +1207,11 @@ namespace ReportAutomationLauncher
         private readonly TextBox borderColor = new TextBox();
         private readonly CheckBox showSideBorders = new CheckBox();
         private readonly Button importedLines = new Button { AutoSize = true };
+        private readonly HwpStylePreview preview = new HwpStylePreview { Dock = DockStyle.Fill, Margin = Padding.Empty };
+        private readonly Label previewNote = new Label { Dock = DockStyle.Fill, AutoEllipsis = true, TextAlign = ContentAlignment.MiddleLeft };
+        private readonly System.Windows.Forms.Timer previewTimer = new System.Windows.Forms.Timer { Interval = 100 };
+        private readonly JavaScriptSerializer previewSerializer = new JavaScriptSerializer();
+        private string savedEditor;
         private Dictionary<string, object> edges = new Dictionary<string, object>();
 
         internal string SelectedPresetName { get; private set; }
@@ -1217,22 +1222,26 @@ namespace ReportAutomationLauncher
             SelectedPresetName = selectedName;
             Text = "HWP 보고서 서식 설정";
             StartPosition = FormStartPosition.CenterParent;
-            MinimumSize = new Size(980, 620);
-            Size = new Size(1080, 700);
+            MinimumSize = new Size(980, 700);
+            Size = new Size(1080, 830);
             BuildUi();
+            previewTimer.Tick += delegate { RefreshPreview(); };
+            Disposed += delegate { previewTimer.Dispose(); };
             ReloadPresets(selectedName);
             LauncherUi.ApplyToForm(this);
             LauncherUi.ApplyTree(this);
+            RefreshPreview();
         }
 
         private void BuildUi()
         {
-            var root = new TableLayoutPanel { Dock = DockStyle.Fill, Padding = new Padding(16), RowCount = 6, ColumnCount = 1 };
+            var root = new TableLayoutPanel { Dock = DockStyle.Fill, Padding = new Padding(16), RowCount = 7, ColumnCount = 1 };
             root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
             root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-            root.RowStyles.Add(new RowStyle(SizeType.Percent, 62));
-            root.RowStyles.Add(new RowStyle(SizeType.Percent, 25));
+            root.RowStyles.Add(new RowStyle(SizeType.Percent, 58));
+            root.RowStyles.Add(new RowStyle(SizeType.Percent, 42));
             root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+            root.RowStyles.Add(new RowStyle(SizeType.Absolute, 226));
             root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
             Controls.Add(root);
 
@@ -1242,7 +1251,9 @@ namespace ReportAutomationLauncher
             presetCombo.Width = 200;
             presetCombo.SelectedIndexChanged += delegate
             {
-                if (presetCombo.SelectedItem != null) LoadPreset(presetCombo.SelectedItem.ToString());
+                if (presetCombo.SelectedItem == null) return;
+                LoadPreset(presetCombo.SelectedItem.ToString());
+                savedEditor = previewSerializer.Serialize(ReadEditor(false));
             };
             top.Controls.Add(presetCombo);
             top.Controls.Add(new Label { Text = "서식 이름", AutoSize = true, Margin = new Padding(18, 8, 8, 0) });
@@ -1267,6 +1278,16 @@ namespace ReportAutomationLauncher
             root.Controls.Add(paragraphGrid, 0, 2);
             ConfigureTableGrid();
             root.Controls.Add(tableGrid, 0, 3);
+            foreach (var editor in new[] { paragraphGrid, tableGrid })
+            {
+                editor.BackgroundColor = LauncherUi.ColorSurface;
+                editor.CellValueChanged += delegate { QueuePreview(); };
+                editor.CurrentCellDirtyStateChanged += delegate
+                {
+                    if (editor.IsCurrentCellDirty && (editor.CurrentCell is DataGridViewCheckBoxCell || editor.CurrentCell is DataGridViewComboBoxCell))
+                        editor.CommitEdit(DataGridViewDataErrorContexts.Commit);
+                };
+            }
 
             var borderPanel = new FlowLayoutPanel { Dock = DockStyle.Fill, AutoSize = true };
             borderPanel.Controls.Add(new Label { Text = "내부선(mm)", AutoSize = true, Margin = new Padding(0, 8, 6, 0) });
@@ -1286,12 +1307,30 @@ namespace ReportAutomationLauncher
             borderPanel.Controls.Add(importedLines);
             borderPanel.Controls.Add(MakeButton("셀 배경색", ChooseCellFill));
             root.Controls.Add(borderPanel, 0, 4);
+            innerBorder.ValueChanged += delegate { QueuePreview(); };
+            outerBorder.ValueChanged += delegate { QueuePreview(); };
+            borderColor.TextChanged += delegate { QueuePreview(); };
+            showSideBorders.CheckedChanged += delegate { QueuePreview(); };
+            nameText.TextChanged += delegate { QueuePreview(); };
+
+            var previewArea = new TableLayoutPanel { Dock = DockStyle.Fill, RowCount = 2, ColumnCount = 1, Margin = new Padding(3, 8, 3, 0) };
+            previewArea.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+            previewArea.RowStyles.Add(new RowStyle(SizeType.Absolute, 25));
+            previewArea.Controls.Add(preview, 0, 0);
+            previewArea.Controls.Add(previewNote, 0, 1);
+            root.Controls.Add(previewArea, 0, 5);
 
             var buttons = new FlowLayoutPanel { Dock = DockStyle.Fill, AutoSize = true, FlowDirection = FlowDirection.RightToLeft };
             Button close = MakeButton("이 서식 사용", delegate
             {
-                SelectedPresetName = presetCombo.SelectedItem == null ? HwpStylePresetStore.BuiltInName : presetCombo.SelectedItem.ToString();
-                DialogResult = DialogResult.OK;
+                ExecuteEditorAction(delegate
+                {
+                    var edited = ReadEditor();
+                    if (previewSerializer.Serialize(edited) != savedEditor)
+                        throw new InvalidOperationException("편집한 서식을 적용하려면 [내 서식으로 저장] 또는 [덮어쓰기]를 먼저 누르세요.");
+                    SelectedPresetName = Convert.ToString(edited["preset_name"]);
+                    DialogResult = DialogResult.OK;
+                });
             });
             Button cancel = MakeButton("취소", delegate { DialogResult = DialogResult.Cancel; });
             close.Tag = LauncherButtonKind.Primary;
@@ -1305,7 +1344,7 @@ namespace ReportAutomationLauncher
             buttons.Controls.Add(overwrite);
             buttons.Controls.Add(delete);
             buttons.Controls.Add(reset);
-            root.Controls.Add(buttons, 0, 5);
+            root.Controls.Add(buttons, 0, 6);
         }
 
         private void ConfigureParagraphGrid()
@@ -1316,7 +1355,8 @@ namespace ReportAutomationLauncher
             paragraphGrid.RowHeadersVisible = false;
             paragraphGrid.AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.Fill;
             paragraphGrid.Columns.Add(new DataGridViewTextBoxColumn { Name = "StyleName", HeaderText = "스타일", ReadOnly = true, FillWeight = 110 });
-            paragraphGrid.Columns.Add(new DataGridViewCheckBoxColumn { Name = "Enabled", HeaderText = "개별", FillWeight = 48 });
+            paragraphGrid.Columns.Add(new DataGridViewCheckBoxColumn { Name = "Enabled", HeaderText = "개별", FillWeight = 48,
+                ToolTipText = "켜면 이 역할에 별도 서식을 적용합니다. 끄면 공통 표 서식을 사용합니다." });
             paragraphGrid.Columns.Add(new DataGridViewTextBoxColumn { Name = "Font", HeaderText = "글꼴", FillWeight = 110 });
             paragraphGrid.Columns.Add(new DataGridViewTextBoxColumn { Name = "Size", HeaderText = "크기(pt)", FillWeight = 65 });
             paragraphGrid.Columns.Add(new DataGridViewCheckBoxColumn { Name = "Bold", HeaderText = "굵게", FillWeight = 48 });
@@ -1396,10 +1436,13 @@ namespace ReportAutomationLauncher
             UpdateImportedLines();
         }
 
-        internal Dictionary<string, object> ReadEditor()
+        internal Dictionary<string, object> ReadEditor(bool commitEdits = true)
         {
-            paragraphGrid.EndEdit();
-            tableGrid.EndEdit();
+            if (commitEdits)
+            {
+                paragraphGrid.EndEdit();
+                tableGrid.EndEdit();
+            }
             var styles = new Dictionary<string, object>();
             foreach (DataGridViewRow row in paragraphGrid.Rows)
             {
@@ -1439,7 +1482,8 @@ namespace ReportAutomationLauncher
             }
             var config = new Dictionary<string, object>
             {
-                { "schema_version", "1.0" }, { "preset_name", nameText.Text.Trim() },
+                { "schema_version", "1.0" }, { "preset_name", !commitEdits && string.IsNullOrWhiteSpace(nameText.Text)
+                    ? HwpStylePresetStore.BuiltInName : nameText.Text.Trim() },
                 { "paragraph_styles", styles }, { "table_cell_styles", cells },
                 { "table_border", new Dictionary<string, object>
                     {
@@ -1452,6 +1496,70 @@ namespace ReportAutomationLauncher
             };
             if (edges.Count > 0) ((Dictionary<string, object>)config["table_border"])["edges"] = edges;
             return HwpStylePresetStore.Normalize(config);
+        }
+
+        private void QueuePreview()
+        {
+            previewTimer.Stop();
+            previewTimer.Start();
+        }
+
+        private void RefreshPreview()
+        {
+            previewTimer.Stop();
+            try
+            {
+                var config = ReadEditor(false);
+                preview.UpdateStyle(config);
+                bool changed = previewSerializer.Serialize(config) != savedEditor || string.IsNullOrWhiteSpace(nameText.Text);
+                previewNote.ForeColor = LauncherUi.ColorMutedText;
+                previewNote.Text = (changed ? "편집 중 · 저장 후 적용  |  " : "") + "예시 데이터 · 실제 줄바꿈, 표 폭, 쪽 나눔은 한글에서 달라질 수 있습니다.";
+            }
+            catch (InvalidOperationException ex)
+            {
+                previewNote.ForeColor = LauncherUi.ColorWarning;
+                previewNote.Text = "마지막 정상 미리보기 · " + ex.Message;
+            }
+        }
+
+        internal void CheckPreview()
+        {
+            LoadPreset(HwpStylePresetStore.GoldTableName);
+            RefreshPreview();
+            if (!PreviewContainsColor("F1CB7E")) throw new InvalidOperationException("Self-check failed: gold preview");
+            LoadPreset(HwpStylePresetStore.BlueTableName);
+            RefreshPreview();
+            if (!PreviewContainsColor("F0F4F7") || PreviewContainsColor("F1CB7E"))
+                throw new InvalidOperationException("Self-check failed: preset preview did not change");
+
+            ApplyTemplateCell("표머리행", new Dictionary<string, object> { { "fill_color", "C8E3D5" } });
+            if (!previewTimer.Enabled) throw new InvalidOperationException("Self-check failed: imported cell did not schedule preview");
+            paragraphGrid.Rows[1].Cells["Bullet"].Value = "※";
+            RefreshPreview();
+            if (!PreviewContainsColor("C8E3D5") || !preview.AccessibleDescription.Contains("※") ||
+                !previewNote.Text.Contains("저장 후 적용"))
+                throw new InvalidOperationException("Self-check failed: edited preview");
+
+            borderColor.Text = "invalid";
+            RefreshPreview();
+            if (!previewNote.Text.Contains("마지막 정상") || !PreviewContainsColor("C8E3D5"))
+                throw new InvalidOperationException("Self-check failed: invalid style lost last valid preview");
+
+            LoadPreset(HwpStylePresetStore.BuiltInName);
+            RefreshPreview();
+        }
+
+        private bool PreviewContainsColor(string hex)
+        {
+            using (var bitmap = new Bitmap(preview.Width, preview.Height))
+            {
+                preview.DrawToBitmap(bitmap, preview.ClientRectangle);
+                int rgb = ColorTranslator.FromHtml("#" + hex).ToArgb();
+                for (int y = 0; y < bitmap.Height; y += 2)
+                    for (int x = 0; x < bitmap.Width; x += 2)
+                        if (bitmap.GetPixel(x, y).ToArgb() == rgb) return true;
+                return false;
+            }
         }
 
         private static string FormatMargins(Dictionary<string, object> values)
@@ -1484,6 +1592,7 @@ namespace ReportAutomationLauncher
         private void UpdateImportedLines()
         {
             importedLines.Text = "선 설정 (" + edges.Count + ")";
+            QueuePreview();
         }
 
         private static string LineText(Dictionary<string, object> line)
@@ -6550,6 +6659,7 @@ namespace ReportAutomationLauncher
                     dialog.PerformLayout();
                     var root = (TableLayoutPanel)dialog.Controls[0];
                     root.PerformLayout();
+                    dialog.CheckPreview();
                     var borderPanel = (FlowLayoutPanel)root.GetControlFromPosition(0, 4);
                     borderPanel.PerformLayout();
                     foreach (Control control in borderPanel.Controls)

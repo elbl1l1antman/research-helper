@@ -70,7 +70,7 @@ try {
         }
         $compilerArgs += "/resource:$payload,ReportAutomation.Payload.zip"
     }
-    $compilerArgs += @($SourcePath, $BundleSourcePath, $DiagnosticsSourcePath)
+    $compilerArgs += @($SourcePath, $BundleSourcePath, $DiagnosticsSourcePath, (Join-Path (Split-Path -Parent $SourcePath) 'HwpStylePreview.cs'))
     & $csc @compilerArgs
     if ($LASTEXITCODE -ne 0) {
         throw "Launcher build failed with exit code $LASTEXITCODE"

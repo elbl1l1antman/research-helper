@@ -1,6 +1,6 @@
 # Versioning
 
-Current version: `0.0.36`
+Current version: `0.0.37`
 
 ## Policy
 
@@ -16,6 +16,9 @@ Current version: `0.0.36`
   - Major: breaking file format, CLI, template, or workflow change.
 
 ## Current Baseline
+
+`0.0.37` adds live narrative and table examples to the HWP style editor and
+requires saving edits before applying a changed preset.
 
 `0.0.36` removes manual Excel add-in selection from the launcher, loads the bundled
 add-in automatically, and keeps connection diagnostics available on failure.
