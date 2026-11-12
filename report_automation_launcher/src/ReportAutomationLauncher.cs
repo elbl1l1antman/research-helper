@@ -1804,7 +1804,6 @@ namespace ReportAutomationLauncher
     {
         private readonly HwpStylePresetStore hwpStylePresetStore;
         private readonly TextBox workbookPathText = new TextBox();
-        private readonly TextBox addinPathText = new TextBox();
         private readonly ComboBox outputTypeCombo = new ComboBox();
         private readonly TextBox hwpTemplateText = new TextBox();
         private readonly TextBox pptTemplateText = new TextBox();
@@ -1983,12 +1982,10 @@ namespace ReportAutomationLauncher
             Disposed += delegate { actionTips.Dispose(); };
 
             workbookPathText.TextChanged += delegate { UpdateWorkflowStatus(); };
-            addinPathText.TextChanged += delegate { UpdateWorkflowStatus(); };
             outputTypeCombo.SelectedIndexChanged += delegate { UpdateWorkflowStatus(); };
             hwpTemplateText.TextChanged += delegate { UpdateWorkflowStatus(); };
             pptTemplateText.TextChanged += delegate { UpdateWorkflowStatus(); };
 
-            addinPathText.Text = PathResolver.ResolveDefaultAddinPath();
             bannerText.Text = "전체";
             titlePrefixesText.Text = "";
             outputTypeCombo.SelectedIndex = 0;
@@ -2025,11 +2022,17 @@ namespace ReportAutomationLauncher
                 throw new InvalidOperationException("원본 파일이 없는 Excel 산출 상태가 올바르지 않습니다.");
 
             // Existing paths stand in for inputs; no Excel or Hancom session is opened.
-            workbookPathText.Text = addinPathText.Text;
+            string bundledAddin = PathResolver.ResolveDefaultAddinPath();
+            workbookPathText.Text = bundledAddin;
+            if (!runButton.Enabled || ReadOptions().AddinPath != bundledAddin)
+                throw new InvalidOperationException("원본 파일만 선택한 Excel 산출에 내장 추가기능이 자동 지정되지 않았습니다.");
+            if (workflowTabs.TabPages[0].Controls[0].Controls.Count != 1 ||
+                readinessList.Items.Cast<ListViewItem>().Any(item => item.Text == "추가기능"))
+                throw new InvalidOperationException("Excel 추가기능 수동 설정이 일반 작업 화면에 남아 있습니다.");
             outputTypeCombo.SelectedIndex = 1;
             if (runButton.Enabled || runButton.Text != "한글 보고서 만들기")
                 throw new InvalidOperationException("양식 없는 한글 보고서의 준비 상태가 올바르지 않습니다.");
-            hwpTemplateText.Text = addinPathText.Text;
+            hwpTemplateText.Text = bundledAddin;
             if (!runButton.Enabled)
                 throw new InvalidOperationException("입력이 준비된 한글 보고서의 실행 버튼이 비활성 상태입니다.");
 
@@ -2138,7 +2141,6 @@ namespace ReportAutomationLauncher
         private void UpdateWorkflowStatus()
         {
             bool hasWorkbook = File.Exists(workbookPathText.Text.Trim());
-            bool hasAddin = File.Exists(addinPathText.Text.Trim());
             int tableCount = tablePreviewList.Items.Count;
             int checkedBanners = CountCheckedBanners();
 
@@ -2148,10 +2150,10 @@ namespace ReportAutomationLauncher
             runButton.Visible = !dashboard;
             runButton.Text = reportRunning ? "보고서 산출 중…" : hwp ? "한글 보고서 만들기" : "Excel 산출 시트 만들기";
             runButton.AccessibleName = runButton.Text;
-            runButton.Enabled = !reportRunning && hasWorkbook && hasAddin && !needsTemplate;
+            runButton.Enabled = !reportRunning && hasWorkbook && !needsTemplate;
             workspaceStatus.Text = dashboard ? "기관 대시보드 · PowerPoint" :
                 reportRunning ? "산출 중 · 진행 기록은 산출 결과에서 확인" :
-                !hasWorkbook ? "원본 Excel 미선택" : !hasAddin ? "Excel 추가기능 미연결" :
+                !hasWorkbook ? "원본 Excel 미선택" :
                 needsTemplate ? "한글 양식 미선택 · 보고서 설정" :
                 Path.GetFileName(workbookPathText.Text.Trim()) + "  ·  표 " + tableCount + "개  ·  " +
                     (checkedBanners == 0 ? "전체 기준" : "배너 " + checkedBanners + "개");
@@ -2166,7 +2168,6 @@ namespace ReportAutomationLauncher
             }
 
             bool workbookReady = File.Exists(workbookPathText.Text.Trim());
-            bool addinReady = File.Exists(addinPathText.Text.Trim());
             int tableCount = tablePreviewList.Items.Count;
             int checkedBanners = CountCheckedBanners();
             bool bannerPreviewReady = bannerList.Items.Count > 0;
@@ -2177,7 +2178,6 @@ namespace ReportAutomationLauncher
             {
                 readinessList.Items.Clear();
                 AddReadinessItem("집계표", workbookReady, workbookReady ? Path.GetFileName(workbookPathText.Text.Trim()) : "집계표 엑셀 파일을 선택하세요.");
-                AddReadinessItem("추가기능", addinReady, addinReady ? Path.GetFileName(addinPathText.Text.Trim()) : "보고서 자동화 add-in 경로를 확인하세요.");
                 AddReadinessItem("표 탐지", tableCount > 0, tableCount > 0 ? tableCount + "개 표를 발견했습니다." : "파일 등록 후 표 목록을 확인하세요.");
                 AddReadinessItem("분석 배너", bannerPreviewReady, BuildBannerReadinessText(checkedBanners, bannerPreviewReady));
                 AddReadinessItem("산출 방식", outputReady, BuildOutputReadinessText(outputReady));
@@ -2313,14 +2313,6 @@ namespace ReportAutomationLauncher
             input.SetColumnSpan(checks, 2);
             page.Controls.Add(source, 0, 0);
 
-            var connection = new GroupBox { Text = "Excel 연결", Dock = DockStyle.Top, AutoSize = true };
-            var grid = CreateGrid(2);
-            connection.Controls.Add(grid);
-            AddPathRow(grid, 0, "Excel 추가기능", addinPathText, "추가기능 선택…", BrowseAddin);
-            var checkAddin = new Button { Text = "추가기능 연결 확인", AutoSize = true, Anchor = AnchorStyles.Left };
-            checkAddin.Click += CheckExcelAddin;
-            grid.Controls.Add(checkAddin, 1, 1);
-            page.Controls.Add(connection, 0, 1);
             return page;
         }
 
@@ -3831,49 +3823,6 @@ namespace ReportAutomationLauncher
             bannerList.Enabled = enabled;
         }
 
-        private void BrowseAddin(object sender, EventArgs e)
-        {
-            using (var dialog = new OpenFileDialog())
-            {
-                dialog.Title = "보고서 자동화 추가기능 선택";
-                dialog.Filter = "Excel add-ins (*.xlam;*.xlsm)|*.xlam;*.xlsm|All files (*.*)|*.*";
-                if (dialog.ShowDialog(this) == DialogResult.OK)
-                {
-                    addinPathText.Text = dialog.FileName;
-                }
-            }
-        }
-
-        private void CheckExcelAddin(object sender, EventArgs e)
-        {
-            var button = (Button)sender;
-            button.Enabled = false;
-            string path = addinPathText.Text.Trim();
-            string output = Path.Combine(ResolveHwpDiagnosticOutputDirectory(), "excel_addin_report_" + DateTime.Now.ToString("yyyyMMdd_HHmmss") + ".json");
-            var thread = new Thread(delegate()
-            {
-                string summary;
-                try
-                {
-                    var report = ExcelAddinDiagnostics.Check(path);
-                    ExcelAddinDiagnostics.Save(output, report);
-                    summary = report["message"] + Environment.NewLine + "검사 기록: " + output;
-                }
-                catch (Exception ex) { summary = "Excel 연결 검사 실패: " + ex.Message; }
-                if (!IsDisposed && IsHandleCreated)
-                    BeginInvoke(new Action(delegate()
-                    {
-                        button.Enabled = true;
-                        resultSummaryText.Text = summary;
-                        Log(summary);
-                        MessageBox.Show(this, summary, "Excel 연결 검사", MessageBoxButtons.OK, MessageBoxIcon.Information);
-                    }));
-            });
-            thread.SetApartmentState(ApartmentState.STA);
-            thread.IsBackground = true;
-            thread.Start();
-        }
-
         private void BrowseHwpTemplate(object sender, EventArgs e)
         {
             BrowseTemplate(hwpTemplateText, "HWP/HWPX 템플릿 선택", "HWP/HWPX files (*.hwp;*.hwpx)|*.hwp;*.hwpx|All files (*.*)|*.*", "HWPX/HWP 템플릿을 선택했습니다. 검사를 실행하세요.");
@@ -4334,12 +4283,14 @@ namespace ReportAutomationLauncher
                 {
                     Log("오류: " + ex.Message);
                     var addinError = ex as ExcelAddinOpenException;
+                    string diagnosticPath = null;
                     if (addinError != null)
                     {
                         try
                         {
-                            string diagnosticPath = Path.Combine(Path.GetDirectoryName(options.WorkbookPath), "excel_addin_error_" + DateTime.Now.ToString("yyyyMMdd_HHmmss") + ".json");
-                            ExcelAddinDiagnostics.Save(diagnosticPath, addinError.Report);
+                            string path = Path.Combine(Path.GetDirectoryName(options.WorkbookPath), "excel_addin_error_" + DateTime.Now.ToString("yyyyMMdd_HHmmss") + ".json");
+                            ExcelAddinDiagnostics.Save(path, addinError.Report);
+                            diagnosticPath = path;
                             Log("Excel 연결 오류 기록: " + diagnosticPath);
                         }
                         catch (Exception saveError) { Log("오류 기록 저장 실패: " + saveError.Message); }
@@ -4347,12 +4298,14 @@ namespace ReportAutomationLauncher
                     BeginInvoke(new Action(delegate()
                     {
                         PopulateResultFiles(options);
-                        resultSummaryText.Text = ex.Message +
+                        string errorMessage = ex.Message + (diagnosticPath == null ? "" :
+                            Environment.NewLine + "Excel 연결 오류 기록: " + diagnosticPath);
+                        resultSummaryText.Text = errorMessage +
                             (string.IsNullOrWhiteSpace(options.LastGeneratedWorkbookPath) ? "" :
                                 Environment.NewLine + "저장된 산출 Excel: " + options.LastGeneratedWorkbookPath) +
                             (string.IsNullOrWhiteSpace(options.LastPreflightReportPath) ? "" :
                                 Environment.NewLine + "QA 검사 기록: " + options.LastPreflightReportPath);
-                        MessageBox.Show(this, ex.Message, "오류", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                        MessageBox.Show(this, errorMessage, "오류", MessageBoxButtons.OK, MessageBoxIcon.Error);
                     }));
                 }
                 finally
@@ -5551,7 +5504,6 @@ namespace ReportAutomationLauncher
         {
             var options = new LauncherOptions();
             options.WorkbookPath = workbookPathText.Text.Trim();
-            options.AddinPath = addinPathText.Text.Trim();
             options.OutputType = outputTypeCombo.SelectedItem == null ? "" : outputTypeCombo.SelectedItem.ToString();
             options.ReportProfile = reportProfileCombo.SelectedItem == null ? "" : reportProfileCombo.SelectedItem.ToString();
             options.StyleProfile = styleProfileCombo.SelectedItem == null ? "" : styleProfileCombo.SelectedItem.ToString();
@@ -5746,15 +5698,7 @@ namespace ReportAutomationLauncher
             {
                 throw new FileNotFoundException("집계표 엑셀 파일을 찾을 수 없습니다.", WorkbookPath);
             }
-            if (string.IsNullOrWhiteSpace(AddinPath))
-            {
-                throw new InvalidOperationException("보고서 자동화 추가기능 파일을 선택하세요.");
-            }
-            AddinPath = Path.GetFullPath(AddinPath);
-            if (!File.Exists(AddinPath))
-            {
-                throw new FileNotFoundException("보고서 자동화 추가기능 파일을 찾을 수 없습니다.", AddinPath);
-            }
+            AddinPath = Path.GetFullPath(string.IsNullOrWhiteSpace(AddinPath) ? PathResolver.ResolveDefaultAddinPath() : AddinPath);
             if (!string.IsNullOrWhiteSpace(HwpTemplatePath))
             {
                 HwpTemplatePath = Path.GetFullPath(HwpTemplatePath);
@@ -5867,7 +5811,7 @@ namespace ReportAutomationLauncher
 
             var options = new LauncherOptions();
             options.WorkbookPath = Get(values, "workbook", "");
-            options.AddinPath = Get(values, "addin", PathResolver.ResolveDefaultAddinPath());
+            options.AddinPath = Get(values, "addin", "");
             options.OutputType = Get(values, "output", "Excel 산출 시트");
             options.ReportProfile = Get(values, "report-profile", "인식도/만족도 조사형");
             options.StyleProfile = Get(values, "style-profile", "공식 보고서체");
@@ -6087,6 +6031,7 @@ namespace ReportAutomationLauncher
         public static string Run(LauncherOptions options, Action<string> log)
         {
             options.Validate();
+            ExcelAddinDiagnostics.RequireFile(options.AddinPath);
             string workbookToOpen = options.WorkbookPath;
             bool legacyFormat = Path.GetExtension(workbookToOpen).Equals(".xls", StringComparison.OrdinalIgnoreCase);
             bool originalEnableEvents = true;
@@ -6112,6 +6057,7 @@ namespace ReportAutomationLauncher
                 log("Excel을 시작했습니다.");
                 // Validate actual Excel access before copying/opening the user's input workbook.
                 addin = ExcelAddinDiagnostics.Open(excel, options.AddinPath);
+                log("Excel 추가기능을 열었습니다.");
                 if (legacyFormat)
                 {
                     // The cell export can exceed the 65,536 rows of an Excel 97–2003 sheet.

@@ -29,7 +29,7 @@ PowerPoint는 PPTX 파일 생성 자체에 필요하지 않지만 파일 검토�
 
 원본 집계표, 산출물, 사용자 설정, API 키, `.env`, 개발용 테스트와 가상환경 전체는
 포함하지 않습니다. 외부 Python 환경변수는 무시하므로 다른 Python 설치의 영향을 받지 않습니다.
-사용자가 GUI에서 직접 선택한 Excel 파일·템플릿·추가기능 경로는 기존처럼 사용할 수 있습니다.
+GUI에서는 원본 Excel 파일과 필요한 문서 템플릿만 선택합니다. Excel 추가기능은 내장 파일을 사용합니다.
 
 ## 로컬 캐시
 
@@ -66,9 +66,9 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\tests\test_standalone_laun
 사용자 Excel/아래한글 문서를 열거나 COM 객체를 생성하지 않습니다.
 이 검증은 실제 Excel/HWP 자동화 통합 테스트를 대체하지 않습니다.
 
-실제 Excel에서 내장 추가기능을 열 수 있는지는 파일 영역의 **연결 검사** 또는
-`--check-excel-addin --out "검사결과.json"`으로 확인합니다. 파일 존재와 Excel의 접근
-성공은 별개이며, 연결 검사 성공도 매크로 실행 성공을 보장하지 않습니다.
+산출 시 실제 Excel에서 내장 추가기능을 먼저 엽니다. 실패하면 원본을 열기 전에 중단하고
+오류 기록을 남깁니다. 별도로 진단하려면 `--check-excel-addin --out "검사결과.json"`을 사용합니다.
+이 진단은 Excel에서 파일을 열 수 있는지만 확인하며 매크로는 실행하지 않습니다.
 [연결 진단과 현재 PC의 캐시 접근 제한](excel_addin_diagnostics.md)
 
 런타임 경로와 검사 결과 JSON은 다음 명령으로 확인할 수 있습니다.

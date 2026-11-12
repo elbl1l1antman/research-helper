@@ -1,6 +1,6 @@
 # ReportAutomation
 
-Current version: `0.0.35`
+Current version: `0.0.36`
 
 `ReportAutomation`은 엑셀 집계표를 기반으로 조사 보고서 작성용 산출물을 자동 생성하는 런처 기반 프로젝트입니다.
 
@@ -348,8 +348,8 @@ EXE는 매번 같은 이름으로 갱신하며 버전별 실행 파일을 따로
 첫 실행 시 사용자 로컬 캐시에 실행 구성요소를 준비합니다.
 [독립 실행·빌드 안내](docs/standalone_launcher.md)
 
-Excel이 추가기능을 열지 못하면 파일 영역의 **연결 검사**로 실제 Excel 접근 여부를
-확인할 수 있습니다. [연결 진단과 오류 기록](docs/excel_addin_diagnostics.md)
+원본 집계표만 선택하면 런처가 내장 Excel 추가기능을 자동으로 엽니다. 연결 실패 시
+산출 화면에 오류와 진단 파일 위치가 표시됩니다. [연결 진단과 오류 기록](docs/excel_addin_diagnostics.md)
 
 빌드:
 
@@ -460,7 +460,7 @@ python -m pip install -r requirements.txt
 정책:
 
 - semantic versioning 사용: `MAJOR.MINOR.PATCH`
-- push/publish 요청 시 버전 확인
+- 작업 커밋 후 버전을 확인하고 작업 브랜치를 원격에 푸시
 - 코드, 문서, 빌드 산출물이 바뀌면 필요한 경우 버전 증가
 - 릴리스 기준점은 Git tag로 기록: `v0.0.1`, `v0.0.2`, ...
 
