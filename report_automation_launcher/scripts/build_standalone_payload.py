@@ -127,7 +127,7 @@ def collect_payload_files(repository, base_prefix, distributions):
         add(repository / path, repository, path)
     addin = "report_automation_addin/dev/ReportAutomationAddin_dev.xlam"
     add(repository / addin, repository, addin)
-    for name in ("report_template_basic.pptx", "chart_review_template_basic.pptx"):
+    for name in ("report_template_basic.hwpx", "report_template_basic.pptx", "chart_review_template_basic.pptx"):
         add(repository / "templates" / name, repository, "templates/" + name)
     add(repository / "LICENSE", repository, "LICENSE")
     license_root = repository / "report_automation_launcher/licenses"

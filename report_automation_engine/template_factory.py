@@ -1,8 +1,7 @@
 """Create starter templates for report automation users.
 
-PPTX templates are generated as minimal editable OpenXML presentations.  HWPX
-generation without Hancom Automation is limited, so v1 creates a placeholder
-package that the inspector can read and a companion guide file.
+PPTX templates are generated as minimal editable presentations. The HWPX
+starter is an editable document shipped with the launcher.
 """
 
 from __future__ import annotations
@@ -10,6 +9,7 @@ from __future__ import annotations
 import argparse
 import html
 import json
+import shutil
 import subprocess
 import tempfile
 import zipfile
@@ -39,7 +39,10 @@ def create_template(template_type: str, output: str | Path) -> Path:
             ],
         )
     elif template_type == "hwpx_report":
-        write_hwpx_placeholder_package(output_path)
+        if output_path.suffix.lower() != ".hwpx":
+            raise ValueError("한글 기본 양식은 .hwpx 확장자로 저장하세요.")
+        source = Path(__file__).resolve().parent.parent / "templates" / "report_template_basic.hwpx"
+        shutil.copyfile(source, output_path)
     else:
         raise ValueError(f"지원하지 않는 템플릿 유형입니다: {template_type}")
     return output_path
@@ -305,36 +308,6 @@ def core_props_xml() -> str:
   <dc:title>Report Automation Template</dc:title>
   <dc:creator>ReportAutomation</dc:creator>
 </cp:coreProperties>'''
-
-
-def write_hwpx_placeholder_package(path: Path) -> None:
-    with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as zf:
-        zf.writestr("mimetype", "application/hwp+zip")
-        zf.writestr(
-            "Contents/report_automation_template.xml",
-            """<?xml version="1.0" encoding="UTF-8"?>
-<reportAutomationTemplate>
-  <cover>{{REPORT_TITLE}}</cover>
-  <project>{{PROJECT_NAME}}</project>
-  <generatedAt>{{GENERATED_AT}}</generatedAt>
-  <toc>{{TOC}}</toc>
-  <body>{{BODY}}</body>
-  <section>{{SECTION_TITLE}}</section>
-  <narrative>{{NARRATIVE}}</narrative>
-  <table>{{TABLE}}</table>
-  <chart>{{CHART}}</chart>
-  <source>{{SOURCE}}</source>
-  <qa>{{QA_SUMMARY}}</qa>
-</reportAutomationTemplate>
-""",
-        )
-    guide_path = path.with_suffix(path.suffix + ".guide.txt")
-    guide_path.write_text(
-        "HWPX 기본 템플릿 placeholder 패키지를 생성했습니다.\n"
-        "한글에서 직접 열리는 완성 HWPX 생성을 위해서는 추후 한글 COM 기반 factory가 필요합니다.\n"
-        "최소 사용자 템플릿은 한글 문서 본문 위치에 {{BODY}}를 넣고 .hwpx로 저장하면 됩니다.\n",
-        encoding="utf-8",
-    )
 
 
 def run_cli(argv: List[str] | None = None) -> int:

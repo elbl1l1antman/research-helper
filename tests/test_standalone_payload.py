@@ -8,6 +8,7 @@ import unittest
 from unittest.mock import patch
 import zipfile
 from pathlib import Path, PurePosixPath
+from xml.etree import ElementTree
 
 
 SCRIPT = Path(__file__).resolve().parents[1] / "report_automation_launcher/scripts/build_standalone_payload.py"
@@ -34,7 +35,8 @@ class StandalonePayloadTests(unittest.TestCase):
                      "report_automation_engine/tool.py", "report_automation_engine/config/default_style_schema.json",
                      "report_automation_engine/config/default_hwp_style_config.json",
                      "report_automation_addin/dev/ReportAutomationAddin_dev.xlam",
-                     "templates/report_template_basic.pptx", "templates/chart_review_template_basic.pptx", "docs/template_authoring_guide.md",
+                     "templates/report_template_basic.hwpx", "templates/report_template_basic.pptx",
+                     "templates/chart_review_template_basic.pptx", "docs/template_authoring_guide.md",
                      "report_automation_launcher/licenses/openpyxl-1.0-LICENCE.rst",
                      "report_automation_launcher/licenses/et_xmlfile-1.0-LICENCE.rst",
                      "report_automation_launcher/licenses/et_xmlfile-1.0-LICENCE.python"]:
@@ -77,7 +79,8 @@ class StandalonePayloadTests(unittest.TestCase):
                      "report_automation_engine/outputs/private.py", "report_automation_engine/tests/private.py",
                      "report_automation_engine/__pycache__/tool.pyc", "report_automation_engine/config/private.txt",
                      "report_automation_engine/config/private.json",
-                     "templates/outputs/private.pptx", "templates/private.pptx", "templates/~$private.pptx", "templates/.env"]:
+                     "templates/outputs/private.pptx", "templates/private.pptx", "templates/private.hwpx",
+                     "templates/~$private.pptx", "templates/.env"]:
             self.put(self.repo / name)
         for name in ["Lib/site-packages/private.py", "Lib/test/private.py", "Lib/json/__pycache__/private.pyc"]:
             self.put(self.runtime / name)
@@ -101,6 +104,7 @@ class StandalonePayloadTests(unittest.TestCase):
                          "runtime/Lib/site-packages/pywin32_system32/pywintypes312.dll",
                          "LICENSE", "THIRD_PARTY_NOTICES.md", "licenses/openpyxl-1.0-LICENCE.rst",
                          "licenses/et_xmlfile-1.0-LICENCE.python", "templates/report_template_basic.pptx",
+                         "templates/report_template_basic.hwpx",
                          "report_automation_addin/dev/ReportAutomationAddin_dev.xlam", "docs/template_authoring_guide.md",
                          "report_automation_engine/config/default_hwp_style_config.json"]:
                 self.assertIn(name, names)
@@ -140,6 +144,25 @@ class StandalonePayloadTests(unittest.TestCase):
         slides = Presentation(output).slides
         self.assertEqual(len(slides), 3)
         self.assertTrue(any("{{CHART}}" in shape.text for slide in slides for shape in slide.shapes if shape.has_text_frame))
+
+    def test_hwpx_factory_copies_an_editable_document(self):
+        from report_automation_engine.template_factory import create_template
+        from report_automation_engine.template_inspector import inspect_template
+        source = SCRIPT.parents[2] / "templates/report_template_basic.hwpx"
+        output = create_template("hwpx_report", self.root / "편집용 양식.hwpx")
+        self.assertEqual(output.read_bytes(), source.read_bytes())
+        report = inspect_template(output)
+        self.assertIn(report["status"], {"ready", "usable_with_warnings"})
+        with zipfile.ZipFile(output) as archive:
+            self.assertEqual(archive.getinfo("mimetype").compress_type, zipfile.ZIP_STORED)
+            for name in ("Contents/header.xml", "Contents/content.hpf"):
+                ElementTree.fromstring(archive.read(name))
+            section = ElementTree.fromstring(archive.read("Contents/section0.xml"))
+            body = [node for node in section if "".join(node.itertext()).strip() == "{{BODY}}"]
+            self.assertEqual(len(body), 1)
+            self.assertTrue(any(node.get("pageBreak") == "1" for node in section))
+        with self.assertRaises(OSError):
+            create_template("hwpx_report", source)
 
     def test_dependency_record_cannot_escape(self):
         self.dependencies()
