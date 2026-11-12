@@ -1,6 +1,6 @@
 # Versioning
 
-Current version: `0.0.3`
+Current version: `0.0.35`
 
 ## Policy
 
@@ -15,6 +15,10 @@ Current version: `0.0.3`
   - Major: breaking file format, CLI, template, or workflow change.
 
 ## Current Baseline
+
+`0.0.35` packages the editable HWPX starter and two built-in table presets,
+improves horizontal and vertical banner detection, and generates Excel output
+sheets automatically before HWPX preflight.
 
 `0.0.3` adds the `old/legacy/` archive for version-managed retired assets.
 

@@ -1,7 +1,8 @@
 param(
     [string]$WorkbookPath,
     [string]$AddinPath,
-    [int]$ExpectedCreatedSheetCount = -1
+    [int]$ExpectedCreatedSheetCount = -1,
+    [string]$TableRangeOverrides = ""
 )
 
 $ErrorActionPreference = "Stop"
@@ -52,14 +53,21 @@ try {
         $sheetNamesBefore[$sheet.Name] = $true
     }
     if ($ExpectedCreatedSheetCount -lt 0) {
-        $ExpectedCreatedSheetCount = 9
+        $ExpectedCreatedSheetCount = 10
         if (-not $sheetNamesBefore.ContainsKey("_ReportAutomation_Log")) {
             $ExpectedCreatedSheetCount += 1
         }
     }
 
-    $macroName = "'" + $addinWorkbook.Name + "'!ReportAutomation_GenerateExcelOutputsSilent"
-    $excel.Run($macroName) | Out-Null
+    if ($TableRangeOverrides) {
+        $macroName = "'" + $addinWorkbook.Name + "'!ReportAutomation_RunWithOptionsAndRangesSilent"
+        $result = $excel.Run($macroName, "전체", "", $TableRangeOverrides)
+        if ($result -ne $true -or $result -is [string]) { throw "Excel output failed: $result" }
+    }
+    else {
+        $macroName = "'" + $addinWorkbook.Name + "'!ReportAutomation_GenerateExcelOutputsSilent"
+        $excel.Run($macroName) | Out-Null
+    }
 
     Write-Output ("SheetCountAfterRun: " + $dataWorkbook.Worksheets.Count)
     foreach ($sheet in $dataWorkbook.Worksheets) {

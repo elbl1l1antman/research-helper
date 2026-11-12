@@ -6,12 +6,13 @@ Attribute VB_Name = "ReportAutomationAddin"
 Option Explicit
 
 ' 추가기능 버전. 산출 메타 시트와 로그 시트에 함께 기록해 결과 파일의 생성 기준을 추적한다.
-Public Const REPORT_AUTOMATION_VERSION As String = "0.0.23"
+Public Const REPORT_AUTOMATION_VERSION As String = "0.0.34"
 
 ' UserForm에서 전달한 1회성 실행 옵션. 설정 시트를 생성한 뒤 이 값으로 덮어쓴다.
 Private mHasOptionOverrides As Boolean
 Private mOverrideBannerSetting As String
 Private mOverrideTitlePrefixes As String
+Private mOverrideTableRanges As String
 
 ' ============================================================
 ' 프로시저 : ReportAutomation_About
@@ -95,6 +96,24 @@ Public Function ReportAutomation_RunWithOptionsSilent(ByVal bannerSetting As Str
     ReportAutomation_RunWithOptionsSilent = True
 End Function
 
+' 외부 런처가 표별 수동 범위를 함께 전달할 때 사용하는 무인 실행 진입점.
+Public Function ReportAutomation_RunWithOptionsAndRangesSilent(ByVal bannerSetting As String, _
+                                                                ByVal titlePrefixes As String, _
+                                                                ByVal tableRanges As String) As Variant
+    mHasOptionOverrides = True
+    mOverrideBannerSetting = Trim$(bannerSetting)
+    mOverrideTitlePrefixes = Trim$(titlePrefixes)
+    mOverrideTableRanges = tableRanges
+    If Len(mOverrideBannerSetting) = 0 Then mOverrideBannerSetting = "전체"
+    Dim failure As Variant
+    ReportAutomation_GenerateExcelOutputsCore True, failure
+    If IsEmpty(failure) Then
+        ReportAutomation_RunWithOptionsAndRangesSilent = True
+    Else
+        ReportAutomation_RunWithOptionsAndRangesSilent = failure
+    End If
+End Function
+
 ' ============================================================
 ' 함수명 : ReportAutomation_DefaultBannerSetting
 ' 설  명 : UserForm 초기값으로 사용할 배너 설정을 반환한다.
@@ -151,12 +170,16 @@ End Sub
 '           → 분석문/차트데이터/삽입표/QA/메타 작성 → 로그 기록
 ' 인  자  : silent=True이면 UI 메시지 없이 오류를 호출자에게 다시 발생시킨다.
 ' ============================================================
-Private Sub ReportAutomation_GenerateExcelOutputsCore(ByVal silent As Boolean)
+Private Sub ReportAutomation_GenerateExcelOutputsCore(ByVal silent As Boolean, Optional ByRef launcherFailure As Variant)
     On Error GoTo ErrHandler
+    Dim stage As String: stage = "원본 집계표 확인"
 
     ' 실행 대상은 반드시 사용자가 연 데이터 통합문서여야 한다.
     ' ThisWorkbook은 추가기능 자신이므로 여기에 산출 시트를 만들면 안 된다.
-    If ActiveWorkbook Is Nothing Then Exit Sub
+    If ActiveWorkbook Is Nothing Then
+        If silent Then Err.Raise vbObjectError + 7200, "ReportAutomation_GenerateExcelOutputs", "보고서 산출 대상 통합문서를 먼저 활성화하세요."
+        Exit Sub
+    End If
     If ActiveWorkbook Is ThisWorkbook Then
         If silent Then
             Err.Raise vbObjectError + 7200, "ReportAutomation_GenerateExcelOutputs", "보고서 산출 대상 통합문서를 먼저 활성화하세요."
@@ -193,12 +216,13 @@ Private Sub ReportAutomation_GenerateExcelOutputsCore(ByVal silent As Boolean)
         Exit Sub
     End If
 
+    stage = "산출 시트 준비"
     ReportAutomation_BeginOperation "보고서 자동화 산출 시트를 생성하는 중입니다..."
 
     ' 산출물은 한 번의 실행마다 timestamp가 붙은 새 시트로 생성한다.
     ' 기존 산출 시트를 덮어쓰지 않아 사용자가 이전 결과와 비교할 수 있다.
     Dim wsSettings As Worksheet, wsList As Worksheet, wsNarr As Worksheet
-    Dim wsChart As Worksheet, wsInsert As Worksheet, wsQA As Worksheet
+    Dim wsChart As Worksheet, wsInsert As Worksheet, wsInsertCells As Worksheet, wsQA As Worksheet
     Dim wsSource As Worksheet, wsRevision As Worksheet, wsMeta As Worksheet
     Dim wsPriorSettings As Worksheet
 
@@ -210,6 +234,7 @@ Private Sub ReportAutomation_GenerateExcelOutputsCore(ByVal silent As Boolean)
     Set wsNarr = ReportAutomation_AddOutputSheet(wb, "보고서_분석문")
     Set wsChart = ReportAutomation_AddOutputSheet(wb, "보고서_차트데이터")
     Set wsInsert = ReportAutomation_AddOutputSheet(wb, "보고서_삽입표")
+    Set wsInsertCells = ReportAutomation_AddOutputSheet(wb, "보고서_삽입표셀")
     Set wsQA = ReportAutomation_AddOutputSheet(wb, "보고서_QA")
     Set wsSource = ReportAutomation_AddOutputSheet(wb, "보고서_출처")
     Set wsRevision = ReportAutomation_AddOutputSheet(wb, "보고서_수정이력")
@@ -220,13 +245,17 @@ Private Sub ReportAutomation_GenerateExcelOutputsCore(ByVal silent As Boolean)
     If mHasOptionOverrides Then
         ReportAutomation_SetSettingValue wsSettings, "추출 배너 목록", mOverrideBannerSetting
         ReportAutomation_SetSettingValue wsSettings, "제목 제거 접두어", mOverrideTitlePrefixes
+        ReportAutomation_ApplyTableRangeOverrides wsSettings, mOverrideTableRanges
     End If
     ReportAutomation_WriteTableList wsList, tables, dataWs
+    stage = "집계표 셀 내보내기"
+    ReportAutomation_WriteTableCells wsInsertCells, tables, dataWs, wsSettings
     Dim qaCount As Long
+    stage = "분석문 및 QA 작성"
     ReportAutomation_WriteNarratives wsNarr, wsChart, wsInsert, wsQA, tables, dataWs, wsSettings, qaCount
     ReportAutomation_WriteSourceSheet wsSource
     ReportAutomation_WriteRevisionSheet wsRevision
-    ReportAutomation_WriteMetaSheet wsMeta, wb, dataWs, tables, wsSettings, wsList, wsNarr, wsChart, wsInsert
+    ReportAutomation_WriteMetaSheet wsMeta, wb, dataWs, tables, wsSettings, wsList, wsNarr, wsChart, wsInsert, wsInsertCells
 
     ' 메타 시트는 Python/HWP/PPT 후속 자동화가 참조하는 내부 정보이므로 숨김 처리한다.
     wsMeta.Visible = xlSheetVeryHidden
@@ -255,22 +284,25 @@ ErrHandler:
     Dim errNum As Long, errSrc As String, errDesc As String
     errNum = Err.Number: errSrc = Err.Source: errDesc = Err.Description
     ReportAutomation_EndOperation
+    ReportAutomation_ClearOptionOverrides
     On Error Resume Next
     If errNum = 18 Then
         ReportAutomation_LogEvent wb, "generate_excel_outputs", "", "CANCELLED", "사용자가 작업을 취소했습니다."
         On Error GoTo 0
         If Not silent Then MsgBox "작업이 취소되었습니다.", vbInformation, "보고서 자동화"
-        ReportAutomation_ClearOptionOverrides
+        If Not IsMissing(launcherFailure) Then launcherFailure = "사용자가 Excel 산출을 취소했습니다."
         Exit Sub
     End If
     ReportAutomation_LogEvent wb, "generate_excel_outputs", "", "ERROR", errDesc
     On Error GoTo 0
-    If silent Then
+    If Not IsMissing(launcherFailure) Then
+        ' Returning the error avoids an unhandled VBA dialog in hidden Excel.
+        launcherFailure = stage & " 실패 (VBA " & errNum & "): " & errDesc
+    ElseIf silent Then
         Err.Raise errNum, errSrc, errDesc
     Else
         MsgBox "보고서 자동화 산출 시트 생성 중 오류가 발생했습니다." & vbCrLf & errDesc, vbExclamation, "보고서 자동화"
     End If
-    ReportAutomation_ClearOptionOverrides
 End Sub
 
 ' 프로시저 : ReportAutomation_ClearOptionOverrides
@@ -280,4 +312,5 @@ Private Sub ReportAutomation_ClearOptionOverrides()
     mHasOptionOverrides = False
     mOverrideBannerSetting = ""
     mOverrideTitlePrefixes = ""
+    mOverrideTableRanges = ""
 End Sub

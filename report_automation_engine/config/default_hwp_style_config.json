@@ -1,0 +1,67 @@
+{
+  "schema_version": "1.0",
+  "preset_name": "기본 보고서",
+  "paragraph_styles": {
+    "보고서 본문1": {
+      "font_family": "맑은 고딕",
+      "font_size_pt": 10.0,
+      "bold": false,
+      "bullet": "",
+      "line_spacing_percent": 160,
+      "left_indent_mm": 0.0,
+      "first_line_indent_mm": 0.0,
+      "alignment": "left"
+    },
+    "보고서 본문2": {
+      "font_family": "맑은 고딕",
+      "font_size_pt": 10.0,
+      "bold": false,
+      "bullet": "-",
+      "line_spacing_percent": 160,
+      "left_indent_mm": 5.0,
+      "first_line_indent_mm": -5.0,
+      "alignment": "left"
+    },
+    "표보기": {
+      "font_family": "맑은 고딕",
+      "font_size_pt": 8.5,
+      "bold": false,
+      "bullet": "",
+      "line_spacing_percent": 130,
+      "left_indent_mm": 0.0,
+      "first_line_indent_mm": 0.0,
+      "alignment": "left"
+    },
+    "표배너": {
+      "font_family": "맑은 고딕",
+      "font_size_pt": 8.5,
+      "bold": true,
+      "bullet": "",
+      "line_spacing_percent": 130,
+      "left_indent_mm": 0.0,
+      "first_line_indent_mm": 0.0,
+      "alignment": "center"
+    },
+    "표숫자": {
+      "font_family": "맑은 고딕",
+      "font_size_pt": 8.5,
+      "bold": false,
+      "bullet": "",
+      "line_spacing_percent": 130,
+      "left_indent_mm": 0.0,
+      "first_line_indent_mm": 0.0,
+      "alignment": "center"
+    }
+  },
+  "table_cell_styles": {
+    "표보기": {"fill_color": "FFFFFF", "vertical_alignment": "center"},
+    "표배너": {"fill_color": "E7E7E7", "vertical_alignment": "center"},
+    "표숫자": {"fill_color": "FFFFFF", "vertical_alignment": "center"}
+  },
+  "table_border": {
+    "inner_width_mm": 0.12,
+    "outer_width_mm": 0.4,
+    "color": "000000",
+    "show_side_borders": false
+  }
+}

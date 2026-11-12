@@ -48,6 +48,37 @@ Public Sub ReportAutomation_SetSettingValue(ByVal ws As Worksheet, ByVal labelTe
             Exit Sub
         End If
     Next r
+    r = ws.Cells(ws.Rows.Count, 1).End(xlUp).Row + 1
+    ws.Cells(r, 1).Value = labelText
+    ws.Cells(r, 2).Value = valueText
+End Sub
+
+' ============================================================
+' 프로시저 : ReportAutomation_CopyTableRangeSettings
+' 설  명  : 이전 실행에서 저장한 표별 수동 범위를 새 설정 시트로 승계한다.
+Public Sub ReportAutomation_CopyTableRangeSettings(ByVal sourceWs As Worksheet, ByVal targetWs As Worksheet)
+    If sourceWs Is Nothing Or targetWs Is Nothing Then Exit Sub
+    Dim r As Long, labelText As String
+    For r = 3 To sourceWs.Cells(sourceWs.Rows.Count, 1).End(xlUp).Row
+        labelText = Trim$(CStr(sourceWs.Cells(r, 1).Value))
+        If Left$(labelText, 12) = "table_range." Then
+            ReportAutomation_SetSettingValue targetWs, labelText, CStr(sourceWs.Cells(r, 2).Value)
+        End If
+    Next r
+End Sub
+
+' 런처가 전달한 "T0001=Sheet1!A1:H20" 행들을 설정 키로 저장한다.
+Public Sub ReportAutomation_ApplyTableRangeOverrides(ByVal ws As Worksheet, ByVal serialized As String)
+    If ws Is Nothing Or Len(Trim$(serialized)) = 0 Then Exit Sub
+    Dim lines As Variant, line As Variant, separator As Long
+    lines = Split(Replace(serialized, vbCr, ""), vbLf)
+    For Each line In lines
+        separator = InStr(1, CStr(line), "=", vbBinaryCompare)
+        If separator > 1 Then
+            ReportAutomation_SetSettingValue ws, "table_range." & Trim$(Left$(CStr(line), separator - 1)), _
+                Trim$(Mid$(CStr(line), separator + 1))
+        End If
+    Next line
 End Sub
 ' ============================================================
 ' 함수명 : ReportAutomation_ReadBannerSetting

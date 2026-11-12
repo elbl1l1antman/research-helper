@@ -26,3 +26,8 @@ Public Const IDX_END_ROW    As Long = 6
 Public Const IDX_LAST_COL   As Long = 7
 Public Const IDX_TABLE_TYPE As Long = 8
 Public Const IDX_WARNING    As Long = 9
+' 앞의 10개 필드는 유지하고 실제 표 좌표만 뒤에 추가한다.
+Public Const IDX_FIRST_COL As Long = 10
+Public Const IDX_HEADER_ROW As Long = 11
+Public Const IDX_BODY_ROW As Long = 12
+Public Const IDX_SOURCE_ROW As Long = 13
