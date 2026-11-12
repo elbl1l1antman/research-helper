@@ -136,7 +136,7 @@ Public Function ReportAutomation_IsCountHeader(ByVal text As String) As Boolean
     If text = "(n)" Then text = "n"
     text = Replace(Replace(Replace(text, "(n)", ""), "(명)", ""), "(건)", "")
     Select Case text
-        Case "n", "사례수", "wt사례수", "가중사례수", "비가중사례수", "실제사례수", "표본수", "케이스수", "빈도", "응답수", "count", "casecount", "cases", "frequency", "weightedn", "rawn"
+        Case "n", "사례수", "wt사례수", "가중사례수", "비가중사례수", "실제사례수", "표본수", "케이스수", "빈도", "빈도수", "응답수", "count", "casecount", "cases", "frequency", "weightedn", "rawn"
             ReportAutomation_IsCountHeader = True
     End Select
 End Function
@@ -158,6 +158,9 @@ Public Function ReportAutomation_IsTotalLabel(ByVal text As String) As Boolean
     text = LCase$(Replace(ReportAutomation_CleanText(text), " ", ""))
     Do While Len(text) > 0 And InStr(1, "■▣▶◀●•-", Left$(text, 1), vbBinaryCompare) > 0
         text = Mid$(text, 2)
+    Loop
+    Do While Len(text) > 0 And InStr(1, "■▣▶◀●•-", Right$(text, 1), vbBinaryCompare) > 0
+        text = Left$(text, Len(text) - 1)
     Loop
     Select Case text
         Case "전체", "합계", "계", "총계", "total", "grandtotal", "overall"

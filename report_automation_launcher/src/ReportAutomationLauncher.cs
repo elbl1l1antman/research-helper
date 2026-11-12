@@ -7215,16 +7215,16 @@ namespace ReportAutomationLauncher
                 AddTablePreview(tables, Convert.ToString(ws.Name), block);
                 // Header extent comes from the first numeric body row, not a required total-row symbol.
                 int beforeHeader = block.TitleRow > 0 ? block.TitleRow : block.HeaderRow - 1;
-                foreach (string banner in FindBannerGroups(sheet, beforeHeader, block.BodyRow, block.LastCol))
+                foreach (string banner in FindBannerGroups(sheet, beforeHeader, block.BodyRow, block.LastCol, block.FirstCol))
                 {
-                    if (seen.Add(banner))
-                    {
-                        found.Add(banner);
-                    }
-                    if (IsPrimaryBannerCandidate(banner) && primarySeen.Add(banner))
-                    {
-                        primary.Add(banner);
-                    }
+                    string choice = "가로: " + NormalizeBannerName(banner);
+                    if (seen.Add(choice.Replace(" ", ""))) found.Add(choice);
+                    if (IsPrimaryBannerCandidate(banner) && primarySeen.Add(choice.Replace(" ", ""))) primary.Add(choice);
+                }
+                foreach (string banner in FindVerticalBannerNames(sheet, beforeHeader, block.BodyRow, block.EndRow, block.FirstCol, block.LastCol))
+                {
+                    string choice = "세로: " + banner;
+                    if (seen.Add(choice.Replace(" ", ""))) found.Add(choice);
                 }
             }
         }
@@ -7261,7 +7261,7 @@ namespace ReportAutomationLauncher
         private static bool IsCaseHeader(string text)
         {
             string token = System.Text.RegularExpressions.Regex.Replace(HeaderToken(text), @"\([^)]*\)$", "");
-            return new[] { "사례수", "표본수", "응답수", "빈도", "케이스수", "n", "casecount", "wt사례수" }.Contains(token);
+            return new[] { "사례수", "표본수", "응답수", "빈도", "빈도수", "케이스수", "n", "casecount", "wt사례수" }.Contains(token);
         }
 
         private static bool IsPercentHeader(string text)
@@ -7321,6 +7321,20 @@ namespace ReportAutomationLauncher
             check(banners.Count == 2 && banners.Contains("성별") && banners.Contains("지역"), "markerless parent banners without child options");
             var flat = snapshot(new[] { new object[] { "표 4 분포" }, new object[] { "사례수", "만족", "불만족" }, new object[] { "", "%", "%" }, new object[] { "전체", 60, 40 } });
             check(FindBannerGroups(flat, 1, 4, 3).Count == 0, "response options are not parent banners");
+            var rowGroups = snapshot(new[] {
+                new object[] { "<일반현황> 이용 경험" }, new object[] { "", "", "빈도수", "경험" },
+                new object[] { "", "", "", "있음", "없음" }, new object[] { "전체", "", 20, 60, 40 },
+                new object[] { "종목", "A", 10, 60, 40 }, new object[] { "", "B", 10, 60, 40 },
+                new object[] { "▣ 성 별 ▣", "남성", 20, 60, 40 }, new object[] { "", "고립 항목", 5, 60, 40 },
+            });
+            blocks = DetectBlocks(rowGroups);
+            check(blocks.Count == 1 && FindVerticalBannerNames(rowGroups, 1, 4, 8, 1, 5).SequenceEqual(new[] { "종목", "성 별" }),
+                "marked and unmarked row groups with 빈도수 and no percent header");
+            var aggregates = snapshot(new[] {
+                new object[] { "[표 8] 척도" }, new object[] { "구분", "◐TOP2 (4+5)", "◐긍정 (합)", "◐증상 없음" },
+                new object[] { "N", "%", "%", "%" }, new object[] { "전체", 70, 60, 30 }
+            });
+            check(FindBannerGroups(aggregates, 1, 4, 4).Count == 0, "marked response options and scale summaries are not selectable groups");
             var titleless = snapshot(new[] { new object[] { "항목", "비율" }, new object[] { "이용", 30 }, new object[] { "미이용", 70 } });
             blocks = DetectBlocks(titleless);
             var previews = new List<TablePreview>();
@@ -7641,7 +7655,32 @@ namespace ReportAutomationLauncher
             return 0;
         }
 
-        private static List<string> FindBannerGroups(SheetSnapshot sheet, int startRow, int totalRow, int lastCol)
+        private static List<string> FindVerticalBannerNames(SheetSnapshot sheet, int startRow, int bodyRow, int endRow, int firstCol, int lastCol)
+        {
+            var groups = new List<string>();
+            int countCol = 0;
+            for (int col = firstCol; col <= lastCol && countCol == 0; col++)
+                for (int row = startRow + 1; row < bodyRow; row++)
+                    if (IsCaseHeader(sheet.Text(row, col))) { countCol = col; break; }
+            if (countCol < firstCol + 2 || countCol == lastCol) return groups;
+            // shortcut: adjacent group/member columns only, extend with verified geometry for other row layouts.
+            int anchor = countCol - 2;
+            Func<int, bool> isMember = row => NormalizeCell(sheet.Text(row, anchor + 1)).Length > 0 &&
+                IsNumericCell(sheet.Text(row, countCol)) &&
+                Enumerable.Range(countCol + 1, lastCol - countCol).Any(col => IsNumericCell(sheet.Text(row, col)));
+            for (int row = bodyRow; row <= endRow; row++)
+            {
+                string raw = NormalizeCell(sheet.Text(row, anchor));
+                string name = NormalizeBannerName(raw);
+                if (new[] { "전체", "합계", "총계", "total" }.Contains(HeaderToken(name)) || !IsGroupNameCandidate(name) || !isMember(row)) continue;
+                if (raw.StartsWith("▣", StringComparison.Ordinal) ||
+                    (row < endRow && NormalizeCell(sheet.Text(row + 1, anchor)).Length == 0 && isMember(row + 1)))
+                    AddBanner(groups, name);
+            }
+            return groups;
+        }
+
+        private static List<string> FindBannerGroups(SheetSnapshot sheet, int startRow, int totalRow, int lastCol, int firstCol = 1)
         {
             var groups = new List<string>();
             if (totalRow == 0)
@@ -7659,22 +7698,22 @@ namespace ReportAutomationLauncher
             // A parent banner needs a child-label level. Flat response options above % are not banners.
             int bannerRow = 0;
             for (int row = headerStart; row <= headerEnd && bannerRow == 0; row++)
-                for (int col = sheet.FirstCol; col <= lastCol; col++)
+                for (int col = firstCol; col <= lastCol; col++)
                 {
                     string candidate = sheet.Text(row, col);
-                    if (!IsGroupNameCandidate(candidate)) continue;
-                    if (candidate.StartsWith("◐", StringComparison.Ordinal)) { bannerRow = row; break; }
-                    if (HasBannerChildren(sheet, row, col, headerEnd, lastCol)) bannerRow = row;
+                    if (!IsGroupNameCandidate(candidate) || IsScaleSummaryName(candidate)) continue;
+                    if (HasBannerChildren(sheet, row, col, headerEnd, lastCol, IsMarkedBanner(candidate) ? 1 : 2)) bannerRow = row;
                     if (bannerRow > 0) break;
                 }
             if (bannerRow == 0) return groups;
             var colGroupName = new string[lastCol + 1];
             string lastSeenGroupName = "";
-            for (int col = 1; col <= lastCol; col++)
+            for (int col = firstCol; col <= lastCol; col++)
             {
                 {
                     string text = sheet.Text(bannerRow, col);
-                    if (IsGroupNameCandidate(text) && (text.StartsWith("◐", StringComparison.Ordinal) || HasBannerChildren(sheet, bannerRow, col, headerEnd, lastCol)))
+                    if (IsGroupNameCandidate(text) && !IsScaleSummaryName(text) &&
+                        HasBannerChildren(sheet, bannerRow, col, headerEnd, lastCol, IsMarkedBanner(text) ? 1 : 2))
                     {
                         colGroupName[col] = text;
                         lastSeenGroupName = text;
@@ -7689,7 +7728,7 @@ namespace ReportAutomationLauncher
 
             string currentName = "";
             int percentCount = 0;
-            for (int col = 1; col <= lastCol; col++)
+            for (int col = firstCol; col <= lastCol; col++)
             {
                 string name = colGroupName[col] ?? "";
                 if (!string.Equals(name, currentName, StringComparison.Ordinal))
@@ -7715,15 +7754,28 @@ namespace ReportAutomationLauncher
             return groups;
         }
 
-        private static bool HasBannerChildren(SheetSnapshot sheet, int row, int col, int headerEnd, int lastCol)
+        private static bool HasBannerChildren(SheetSnapshot sheet, int row, int col, int headerEnd, int lastCol, int minimumMeasures)
         {
             // Blank cells following a parent anchor are its span, ending at the next heading.
             int end = col;
             while (end < lastCol && string.IsNullOrWhiteSpace(sheet.Text(row, end + 1))) end++;
+            if (Enumerable.Range(col, end - col + 1).Count(c => IsPercentMeasureColumn(sheet, row, headerEnd + 1, c)) < minimumMeasures) return false;
             for (int child = row + 1; child <= headerEnd; child++)
                 for (int c = col; c <= end; c++)
                     if (IsGroupNameCandidate(sheet.Text(child, c)) && NormalizeCell(sheet.Text(child, c)) != NormalizeCell(sheet.Text(row, col))) return true;
             return false;
+        }
+
+        private static bool IsMarkedBanner(string value)
+        {
+            return value.StartsWith("◐", StringComparison.Ordinal) || value.StartsWith("▣", StringComparison.Ordinal);
+        }
+
+        private static bool IsScaleSummaryName(string value)
+        {
+            string key = NormalizeBannerName(value).Split('(')[0].Trim().Replace(" ", "");
+            return System.Text.RegularExpressions.Regex.IsMatch(key, @"^(TOP|BOT|BOTTOM|MID|LOW)\d*$", System.Text.RegularExpressions.RegexOptions.IgnoreCase) ||
+                new[] { "긍정", "부정", "보통", "인지", "비인지", "만족", "불만족", "동의", "비동의", "찬성", "반대", "도움이됨", "해로움", "필요함", "필요하지않음" }.Contains(key);
         }
 
         private static bool IsPercentMeasureColumn(SheetSnapshot sheet, int startRow, int totalRow, int col)
@@ -7804,12 +7856,7 @@ namespace ReportAutomationLauncher
 
         private static string NormalizeBannerName(string banner)
         {
-            string name = (banner ?? "").Trim();
-            while (name.StartsWith("◐", StringComparison.Ordinal) || name.StartsWith("▣", StringComparison.Ordinal))
-            {
-                name = name.Substring(1).Trim();
-            }
-            return name;
+            return NormalizeCell(banner).Trim('◐', '▣', ' ').Trim();
         }
 
         private static bool ContainsAny(string text, string[] tokens)

@@ -3,7 +3,7 @@ from pathlib import Path
 
 import openpyxl
 
-from report_automation_engine.report_package import build_preflight, build_report_package
+from report_automation_engine.report_package import build_preflight, build_report_package, normalize_charts
 
 
 def make_workbook(path: Path) -> None:
@@ -64,6 +64,15 @@ def test_package_tables_include_matrix(tmp_path):
     assert table["matrix"][1][1]["display_text"] == "63.3%"
     assert table["matrix"][1][1]["raw_value"] == 63.25
     assert table["roles"]["header"] == 4
+
+
+def test_chart_series_keeps_banner_display_and_source():
+    qa = []
+    chart, = normalize_charts([{"table_key": "T001", "series_group": "세로: 종목 / A", "value": 62.5,
+                               "display_value": "62.5%", "source_cell": "D5", "include_chart": "Y"}], qa)
+    assert (chart["series_group"], chart["value"], chart["display_value"], chart["source_cell"]) == (
+        "세로: 종목 / A", 62.5, "62.5%", "D5")
+    assert qa == []
 
 
 def test_package_resolves_workbook_path_before_export(tmp_path):

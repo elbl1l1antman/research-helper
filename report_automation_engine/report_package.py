@@ -172,6 +172,7 @@ def normalize_charts(rows: List[Dict[str, Any]], qa: List[Dict[str, Any]]) -> Li
                 "measure": clean(row.get("measure")),
                 "value": parsed,
                 "display_value": clean(row.get("display_value")),
+                "source_cell": clean(row.get("source_cell")),
                 "sort_order": to_number(row.get("sort_order")),
                 "include_chart": clean(row.get("include_chart")).upper() == "Y",
             }

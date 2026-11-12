@@ -391,6 +391,54 @@ public static class RecognitionFixtureNative {
         Assert-Equal (Field $rec 1 14) 'B4:E8' 'Manual range override preserved.'
     } finally { [void][Runtime.InteropServices.Marshal]::ReleaseComObject($kisdi) }
 
+    $ws = New-Fixture 'BannerAxes'
+    [void]$ownedSheets.Add($ws)
+    $vertical = U @(0xC138, 0xB85C)
+    $horizontal = U @(0xAC00, 0xB85C)
+    $frequencyCount = U @(0xBE48, 0xB3C4, 0xC218)
+    Write-Row $ws 1 1 @('Table 1. Row banner without percent marker')
+    Write-Row $ws 2 3 @($frequencyCount, 'Choices')
+    $ws.Range('D2:E2').Merge()
+    Write-Row $ws 3 4 @('First', 'Second', 'Chart helper')
+    Write-Row $ws 4 1 @("$square $total $square", $null, 12, (5.0/12*100), (7.0/12*100), 32.7)
+    Write-Row $ws 5 1 @('Sport', 'Alpha', 8, 62.5, 37.5)
+    Write-Row $ws 6 2 @('Beta', 4, 0, 100)
+    $ws.Range('A5:A6').Merge()
+    Write-Row $ws 7 1 @('Other', 'Alpha', 8, 62.5, 37.5)
+    Write-Row $ws 8 2 @('Beta', 4, 0, 100)
+    $ws.Range('A7:A8').Merge()
+    Write-Row $ws 10 1 @('Table 2. Column banner')
+    Write-Row $ws 11 3 @($cases, 'Group')
+    $ws.Range('D11:G11').Merge()
+    Write-Row $ws 12 4 @('Alpha', $null, 'Beta')
+    $ws.Range('D12:E12').Merge()
+    $ws.Range('F12:G12').Merge()
+    Write-Row $ws 13 3 @('N', 'N', '%', 'N', '%')
+    Write-Row $ws 14 1 @($total, $null, 12, 8, 100, 4, 100)
+    Write-Row $ws 15 2 @('First', 5, 5, 62.5, 0, 0)
+    Write-Row $ws 16 2 @('Second', 7, 3, 37.5, 4, 100)
+    $rec = Read-Tables $ws
+    Assert-Equal (Count-Tables $rec) 2 'Both banner shapes are separate tables.'
+    Assert-Contains (Field $rec 1 16) 'Second=58.3%(E4)' 'Count-consistent rates without a percent marker.'
+    if ((Field $rec 1 16).Contains('Chart helper')) { throw 'Total-only chart helper reached the analysis.' }
+    $fixtures.Activate() | Out-Null
+    $ws.Activate() | Out-Null
+    $selected = "$total," + $vertical + ': Sport,' + $horizontal + ': Group'
+    $macroExport = "'" + $addin.Name + "'!ReportAutomation_RunWithOptionsAndRangesSilent"
+    $status = $excel.Run($macroExport, $selected, '', '')
+    if ($status -is [string] -or $status -ne $true) { throw "Banner export failed: $status" }
+    $analysisPrefix = $reportPrefix + (U @(0xBD84, 0xC11D, 0xBB38))
+    $chartPrefix = $reportPrefix + (U @(0xCC28, 0xD2B8, 0xB370, 0xC774, 0xD130))
+    $narrative = @($fixtures.Worksheets | Where-Object { $_.Name.StartsWith($analysisPrefix) })[-1]
+    $chart = @($fixtures.Worksheets | Where-Object { $_.Name.StartsWith($chartPrefix) })[-1]
+    Assert-Contains $narrative.Cells.Item(2, 3).Value2 "[$($vertical): Sport / Alpha] 'First'" 'Selected row banner in narrative.'
+    Assert-Contains $narrative.Cells.Item(3, 3).Value2 "[$($horizontal): Group / Alpha] 'First'" 'Selected column banner in narrative.'
+    if ($narrative.Cells.Item(2, 3).Value2.Contains('Other')) { throw 'Unselected row banner reached the narrative.' }
+    Assert-Equal $chart.Cells.Item(1, 9).Value2 'source_cell' 'Chart records source coordinates.'
+    Assert-Equal $chart.Cells.Item(4, 9).Value2 'D5' 'Selected row banner uses the member cell.'
+    Assert-Equal $chart.Cells.Item(4, 6).Value2 '62.5%' 'Chart display preserves the percent text.'
+    Assert-Contains $narrative.Cells.Item(2, 3).Value2 '(n=8)' 'Selected subgroup states its sample count.'
+
     if ($WorkbookPath) {
         $WorkbookPath = (Resolve-Path -LiteralPath $WorkbookPath).Path
         # External input cannot execute macros; the already-loaded add-in remains callable.

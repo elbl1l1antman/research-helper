@@ -675,7 +675,7 @@ def find_case_col_idx(header_values: List[str], config: StyleConfig) -> Optional
     for i, v in enumerate(header_values):
         if target and _normalize_case_header(v) == target:
             return i
-    targets = {_normalize_case_header(x) for x in {"사례수", "표본수", "응답수", "빈도", "N", "케이스수"}}
+    targets = {_normalize_case_header(x) for x in {"사례수", "표본수", "응답수", "빈도", "빈도수", "N", "케이스수"}}
     for i, v in enumerate(header_values):
         if _normalize_case_header(v) in targets:
             return i

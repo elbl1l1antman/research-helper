@@ -27,10 +27,16 @@ Public Function ReportAutomation_ExtractKeyPoints(ByVal ws As Worksheet, ByVal t
     End If
 
     ' 열 수가 적은 표는 일반 분포표, 넓은 표는 배너 교차표로 보고 다른 파서를 적용한다.
-    If lastCol - firstCol + 1 <= SIMPLE_TABLE_MAX_COL Then
-        ReportAutomation_ExtractSimplePoints ws, startRow, endRow, lastCol, points, firstCol, bodyRow
-    Else
+    Dim wide As Boolean: wide = lastCol - firstCol + 1 > SIMPLE_TABLE_MAX_COL
+    If Not wide Then
+        Dim verticalRows As Collection
+        Set verticalRows = ReportAutomation_FindVerticalBannerRows(ws, startRow + 1, bodyRow, endRow, firstCol, lastCol)
+        wide = verticalRows.Count > 0
+    End If
+    If wide Then
         ReportAutomation_ExtractWidePoints ws, startRow, endRow, lastCol, points, firstCol, bodyRow
+    Else
+        ReportAutomation_ExtractSimplePoints ws, startRow, endRow, lastCol, points, firstCol, bodyRow
     End If
 
     ReportAutomation_SortPointsDescending points
@@ -234,13 +240,14 @@ Private Sub ReportAutomation_ExtractWidePoints(ByVal ws As Worksheet, ByVal star
     If totalRow = 0 Then Exit Sub
 
     ' 전체 행의 N/% 쌍 중 % 열만 읽어 응답 범주별 비율 후보로 만든다.
-    Dim c As Long
+    Dim c As Variant, columns As Collection
     Dim percentValue As Variant
-    For c = firstCol To lastCol
-        percentValue = ReportAutomation_PercentValue(ws.Cells(totalRow, c))
-        If ReportAutomation_IsPercentMeasureColumn(ws, startRow, bodyRow, c) And Not IsEmpty(percentValue) Then
+    Set columns = ReportAutomation_BannerPercentColumns(ws, startRow + 1, bodyRow, endRow, firstCol, lastCol)
+    For Each c In columns
+        percentValue = ReportAutomation_PercentValue(ws.Cells(totalRow, CLng(c)))
+        If Not IsEmpty(percentValue) Then
             Dim category As String
-            category = ReportAutomation_HeaderLabel(ws, startRow + 1, bodyRow - 1, c, firstCol)
+            category = ReportAutomation_HeaderLabel(ws, startRow + 1, bodyRow - 1, CLng(c), firstCol)
             If ReportAutomation_IsReportItemLabel(category) And Not ReportAutomation_IsNeutralCompositeLabel(category) Then
                 points.Add Array(category, CDbl(percentValue), "", ReportAutomation_RowCount(ws, totalRow, startRow + 1, bodyRow - 1, firstCol, lastCol), ws.Cells(totalRow, c).Address(False, False))
             End If
@@ -250,7 +257,7 @@ Private Sub ReportAutomation_ExtractWidePoints(ByVal ws As Worksheet, ByVal star
     ' 7점/5점 척도형 표에는 분포율과 함께 100점 평균 열이 붙는 경우가 많다.
     ' 이 값은 순위 후보가 아니라 본문 첫 문장에 붙이는 보조 지표로 별도 kind를 부여한다.
     For c = firstCol To lastCol
-        If ReportAutomation_IsScoreMeasureColumn(ws, startRow, bodyRow, c) And IsNumeric(ws.Cells(totalRow, c).Value) Then
+        If ReportAutomation_IsScoreMeasureColumn(ws, startRow, bodyRow, CLng(c)) And IsNumeric(ws.Cells(totalRow, c).Value) Then
             points.Add Array("100점 평균", CDbl(ws.Cells(totalRow, c).Value), "", ReportAutomation_RowCount(ws, totalRow, startRow + 1, bodyRow - 1, firstCol, lastCol), ws.Cells(totalRow, c).Address(False, False), "scale_score_100")
             Exit For
         End If
@@ -348,7 +355,7 @@ Private Function ReportAutomation_CleanHeaderItemLabel(ByVal text As String) As 
     ReportAutomation_CleanHeaderItemLabel = text
 End Function
 ' ============================================================
-Private Function ReportAutomation_IsReportItemLabel(ByVal text As String) As Boolean
+Public Function ReportAutomation_IsReportItemLabel(ByVal text As String) As Boolean
     text = ReportAutomation_CleanText(text)
     If Len(text) = 0 Then Exit Function
     If ReportAutomation_IsTotalLabel(text) Or ReportAutomation_IsCountHeader(text) _
@@ -405,7 +412,7 @@ Private Sub ReportAutomation_SortPointsDescending(ByVal points As Collection)
     Next i
 End Sub
 ' ============================================================
-Private Function ReportAutomation_IsNeutralCompositeLabel(ByVal text As String) As Boolean
+Public Function ReportAutomation_IsNeutralCompositeLabel(ByVal text As String) As Boolean
     text = Replace(ReportAutomation_CleanText(text), " ", "")
     ReportAutomation_IsNeutralCompositeLabel = (InStr(1, text, "보통(", vbTextCompare) > 0)
 End Function

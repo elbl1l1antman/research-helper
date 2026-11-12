@@ -11,12 +11,13 @@ Public Sub ReportAutomation_WriteNarratives(ByVal wsNarr As Worksheet, ByVal wsC
                                              ByVal wsSettings As Worksheet, ByRef qaCount As Long)
     wsNarr.Range("A1:I1").Value = Array("table_key", "문항/표 제목", "분석문_기본", "분석문_세부", "분석문_LLM", _
                                         "주요 수치 요약", "검토 상태", "사용자 수정문", "최종 사용문")
-    wsChart.Range("A1:H1").Value = Array("table_key", "series_group", "category", "measure", "value", "display_value", "sort_order", "include_chart")
+    wsChart.Range("A1:I1").Value = Array("table_key", "series_group", "category", "measure", "value", "display_value", "sort_order", "include_chart", "source_cell")
     wsInsert.Range("A1:H1").Value = Array("table_key", "title", "category", "weighted_n", "raw_n", "percent", "unit", "source_cell")
     wsQA.Range("A1:F1").Value = Array("table_key", "qa_type", "severity", "message", "source_range", "checked_at")
 
     ReportAutomation_StyleHeader wsNarr.Range("A1:I1")
-    ReportAutomation_StyleHeader wsChart.Range("A1:H1")
+    ReportAutomation_StyleHeader wsChart.Range("A1:I1")
+    wsChart.Columns("F:F").NumberFormat = "@"
     ReportAutomation_StyleHeader wsInsert.Range("A1:H1")
     ReportAutomation_StyleHeader wsQA.Range("A1:F1")
 
@@ -47,14 +48,6 @@ Public Sub ReportAutomation_WriteNarratives(ByVal wsNarr As Worksheet, ByVal wsC
         narrative = ReportAutomation_BuildNarrative(CStr(rec(IDX_TITLE)), CStr(rec(IDX_BASIS)), points, titlePrefixes)
         summary = ReportAutomation_FormatPointSummary(points)
 
-        wsNarr.Cells(narrRow, 1).Value = rec(IDX_TABLE_KEY)
-        wsNarr.Cells(narrRow, 2).Value = rec(IDX_TITLE)
-        wsNarr.Cells(narrRow, 3).Value = narrative
-        wsNarr.Cells(narrRow, 6).Value = summary
-        wsNarr.Cells(narrRow, 7).Value = IIf(points.Count = 0, "확인 필요", "자동 생성")
-        wsNarr.Cells(narrRow, 9).Value = narrative
-        narrRow = narrRow + 1
-
         ' 전체 기준 수치를 차트 데이터와 삽입용 표 데이터로 펼친다.
         Dim p As Long, pointRec As Variant
         For p = 1 To points.Count
@@ -68,6 +61,7 @@ Public Sub ReportAutomation_WriteNarratives(ByVal wsNarr As Worksheet, ByVal wsC
             wsChart.Cells(chartRow, 6).Value = ReportAutomation_FormatPointValue(pointRec)
             wsChart.Cells(chartRow, 7).Value = p
             wsChart.Cells(chartRow, 8).Value = IIf(p <= CHART_INCLUDE_TOP_N, "Y", "N")
+            wsChart.Cells(chartRow, 9).Value = pointRec(4)
             chartRow = chartRow + 1
 
             wsInsert.Cells(insertRow, 1).Value = rec(IDX_TABLE_KEY)
@@ -81,10 +75,14 @@ Public Sub ReportAutomation_WriteNarratives(ByVal wsNarr As Worksheet, ByVal wsC
             insertRow = insertRow + 1
         Next p
 
-        ' 사용자가 선택한 배너가 있고 배너 교차표인 경우에만 배너별 수치를 차트 데이터에 추가한다.
-        If CLng(rec(IDX_LAST_COL)) - ReportAutomation_FirstCol(rec) + 1 > SIMPLE_TABLE_MAX_COL Then
-            ReportAutomation_AppendBannerChartRows wsChart, chartRow, dataWs, rec, bannerSetting
-        End If
+        ReportAutomation_AppendBannerChartRows wsChart, chartRow, dataWs, rec, bannerSetting, narrative
+        wsNarr.Cells(narrRow, 1).Value = rec(IDX_TABLE_KEY)
+        wsNarr.Cells(narrRow, 2).Value = rec(IDX_TITLE)
+        wsNarr.Cells(narrRow, 3).Value = narrative
+        wsNarr.Cells(narrRow, 6).Value = summary
+        wsNarr.Cells(narrRow, 7).Value = IIf(points.Count = 0, "확인 필요", "자동 생성")
+        wsNarr.Cells(narrRow, 9).Value = narrative
+        narrRow = narrRow + 1
 
         ' 분석문 생성 실패 또는 구조 경고가 있는 표는 QA 시트에 남겨 수동 검토 대상으로 만든다.
         If points.Count = 0 Or Len(CStr(rec(IDX_WARNING))) > 0 Then
@@ -110,7 +108,7 @@ Public Sub ReportAutomation_WriteNarratives(ByVal wsNarr As Worksheet, ByVal wsC
     wsNarr.Columns("A:I").AutoFit
     wsNarr.Columns("C:I").ColumnWidth = 36
     wsNarr.Columns("C:I").WrapText = True
-    wsChart.Columns("A:H").AutoFit
+    wsChart.Columns("A:I").AutoFit
     wsInsert.Columns("A:H").AutoFit
     wsQA.Columns("A:F").AutoFit
     wsNarr.Rows(1).AutoFilter
