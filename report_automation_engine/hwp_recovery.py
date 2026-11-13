@@ -8,7 +8,7 @@ import zipfile
 
 
 COUNTERS = ("sections_written", "source_tables_written", "tables_written", "charts_deferred",
-            "table_results", "table_layouts", "warnings", "style_application_counts", "placeholders")
+            "table_results", "table_layouts", "warnings", "style_application_counts", "placeholders", "chart_results", "charts_excluded")
 
 
 def file_digest(path):

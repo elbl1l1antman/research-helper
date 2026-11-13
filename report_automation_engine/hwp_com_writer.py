@@ -8,10 +8,12 @@
 from __future__ import annotations
 
 import argparse
+from hashlib import sha256
 import json
 import math
 import os
 import platform
+import re
 import shutil
 import sys
 import tempfile
@@ -78,6 +80,9 @@ def write_hwp_document(
     style_config_path: str | Path | None = None,
     page_setup_path: str | Path | None = None,
     recovery_path: str | Path | None = None,
+    *,
+    figure_prefix: str | None = None,
+    chart_style_path: str | Path | None = None,
 ) -> Path:
     """Write a report draft and always write a companion JSON report."""
 
@@ -91,6 +96,8 @@ def write_hwp_document(
     writer_report["com"]["dispatch_mode"] = dispatch_mode
     report_file = Path(report_path).resolve() if report_path else output_file.with_name(output_file.stem + "_hwp_writer_report.json")
     render_plan_file = Path(render_plan_path).resolve() if render_plan_path else output_file.with_name(output_file.stem + "_hwp_render_plan.json")
+    if chart_style_path and Path(chart_style_path).resolve() in {output_file, report_file, render_plan_file}:
+        raise HwpWriterError('validate', 'chart', '차트 서식과 출력 경로가 같습니다.')
     table_style_profile_file = Path(table_style_profile_path).resolve() if table_style_profile_path else None
     style_config_file = Path(style_config_path).resolve() if style_config_path else None
     hwp = None
@@ -104,6 +111,12 @@ def write_hwp_document(
         package = load_json(package_file)
         preflight = load_json(preflight_file)
         validate_preflight(preflight)
+        if figure_prefix is not None:
+            validate_figure_prefix(figure_prefix)
+            if output_file.suffix.lower() != '.hwpx' or keep_open_after_save:
+                raise HwpWriterError('validate', 'chart', '차트 삽입은 HWPX 파일 저장에만 지원합니다.')
+        elif chart_style_path:
+            raise HwpWriterError('validate', 'chart', '차트 서식을 쓰려면 그림 번호 앞자리를 지정하세요.')
         page_setup = None
         if page_setup_path:
             writer_report["page_setup_path"] = str(Path(page_setup_path).resolve())
@@ -143,11 +156,13 @@ def write_hwp_document(
             workbook_path = package.get("meta", {}).get("source_workbook")
             path = Path(recovery_path).resolve()
             sources = (package_file, preflight_file, template_file, workbook_path, style_config_path, table_style_profile_path, page_setup_path)
+            if figure_prefix is not None:
+                sources += (chart_style_path,)
             reserved = {Path(source).resolve() for source in (*sources, output_file, report_file, render_plan_file) if source}
             if reserved.intersection({path, *(path.with_name(f"{path.stem}_{slot}.hwpx") for slot in (0, 1))}):
                 raise HwpWriterError("recovery", "verify", "자동 재개 파일 경로가 입력 또는 출력 경로와 같습니다.")
             writer_report.update(stage="recovery", action="verify", recovery_path=str(path))
-            recovery = Recovery(path, sources, max_sections)
+            recovery = Recovery(path, sources, max_sections if figure_prefix is None else [max_sections, figure_prefix])
             if recovery.state:
                 saved = recovery.state["report"]
                 count = saved.get("sections_written", 0)
@@ -156,6 +171,10 @@ def write_hwp_document(
                 writer_report.update(saved, resumed_sections=count, recovery_sections=count)
 
         temporary_root = Path(tempfile.mkdtemp(prefix="research-helper-hwp-"))
+        write_figure = verify_figures = None
+        if figure_prefix is not None:
+            write_figure, verify_figures = prepare_hwp_charts(package, max_sections, temporary_root, figure_prefix,
+                                                             chart_style_path, writer_report, report_file)
         working_template = temporary_root / "styled_template.hwpx"
         style_indexes = None
         if template_file.suffix.lower() == ".hwpx":
@@ -215,9 +234,11 @@ def write_hwp_document(
             style_config,
             report_file,
             recovery,
+            write_figure=write_figure,
+            verify_figures=verify_figures,
         )
         write_json(report_file, writer_report)
-        save_as_hwpx(hwp, output_file, writer_report, report_file)
+        save_as_hwpx(hwp, output_file, writer_report, report_file, verify=verify_figures)
         writer_report["status"] = "ready"
         writer_report["finished_at"] = now()
         write_json(report_file, writer_report)
@@ -592,6 +613,60 @@ def apply_named_style(hwp, style_index: int, report: Dict[str, Any], style_name:
     counts[style_name] = int(counts.get(style_name, 0)) + 1
 
 
+def validate_figure_prefix(prefix):
+    if not re.fullmatch(r'[0-9]{1,3}', prefix):
+        raise ValueError('그림 번호 앞자리는 0~999 사이의 정수로 지정하세요.')
+
+
+def prepare_hwp_charts(package, max_sections, directory, prefix, style_path, report, checkpoint):
+    if __package__:
+        from .hwp_survey_charts import export_chart_emfs, insert_figure, verify_saved_figures
+        from .survey_chart_style import survey_chart_plan
+    else:
+        from hwp_survey_charts import export_chart_emfs, insert_figure, verify_saved_figures
+        from survey_chart_style import survey_chart_plan
+
+    keys = {section['table_key'] for section in select_sections(package, max_sections)}
+    results = report.setdefault('chart_results', [])
+    done = {item['table_key'] for item in results}
+    plan = {item['key']: item for item in survey_chart_plan(package) if item['key'] in keys - done}
+    report.update(stage='chart', action='export_emf')
+    write_checkpoint(report, checkpoint)
+    try:
+        paths, errors = export_chart_emfs(plan.values(), directory, style_path)
+    except Exception as exc:
+        paths, errors = {}, {key: f'차트 서식 준비 실패: {exc}' for key, item in plan.items() if item['status'] == 'ready'}
+
+    def write(hwp, key):
+        if key not in plan:
+            return
+        item = plan[key]
+        title = ' '.join(item['title'].splitlines()).strip()
+        if item['status'] == 'excluded':
+            report.setdefault('charts_excluded', []).append({'table_key': key, 'title': title, 'reason': item['reason']})
+            return
+        emf = paths.get(key)
+        report.update(stage='chart', action='insert_figure')
+        write_checkpoint(report, checkpoint)
+        try:
+            insert_figure(hwp, title, prefix, emf, report, current_body_width(hwp, report))
+        except Exception as exc:
+            # A partial COM operation might have changed the document. Do not commit this section.
+            raise HwpWriterError('chart', 'insert_figure', f'{key}: 그림 자리 또는 EMF 삽입 실패: {exc}') from exc
+        number = f'{prefix}-{len(results) + 1}'
+        reason = '' if emf else errors.get(key) or item['reason'] or 'EMF를 준비하지 못했습니다.'
+        results.append(dict(table_key=key, title=title, number=number, status='inserted' if emf else 'held',
+                            reason=reason, sha256=sha256(emf.read_bytes()).hexdigest() if emf else None))
+        if reason:
+            report['warnings'].append(f'<그림 {number}> {title}: {reason}')
+
+    def verify(path):
+        if results:
+            verify_saved_figures(path, prefix, results)
+
+    return write, verify
+
+
 def write_body(
     hwp,
     package: Dict[str, Any],
@@ -603,6 +678,9 @@ def write_body(
     style_config: Dict[str, Any] | None = None,
     checkpoint_path: Path | None = None,
     recovery: Recovery | None = None,
+    *,
+    write_figure=None,
+    verify_figures=None,
 ) -> None:
     tables_by_key = {str(table.get("table_key", "")): table for table in package.get("tables", [])}
     charts_by_key = group_charts(package.get("charts", []))
@@ -622,6 +700,9 @@ def write_body(
         run_action(hwp, "BreakPara", report, "body")
         insert_narrative_blocks(hwp, section, report, style_indexes, style_config)
         run_action(hwp, "BreakPara", report, "body")
+
+        if write_figure is not None:
+            write_figure(hwp, key)
 
         table = tables_by_key.get(key)
         if table:
@@ -668,7 +749,7 @@ def write_body(
         else:
             report["warnings"].append(f"삽입표 데이터 없음: {key}")
 
-        if charts_by_key.get(key):
+        if write_figure is None and charts_by_key.get(key):
             report["charts_deferred"] += 1
 
         if table and table.get("source_sheet") and table.get("source_range"):
@@ -679,7 +760,7 @@ def write_body(
         report["sections_written"] += 1
         if recovery:
             insert_text(hwp, recovery.marker, report)
-            save_as_hwpx(hwp, recovery.next_snapshot(), report, checkpoint_path, recovery_copy=True)
+            save_as_hwpx(hwp, recovery.next_snapshot(), report, checkpoint_path, recovery_copy=True, verify=verify_figures)
             recovery.commit(report, write_json)
             report["recovery_sections"] = index
             remove_recovery_marker(hwp, recovery, report)
@@ -1949,7 +2030,7 @@ def remove_recovery_marker(hwp, recovery, report):
         raise HwpWriterError("recovery", "find_marker", "저장된 문항 끝 위치를 한글에서 찾거나 제거하지 못했습니다.")
 
 
-def save_as_hwpx(hwp, output_file: Path, report: Dict[str, Any], checkpoint_path: Path | None = None, *, recovery_copy=False) -> None:
+def save_as_hwpx(hwp, output_file: Path, report: Dict[str, Any], checkpoint_path: Path | None = None, *, recovery_copy=False, verify=None) -> None:
     report["stage"] = "document"
     action = "save_recovery" if recovery_copy else "save_as"
     report["action"] = action
@@ -1980,6 +2061,12 @@ def save_as_hwpx(hwp, output_file: Path, report: Dict[str, Any], checkpoint_path
                 pending = output_file.with_name(f".{output_file.name}.{time.time_ns()}.tmp")
                 try:
                     shutil.copy2(temp_output, pending)
+                    if verify is not None:
+                        try:
+                            verify(pending)
+                        except Exception as exc:
+                            temp_output.unlink(missing_ok=True)
+                            raise HwpWriterError('chart', 'verify_saved_emf', f'EMF 저장 검증 실패: {exc}') from exc
                     os.replace(pending, output_file)
                 finally:
                     pending.unlink(missing_ok=True)
@@ -1992,6 +2079,8 @@ def save_as_hwpx(hwp, output_file: Path, report: Dict[str, Any], checkpoint_path
                 except OSError:
                     pass
                 return
+        except HwpWriterError:
+            raise
         except Exception as exc:
             last_error = exc
             record_com_step(report, "save_as", "failed", str(exc), path=str(output_file))
@@ -2153,6 +2242,8 @@ def run_cli(argv: List[str] | None = None) -> int:
     parser.add_argument("--style-config")
     parser.add_argument("--page-setup", help="Optional mm page settings JSON; applied to the BODY section only.")
     parser.add_argument("--recovery", help="Persist completed HWPX sections and resume a matching interrupted run.")
+    parser.add_argument("--figure-prefix", help="Enable EMF survey charts; set the leading number in figure captions.")
+    parser.add_argument("--chart-style", help="Registered PowerPoint chart style.")
     parser.add_argument("--keep-open-after-save", action="store_true")
     parser.add_argument("--dispatch-mode", choices=DISPATCH_MODES, default="ensure_dispatch")
     parser.add_argument("--check-environment", action="store_true")
@@ -2191,6 +2282,8 @@ def run_cli(argv: List[str] | None = None) -> int:
             args.style_config,
             args.page_setup,
             args.recovery,
+            figure_prefix=args.figure_prefix,
+            chart_style_path=args.chart_style,
         )
         print(str(output))
         return 0

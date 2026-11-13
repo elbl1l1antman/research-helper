@@ -1,8 +1,8 @@
 # ReportAutomation
 
-Current version: `0.0.46`
+Current version: `0.0.47`
 
-`0.0.46` adds [editable PowerPoint chart styles and chart-review export](docs/survey_chart_style.md). Automatic HWPX chart insertion is not enabled.
+`0.0.47` adds [HWPX survey chart insertion with verified EMF storage](docs/survey_chart_style.md).
 
 For editable HWPX starters and body/table presets, see the [HWPX preset guide](docs/hwp_reference_presets.md).
 

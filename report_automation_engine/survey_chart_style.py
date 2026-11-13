@@ -9,6 +9,7 @@ import math
 from pathlib import Path
 import re
 from tempfile import NamedTemporaryFile
+import textwrap
 from zipfile import BadZipFile
 
 from openpyxl.utils.cell import coordinate_to_tuple
@@ -256,18 +257,13 @@ def _representative(rows, table):
     return (points, measure, 'RA_CHART_DOUGHNUT' if binary else 'RA_CHART_COLUMN'), ''
 
 
-def write_chart_review(package, output, style_path=None):
-    if style_path is not None and Path(output).resolve() == Path(style_path).resolve():
-        raise ValueError('등록한 차트 서식을 결과 파일로 덮어쓸 수 없습니다.')
-    prs = Presentation(style_path) if style_path is not None else _starter()
-    prototypes = _prototypes(prs)
-    sample_slides = list(prs.slides._sldIdLst)
+def survey_chart_plan(package):
     candidates = defaultdict(list)
     for row in package.get('charts', []):
         candidates[row.get('table_key')].append(row)
     sections = {row['table_key']: row for row in package.get('sections', [])}
     tables = {row['table_key']: row for row in package.get('tables', [])}
-    skips = []
+    plan = []
     for key in dict.fromkeys((*sections, *tables, *candidates)):
         section, table = sections.get(key, {}), tables.get(key, {})
         title = section.get('title') or table.get('title') or key or '차트'
@@ -275,14 +271,39 @@ def write_chart_review(package, output, style_path=None):
             continue
         entry, reason = _representative(candidates[key], table)
         if not entry:
-            skips.append(f'{key} · {title}: {reason}')
+            plan.append(dict(key=key, title=title, status='excluded' if reason == '비교 항목 없음' else 'held', reason=reason))
             continue
         rows, measure, kind = entry
+        labels = [str(p['category']) for p in rows]
+        status = 'ready'
+        if kind == 'RA_CHART_COLUMN':
+            width = max(6, min(20, 80 // len(labels)))
+            labels = ['\n'.join(part for line in label.split('\n') for part in (textwrap.wrap(line, width) or [''])) for label in labels]
+            if len(labels) > 12 or any(label.count('\n') > 2 for label in labels):
+                status = 'review'
+        source = '!'.join(x for x in (table.get('source_sheet'), table.get('source_range')) if x)
+        plan.append(dict(key=key, title=title, status=status, labels=labels, values=[p['value'] for p in rows],
+                         measure=measure, kind=kind, source=source, reason='보기명 배치 수정 필요' if status == 'review' else ''))
+    return plan
+
+
+def write_chart_review(package, output, style_path=None, *, plan=None):
+    if style_path is not None and Path(output).resolve() == Path(style_path).resolve():
+        raise ValueError('등록한 차트 서식을 결과 파일로 덮어쓸 수 없습니다.')
+    prs = Presentation(style_path) if style_path is not None else _starter()
+    prototypes = _prototypes(prs)
+    sample_slides = list(prs.slides._sldIdLst)
+    skips = []
+    for item in survey_chart_plan(package) if plan is None else plan:
+        key, title = item['key'], item['title']
+        if item['reason']:
+            skips.append(f"{key} · {title}: {item['reason']}")
+        if item['status'] not in {'ready', 'review'}:
+            continue
         slide = prs.slides.add_slide(prs.slide_layouts[6])
         _text(slide, title, 0.65, 0.3, prs.slide_width.inches - 1.3, 0.78, 22)
-        _clone_chart(slide, prototypes[kind], [str(p['category']) for p in rows], [p['value'] for p in rows], measure)
-        source = '!'.join(x for x in (table.get('source_sheet'), table.get('source_range')) if x)
-        footer = ' · '.join(str(s) for s in (key, '전체', f'단위: {measure}' if measure else '', source) if s)
+        _clone_chart(slide, prototypes[item['kind']], item['labels'], item['values'], item['measure'])
+        footer = ' · '.join(str(s) for s in (key, '전체', f"단위: {item['measure']}" if item['measure'] else '', item['source']) if s)
         _text(slide, footer, 0.66, prs.slide_height.inches - 0.48, prs.slide_width.inches - 1.32, 0.33, 11)
     if not skips and len(prs.slides) == len(sample_slides):
         raise ValueError('생성할 수 있는 차트가 없습니다.')

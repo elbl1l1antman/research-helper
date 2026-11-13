@@ -1,6 +1,6 @@
 # Versioning
 
-Current version: `0.0.46`
+Current version: `0.0.47`
 
 ## Policy
 
@@ -16,6 +16,8 @@ Current version: `0.0.46`
   - Major: breaking file format, CLI, template, or workflow change.
 
 ## Current Baseline
+
+`0.0.47` inserts survey charts into HWPX as verified original EMFs, preserving caption slots and chart state across recovery.
 
 `0.0.46` adds launcher registration of a common PPTX chart style and an editable survey chart review export.
 

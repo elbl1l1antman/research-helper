@@ -9,11 +9,11 @@ from xml.etree import ElementTree as ET
 from zipfile import ZipFile
 
 
-def verify_chart_document(path: Path, *, prefix: str, expected: tuple[bool, ...]) -> list[dict]:
-    return _verify_document(path, prefix, expected, require_emf=True)
+def verify_chart_document(path: Path, *, prefix: str, expected: tuple[bool, ...], titles=None) -> list[dict]:
+    return _verify_document(path, prefix, expected, require_emf=True, titles=titles)
 
 
-def _verify_document(path, prefix, expected, *, require_emf):
+def _verify_document(path, prefix, expected, *, require_emf, titles=None):
     with ZipFile(path) as archive:
         manifest = ET.fromstring(archive.read('Contents/content.hpf'))
         media = {item.get('id'): item.get('href') for item in manifest.findall('./{*}manifest/{*}item')}
@@ -21,10 +21,19 @@ def _verify_document(path, prefix, expected, *, require_emf):
                           key=lambda n: int(re.search(r'(\d+)\.xml$', n)[1]))
         tables = [table for section in sections for table in ET.fromstring(archive.read(section)).findall('.//{*}tbl')
                   if table.get('numberingType') == 'PICTURE']
+        if titles is not None:
+            tables = [table for table in tables if _caption_text(table.find('./{*}caption')).startswith(f'<그림 {prefix}-> ')]
         if len(tables) != len(expected):
             raise ValueError('Unexpected figure container count')
-        return [_verify_container(archive, media, table, prefix, index, has_chart, require_emf)
-                for index, (table, has_chart) in enumerate(zip(tables, expected), 1)]
+        figures = [_verify_container(archive, media, table, prefix, index, has_chart, require_emf)
+                   for index, (table, has_chart) in enumerate(zip(tables, expected), 1)]
+        if titles is not None and tuple(item['title'] for item in figures) != titles:
+            raise ValueError('Unexpected figure caption titles')
+        return figures
+
+
+def _caption_text(caption):
+    return ''.join(node.text or '' for node in caption.findall('.//{*}t')) if caption is not None else ''
 
 
 def _is_emf(header):
@@ -40,7 +49,7 @@ def _verify_container(archive, media, table, prefix, index, has_chart, require_e
     fields = caption.findall('.//{*}autoNum')
     if [(node.get('numType'), node.get('num')) for node in fields] != [('PICTURE', str(index))]:
         raise ValueError(f'Figure {index}: invalid picture number sequence')
-    text = ''.join(node.text or '' for node in caption.findall('.//{*}t'))
+    text = _caption_text(caption)
     leader = f'<그림 {prefix}-> '
     if not text.startswith(leader) or not text[len(leader):].strip():
         raise ValueError(f'Figure {index}: invalid caption prefix or empty title')

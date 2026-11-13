@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, Iterable, List
@@ -195,8 +196,10 @@ def normalize_charts(rows: List[Dict[str, Any]], qa: List[Dict[str, Any]]) -> Li
         value = row.get("value")
         parsed = to_number(value)
         table_key = clean(row.get("table_key"))
+        if parsed is not None and not math.isfinite(parsed):
+            parsed = None
         if value not in (None, "") and parsed is None:
-            qa.append(issue(table_key, "contract", "error", "차트 value가 숫자가 아닙니다."))
+            qa.append(issue(table_key, "chart", "warning", "차트 값이 유효한 숫자가 아닙니다. 해당 차트만 검토합니다."))
         charts.append(
             {
                 "table_key": table_key,

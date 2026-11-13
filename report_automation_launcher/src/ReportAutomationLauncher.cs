@@ -2045,6 +2045,8 @@ namespace ReportAutomationLauncher
         private readonly Button openTemplateGuideButton = new Button();
         private readonly Label templateStatusLabel = new Label();
         private readonly CheckBox hwpVisibleCheck = new CheckBox();
+        private readonly CheckBox hwpIncludeFiguresCheck = new CheckBox { Text = "한글에 차트 삽입", Checked = true, AutoSize = true };
+        private readonly NumericUpDown hwpFigurePrefix = new NumericUpDown { Minimum = 0, Maximum = 999, Value = 1, Width = 52, AccessibleName = "그림 번호 앞자리" };
         private readonly CheckBox hwpKeepOpenOnErrorCheck = new CheckBox();
         private readonly ComboBox hwpMaxSectionsCombo = new ComboBox();
         private readonly ComboBox hwpDispatchModeCombo = new ComboBox();
@@ -2714,6 +2716,18 @@ namespace ReportAutomationLauncher
             connection.Controls.Add(hwpEnvironmentCheckButton);
             connection.Controls.Add(hwpVisibleCheck);
             connection.Controls.Add(hwpKeepOpenOnErrorCheck);
+            var figurePrefixLabel = new Label { Text = "그림 번호 앞자리", AutoSize = true, Margin = new Padding(8, 7, 0, 0) };
+            connection.Controls.Add(hwpIncludeFiguresCheck);
+            connection.Controls.Add(figurePrefixLabel);
+            connection.Controls.Add(hwpFigurePrefix);
+            EventHandler refreshFigureOptions = delegate
+            {
+                hwpIncludeFiguresCheck.Enabled = chartCheck.Checked;
+                hwpFigurePrefix.Enabled = figurePrefixLabel.Enabled = chartCheck.Checked && hwpIncludeFiguresCheck.Checked;
+            };
+            chartCheck.CheckedChanged += refreshFigureOptions;
+            hwpIncludeFiguresCheck.CheckedChanged += refreshFigureOptions;
+            refreshFigureOptions(this, EventArgs.Empty);
             AddLabel(grid, 8, "한글 실행 옵션");
             grid.Controls.Add(connection, 1, 8);
             grid.SetColumnSpan(connection, 2);
@@ -4665,7 +4679,10 @@ namespace ReportAutomationLauncher
                     {
                         resultSummaryText.Text = BuildResultSummary(options);
                         PopulateResultFiles(options);
-                        MessageBox.Show(this, "보고서 자동화 산출이 완료되었습니다.", "완료", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                        bool heldCharts = resultSummaryText.Text.Contains("수동 교체:");
+                        bool missingHwp = options.OutputType.IndexOf("HWP", StringComparison.OrdinalIgnoreCase) >= 0 && !File.Exists(options.LastHwpOutputPath);
+                        MessageBox.Show(this, missingHwp ? "한글 보고서가 저장되지 않았습니다. 산출 결과에서 생성 기록을 확인하세요." : heldCharts ? "한글 보고서는 저장했지만 일부 차트는 보류했습니다. 산출 결과에서 그림 번호와 사유를 확인하세요." : "보고서 자동화 산출이 완료되었습니다.",
+                            missingHwp ? "한글 보고서 저장 실패" : heldCharts ? "차트 검토 필요" : "완료", MessageBoxButtons.OK, heldCharts || missingHwp ? MessageBoxIcon.Warning : MessageBoxIcon.Information);
                     }));
                 }
                 catch (Exception ex)
@@ -4814,12 +4831,24 @@ namespace ReportAutomationLauncher
                     lastStep = LastComStepSummary(com);
                 }
 
+                var figureLines = new List<string>();
+                object figuresValue;
+                if (root.TryGetValue("chart_results", out figuresValue) && figuresValue is object[])
+                {
+                    var figures = ((object[])figuresValue).OfType<Dictionary<string, object>>().ToArray();
+                    int held = figures.Count(item => JsonString(item, "status") == "held");
+                    figureLines.Add("차트: " + (figures.Length - held) + "개 삽입 · " + held + "개 보류");
+                    foreach (var item in figures.Where(entry => JsonString(entry, "status") == "held"))
+                        figureLines.Add("<그림 " + JsonString(item, "number") + "> " + JsonString(item, "title") + " · " + JsonString(item, "reason"));
+                    if (held > 0) figureLines.Add("수동 교체: PowerPoint 차트만 EMF로 저장한 뒤 해당 1×1 셀에서 [그림 넣기]를 사용하고, 개체 번호 종류를 [없음]으로 설정하세요. [골라 붙이기 → 그림 (메타파일)]은 이 한글 버전에서 WMF로 저장됩니다.");
+                }
+
                 return "HWP COM: status=" + EmptyToDash(status) +
                        " / dispatch=" + EmptyToDash(dispatchMode) +
                        " / progId=" + EmptyToDash(progId) +
                        " / stage=" + EmptyToDash(stage) +
                        " / action=" + EmptyToDash(action) +
-                       " / lastStep=" + EmptyToDash(lastStep);
+                       " / lastStep=" + EmptyToDash(lastStep) + (figureLines.Count == 0 ? "" : Environment.NewLine + string.Join(Environment.NewLine, figureLines));
             }
             catch (Exception ex)
             {
@@ -5924,6 +5953,11 @@ namespace ReportAutomationLauncher
             options.CopyWorkbook = copyWorkbookCheck.Checked;
             options.KeepExcelOpen = keepExcelOpenCheck.Checked;
             options.HwpVisible = hwpVisibleCheck.Checked;
+            if (outputTypeCombo.SelectedIndex == 1 && chartCheck.Checked && hwpIncludeFiguresCheck.Checked)
+            {
+                options.HwpFigurePrefix = Decimal.ToInt32(hwpFigurePrefix.Value).ToString(System.Globalization.CultureInfo.InvariantCulture);
+                options.HwpChartStylePath = File.Exists(SurveyChartStylePath) ? SurveyChartStylePath : null;
+            }
             options.HwpKeepOpenOnError = hwpKeepOpenOnErrorCheck.Checked;
             options.HwpMaxSections = SelectedHwpMaxSections();
             options.HwpDispatchMode = SelectedHwpDispatchMode();
@@ -6067,6 +6101,8 @@ namespace ReportAutomationLauncher
         public bool CopyWorkbook = true;
         public bool KeepExcelOpen;
         public bool HwpVisible;
+        public string HwpFigurePrefix;
+        public string HwpChartStylePath;
         public bool HwpKeepOpenOnError;
         public int HwpMaxSections = 1;
         public string HwpDispatchMode = "ensure_dispatch";
@@ -6183,6 +6219,13 @@ namespace ReportAutomationLauncher
                 LlmModel = "gpt-4.1-mini";
             }
             HwpDispatchMode = NormalizeHwpDispatchMode(HwpDispatchMode);
+            if (HwpFigurePrefix != null && !System.Text.RegularExpressions.Regex.IsMatch(HwpFigurePrefix, "\\A[0-9]{1,3}\\z"))
+                throw new ArgumentException("그림 번호 앞자리는 0~999 사이의 정수로 지정하세요.");
+            if (!string.IsNullOrWhiteSpace(HwpChartStylePath))
+            {
+                HwpChartStylePath = Path.GetFullPath(HwpChartStylePath);
+                if (HwpFigurePrefix == null || !File.Exists(HwpChartStylePath)) throw new ArgumentException("그림 번호 앞자리와 유효한 차트 서식 파일을 지정하세요.");
+            }
         }
 
         public static LauncherOptions FromArgs(string[] args)
@@ -6242,6 +6285,9 @@ namespace ReportAutomationLauncher
             options.CopyWorkbook = !flags.Contains("no-copy");
             options.KeepExcelOpen = flags.Contains("keep-open");
             options.HwpVisible = flags.Contains("hwp-visible");
+            if (values.ContainsKey("hwp-figure-prefix") || flags.Contains("hwp-figure-prefix"))
+                options.HwpFigurePrefix = Get(values, "hwp-figure-prefix", "");
+            options.HwpChartStylePath = Get(values, "hwp-chart-style", "");
             options.HwpKeepOpenOnError = flags.Contains("hwp-keep-open-on-error");
             options.HwpMaxSections = GetInt(values, "hwp-max-sections", 1);
             options.HwpDispatchMode = Get(values, "hwp-dispatch-mode", "ensure_dispatch");
@@ -6756,6 +6802,8 @@ namespace ReportAutomationLauncher
                 options.IncludeAnalysis, options.IncludeCharts, options.IncludeTables, options.IncludeQa,
                 options.UseLlm, options.LlmProvider, options.LlmModel
             });
+            if (options.HwpFigurePrefix != null)
+                settings += serializer.Serialize(new[] { options.HwpFigurePrefix, HashFile(options.HwpChartStylePath) });
             string token;
             using (var sha = SHA256.Create()) token = BitConverter.ToString(sha.ComputeHash(System.Text.Encoding.UTF8.GetBytes(settings))).Replace("-", "");
             return Path.Combine(options.ArtifactDirectory, ".research-helper-hwp-" + token.Substring(0, 24));
@@ -7002,6 +7050,13 @@ namespace ReportAutomationLauncher
                 string arguments = BuildHwpWriterArguments("writer.py", options, "output.hwpx", "writer_report.json", "render_plan.json");
                 if (arguments.IndexOf(" --style-config " + Quote(expected), StringComparison.Ordinal) < 0)
                     throw new InvalidOperationException("Self-check failed: --style-config forwarding");
+                if (arguments.Contains(" --figure-prefix ") || arguments.Contains(" --chart-style "))
+                    throw new InvalidOperationException("Self-check failed: figure flags are present with charts disabled");
+                options.HwpFigurePrefix = "3";
+                options.HwpChartStylePath = Path.Combine(directory, "my chart.pptx");
+                arguments = BuildHwpWriterArguments("writer.py", options, "output.hwpx", "writer_report.json", "render_plan.json");
+                if (!arguments.Contains(" --figure-prefix " + Quote("3")) || !arguments.Contains(" --chart-style " + Quote(options.HwpChartStylePath)))
+                    throw new InvalidOperationException("Self-check failed: figure prefix and style forwarding");
                 var store = new HwpStylePresetStore(Path.Combine(directory, "presets.json"));
                 using (var dialog = new HwpStylePresetDialog(store, HwpStylePresetStore.BuiltInName))
                 {
@@ -7406,6 +7461,8 @@ namespace ReportAutomationLauncher
                    (options.HwpPageSetup == null ? "" : OptionalArgument(" --page-setup ", options.HwpPageSetupPath)) +
                    OptionalArgument(" --table-style-profile ", options.HwpTableStyleProfilePath) +
                    OptionalArgument(" --recovery ", options.HwpRecoveryPath) +
+                   OptionalArgument(" --figure-prefix ", options.HwpFigurePrefix) +
+                   OptionalArgument(" --chart-style ", options.HwpChartStylePath) +
                    (options.HwpKeepOpenOnError ? " --keep-open-on-error" : "");
         }
 
