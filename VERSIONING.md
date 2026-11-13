@@ -1,6 +1,6 @@
 # Versioning
 
-Current version: `0.0.41`
+Current version: `0.0.42`
 
 ## Policy
 
@@ -16,6 +16,10 @@ Current version: `0.0.41`
   - Major: breaking file format, CLI, template, or workflow change.
 
 ## Current Baseline
+
+`0.0.42` keeps watching the HWP writer when a progress file is briefly unreadable,
+stops the writer if the watchdog itself fails, and fixes the topic particle in
+recovered total sentences (합계는).
 
 `0.0.41` starts an interrupted HWPX job over when its work Excel or QA package
 changed, and reports stale recovery files as a recovery error.

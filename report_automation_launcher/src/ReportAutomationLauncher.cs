@@ -7053,7 +7053,17 @@ namespace ReportAutomationLauncher
                 {
                     var stdoutTask = process.StandardOutput.ReadToEndAsync();
                     var stderrTask = process.StandardError.ReadToEndAsync();
-                    if (!WaitForHwpWriter(process, reportPath, log))
+                    bool finished;
+                    try { finished = WaitForHwpWriter(process, reportPath, log); }
+                    catch
+                    {
+                        // Never leave an unsupervised writer holding HWP and the clipboard lock.
+                        try { if (!process.HasExited) process.Kill(); }
+                        catch (InvalidOperationException) { }
+                        catch (System.ComponentModel.Win32Exception) { }
+                        throw;
+                    }
+                    if (!finished)
                     {
                         options.LastHwpWriterReportPath = File.Exists(reportPath) ? reportPath : "";
                         return;
@@ -7131,14 +7141,22 @@ namespace ReportAutomationLauncher
                             lastLog.Restart();
                         }
                     }
-                    catch (IOException) { } // A checkpoint can be replaced between stat and open.
+                    // A checkpoint can be replaced or briefly locked between stat and open; poll again.
+                    catch (IOException) { }
+                    catch (UnauthorizedAccessException) { }
+                    catch (ArgumentException) { }
+                    catch (InvalidOperationException) { }
                 }
                 if (idle.Elapsed.TotalSeconds < idleSeconds) continue;
                 try { process.Kill(); }
                 catch (InvalidOperationException) { if (process.HasExited) return true; throw; }
                 if (!process.WaitForExit(5000)) throw new IOException("중단된 한글 작성 프로세스의 종료를 확인하지 못했습니다.");
 
-                if (last == null && File.Exists(reportPath)) last = ReadWorkflowReport(reportPath);
+                if (last == null && File.Exists(reportPath))
+                {
+                    try { last = ReadWorkflowReport(reportPath); }
+                    catch (Exception) { last = null; } // The timeout record below must still be written.
+                }
                 last = last ?? new Dictionary<string, object>();
                 string message = "한글 작성 진행이 " + idleSeconds + "초 동안 갱신되지 않아 중단했습니다. " + HwpProgressText(last);
                 last["status"] = "timed_out";

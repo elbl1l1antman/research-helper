@@ -79,7 +79,7 @@ def recover_narrative(table, profile):
     # Do not infer a ranking or sum columns that may describe different populations.
     shown = points[:4]
     values = ", ".join(f"‘{label}’ {value.removesuffix('%')}{unit}" for label, value, _ in shown)
-    label = "전체 행에 표시된 값은" if measure_conflicts_with_title(table) else f"전체 행의 {kind}은"
+    label = "전체 행에 표시된 값은" if measure_conflicts_with_title(table) else f"전체 행의 {kind}{topic_particle(kind)}"
     return finish(f"{label} {values}", profile), "aggregate_total", [address for _, _, address in shown]
 
 
@@ -92,6 +92,12 @@ def measure_conflicts_with_title(table):
     actual = {measure[0] for row in headers for cell in row if cell.get("role") in HEADER_ROLES
               and (measure := aggregate_measure(cell.get("display_text")))}
     return len(actual) == 1 and declared[1] not in actual
+
+
+def topic_particle(word):
+    last = word[-1:]
+    # Hangul syllables with a final consonant take 은; 합계 and other open syllables take 는.
+    return "은" if "가" <= last <= "힣" and (ord(last) - ord("가")) % 28 else "는"
 
 
 def finish(text, profile):

@@ -1,6 +1,6 @@
 # ReportAutomation
 
-Current version: `0.0.41`
+Current version: `0.0.42`
 
 `ReportAutomation`은 엑셀 집계표를 기반으로 조사 보고서 작성용 산출물을 자동 생성하는 런처 기반 프로젝트입니다.
 

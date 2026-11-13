@@ -39,3 +39,8 @@ def test_conflicting_title_does_not_convert_average_to_sum():
     assert measure_conflicts_with_title(source)
     text = recover_narrative(source, "")[0]
     assert "3,214.0백만원" in text and "평균" not in text and "합계" not in text
+
+
+def test_topic_particle_follows_the_measure_name():
+    assert recover_narrative(table("기업 조사", "합계(백만원)"), "")[0].startswith("전체 행의 합계는 ")
+    assert recover_narrative(table("기업 조사"), "")[0].startswith("전체 행의 평균은 ")
