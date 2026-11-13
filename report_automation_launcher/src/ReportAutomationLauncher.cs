@@ -153,6 +153,7 @@ namespace ReportAutomationLauncher
         internal const string GoldTableName = "기본 표 · 골드 배너";
         internal const string BlueTableName = "기본 표 · 청회색 머리행";
         internal static readonly string[] StyleNames = { "보고서 본문1", "보고서 본문2", "표보기", "표배너", "표숫자" };
+        internal static readonly string[] CaptionStyleNames = { "표제목", "표번호" };
         internal static readonly string[] TableStyleNames = { "표보기", "표배너", "표숫자" };
         internal static readonly Dictionary<string, string> RoleStyleDefaults = new Dictionary<string, string>
         {
@@ -284,7 +285,9 @@ namespace ReportAutomationLauncher
 
             Dictionary<string, object> paragraph = Map(Value(copy, "paragraph_styles"), "paragraph_styles");
             string[] optional = paragraph.Keys.Where(RoleStyleDefaults.ContainsKey).ToArray();
-            RequireExactKeys(paragraph, StyleNames.Concat(optional).ToArray(), "paragraph_styles");
+            RequireExactKeys(paragraph, StyleNames.Concat(optional).Concat(CaptionStyleNames.Where(paragraph.ContainsKey)).ToArray(), "paragraph_styles");
+            foreach (string name in CaptionStyleNames)
+                if (!paragraph.ContainsKey(name)) paragraph[name] = CaptionStyle(name);
             foreach (string name in paragraph.Keys)
             {
                 Dictionary<string, object> style = Map(paragraph[name], name);
@@ -335,7 +338,32 @@ namespace ReportAutomationLauncher
                     line["width_mm"] = Number(line, "width_mm", 0.1, 5, field);
                     line["color"] = ColorValue(line, "color", field);
                 }
+            var output = DefaultTableOutput();
+            if (copy.ContainsKey("table_output"))
+                foreach (var item in Map(copy["table_output"], "table_output")) output[item.Key] = item.Value;
+            RequireText(output, "number_pattern", "table_output");
+            string pattern = (string)output["number_pattern"];
+            int slot = pattern.IndexOf("{number}", StringComparison.Ordinal);
+            if (slot < 0 || pattern.Length > 80 || pattern.Remove(slot, 8).IndexOfAny(new[] { '{', '}', '\r', '\n', '\t' }) >= 0)
+                throw new InvalidOperationException("표 번호 형식에 {number}를 한 번 입력하세요. 예: <표 1-{number}>");
+            double decimals = Number(output, "value_decimals", -1, 4, "table_output");
+            if (decimals != Math.Truncate(decimals)) throw new InvalidOperationException("값 소수점 자리는 정수여야 합니다.");
+            output["value_decimals"] = (int)decimals;
+            foreach (string key in new[] { "inline", "value_grouping", "sample_grouping" })
+                if (!(output[key] is bool)) throw new InvalidOperationException("table_output." + key + " 값은 부울이어야 합니다.");
+            copy["table_output"] = output;
             return copy;
+        }
+
+        private static Dictionary<string, object> CaptionStyle(string name)
+        {
+            return Style("맑은 고딕", 10, name == "표번호", "", 160, 0, 0, "center");
+        }
+
+        private static Dictionary<string, object> DefaultTableOutput()
+        {
+            return new Dictionary<string, object> { { "number_pattern", "<표 {number}>" }, { "inline", false },
+                { "value_decimals", -1 }, { "value_grouping", true }, { "sample_grouping", false } };
         }
 
         internal static Dictionary<string, object> DefaultConfig()
@@ -346,11 +374,13 @@ namespace ReportAutomationLauncher
             styles["표보기"] = Style("맑은 고딕", 8.5, false, "", 130, 0, 0, "left");
             styles["표배너"] = Style("맑은 고딕", 8.5, true, "", 130, 0, 0, "center");
             styles["표숫자"] = Style("맑은 고딕", 8.5, false, "", 130, 0, 0, "center");
+            foreach (string name in CaptionStyleNames) styles[name] = CaptionStyle(name);
             return new Dictionary<string, object>
             {
                 { "schema_version", "1.0" },
                 { "preset_name", BuiltInName },
                 { "paragraph_styles", styles },
+                { "table_output", DefaultTableOutput() },
                 { "table_cell_styles", new Dictionary<string, object>
                     {
                         { "표보기", Cell("FFFFFF") }, { "표배너", Cell("E7E7E7") }, { "표숫자", Cell("FFFFFF") }
@@ -1209,6 +1239,11 @@ namespace ReportAutomationLauncher
         private readonly NumericUpDown outerBorder = new NumericUpDown();
         private readonly TextBox borderColor = new TextBox();
         private readonly CheckBox showSideBorders = new CheckBox();
+        private readonly TextBox tableNumberPattern = new TextBox { Width = 155, AccessibleName = "표 번호 형식" };
+        private readonly CheckBox inlineTable = new CheckBox { Text = "글자처럼 취급 (한 쪽 표)", AutoSize = true };
+        private readonly CheckBox groupSamples = new CheckBox { Text = "사례수 천 단위 쉼표", AutoSize = true };
+        private readonly CheckBox groupValues = new CheckBox { Text = "값 천 단위 쉼표", AutoSize = true };
+        private readonly ComboBox valueDecimals = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Width = 105, AccessibleName = "매출·인원 소수점 자리" };
         private readonly Button importedLines = new Button { AutoSize = true };
         private readonly HwpStylePreview preview = new HwpStylePreview { Dock = DockStyle.Fill, Margin = Padding.Empty };
         private readonly Label previewNote = new Label { Dock = DockStyle.Fill, AutoEllipsis = true, TextAlign = ContentAlignment.MiddleLeft };
@@ -1309,7 +1344,22 @@ namespace ReportAutomationLauncher
             importedLines.Click += ShowImportedLines;
             borderPanel.Controls.Add(importedLines);
             borderPanel.Controls.Add(MakeButton("셀 배경색", ChooseCellFill));
-            root.Controls.Add(borderPanel, 0, 4);
+            var outputPanel = new FlowLayoutPanel { Dock = DockStyle.Fill, AutoSize = true };
+            outputPanel.Controls.Add(new Label { Text = "표 번호 형식", AutoSize = true, Margin = new Padding(0, 8, 6, 0) });
+            outputPanel.Controls.Add(tableNumberPattern);
+            outputPanel.Controls.Add(new Label { Text = "매출·인원 소수점", AutoSize = true, Margin = new Padding(12, 8, 6, 0) });
+            valueDecimals.Items.AddRange(new object[] { "Excel 표시값", "0자리", "1자리", "2자리", "3자리", "4자리" });
+            outputPanel.Controls.Add(valueDecimals);
+            outputPanel.Controls.Add(groupValues);
+            outputPanel.Controls.Add(groupSamples);
+            outputPanel.Controls.Add(inlineTable);
+            var settings = new TableLayoutPanel { Dock = DockStyle.Fill, AutoSize = true, ColumnCount = 1, RowCount = 2 };
+            settings.Controls.Add(borderPanel, 0, 0);
+            settings.Controls.Add(outputPanel, 0, 1);
+            root.Controls.Add(settings, 0, 4);
+            tableNumberPattern.TextChanged += delegate { QueuePreview(); };
+            valueDecimals.SelectedIndexChanged += delegate { groupValues.Enabled = valueDecimals.SelectedIndex > 0; QueuePreview(); };
+            foreach (var check in new[] { inlineTable, groupSamples, groupValues }) check.CheckedChanged += delegate { QueuePreview(); };
             innerBorder.ValueChanged += delegate { QueuePreview(); };
             outerBorder.ValueChanged += delegate { QueuePreview(); };
             borderColor.TextChanged += delegate { QueuePreview(); };
@@ -1410,17 +1460,19 @@ namespace ReportAutomationLauncher
 
         private void LoadPreset(string name)
         {
-            Dictionary<string, object> config = store.Get(name);
+            Dictionary<string, object> config = HwpStylePresetStore.Normalize(store.Get(name));
             nameText.Text = Convert.ToString(config["preset_name"]);
             paragraphGrid.Rows.Clear();
             Dictionary<string, object> styles = (Dictionary<string, object>)config["paragraph_styles"];
-            foreach (string styleName in HwpStylePresetStore.StyleNames.Concat(HwpStylePresetStore.RoleStyleDefaults.Keys))
+            foreach (string styleName in HwpStylePresetStore.StyleNames.Concat(HwpStylePresetStore.RoleStyleDefaults.Keys).Concat(HwpStylePresetStore.CaptionStyleNames))
             {
                 bool separate = HwpStylePresetStore.RoleStyleDefaults.ContainsKey(styleName);
                 bool enabled = styles.ContainsKey(styleName);
                 var style = (Dictionary<string, object>)styles[enabled ? styleName : HwpStylePresetStore.RoleStyleDefaults[styleName]];
                 int index = paragraphGrid.Rows.Add(styleName, separate ? (object)enabled : null, style["font_family"], style["font_size_pt"], style["bold"], style["bullet"], style["line_spacing_percent"], style["left_indent_mm"], style["first_line_indent_mm"], style["alignment"]);
                 paragraphGrid.Rows[index].Cells["Enabled"].ReadOnly = !separate;
+                if (styleName == "표번호")
+                    foreach (string column in new[] { "Bullet", "Spacing", "Left", "First", "Align" }) paragraphGrid.Rows[index].Cells[column].ReadOnly = true;
             }
             tableGrid.Rows.Clear();
             Dictionary<string, object> cells = (Dictionary<string, object>)config["table_cell_styles"];
@@ -1435,6 +1487,12 @@ namespace ReportAutomationLauncher
             outerBorder.Value = Convert.ToDecimal(border["outer_width_mm"]);
             borderColor.Text = Convert.ToString(border["color"]);
             showSideBorders.Checked = (bool)border["show_side_borders"];
+            var output = (Dictionary<string, object>)config["table_output"];
+            tableNumberPattern.Text = Convert.ToString(output["number_pattern"]);
+            valueDecimals.SelectedIndex = Convert.ToInt32(output["value_decimals"]) + 1;
+            groupValues.Checked = (bool)output["value_grouping"];
+            groupSamples.Checked = (bool)output["sample_grouping"];
+            inlineTable.Checked = (bool)output["inline"];
             edges = border.ContainsKey("edges") ? (Dictionary<string, object>)border["edges"] : new Dictionary<string, object>();
             UpdateImportedLines();
         }
@@ -1488,6 +1546,9 @@ namespace ReportAutomationLauncher
                 { "schema_version", "1.0" }, { "preset_name", !commitEdits && string.IsNullOrWhiteSpace(nameText.Text)
                     ? HwpStylePresetStore.BuiltInName : nameText.Text.Trim() },
                 { "paragraph_styles", styles }, { "table_cell_styles", cells },
+                { "table_output", new Dictionary<string, object> { { "number_pattern", tableNumberPattern.Text },
+                    { "value_decimals", Math.Max(-1, valueDecimals.SelectedIndex - 1) }, { "value_grouping", groupValues.Checked },
+                    { "sample_grouping", groupSamples.Checked }, { "inline", inlineTable.Checked } } },
                 { "table_border", new Dictionary<string, object>
                     {
                         { "inner_width_mm", Convert.ToDouble(innerBorder.Value) },
@@ -6498,7 +6559,7 @@ namespace ReportAutomationLauncher
         {
             var serializer = new JavaScriptSerializer { MaxJsonLength = int.MaxValue };
             string settings = serializer.Serialize(new object[] {
-                "0.0.40", options.WorkbookPath,
+                "0.0.41", options.WorkbookPath,
                 options.CopyWorkbook || Path.GetExtension(options.WorkbookPath).Equals(".xls", StringComparison.OrdinalIgnoreCase)
                     ? HashFile(options.WorkbookPath) : "checked in recovery manifest",
                 HashFile(options.AddinPath),
@@ -6784,16 +6845,29 @@ namespace ReportAutomationLauncher
                     var root = (TableLayoutPanel)dialog.Controls[0];
                     root.PerformLayout();
                     dialog.CheckPreview();
-                    var borderPanel = (FlowLayoutPanel)root.GetControlFromPosition(0, 4);
-                    borderPanel.PerformLayout();
-                    foreach (Control control in borderPanel.Controls)
-                        if (!borderPanel.ClientRectangle.Contains(control.Bounds))
-                            throw new InvalidOperationException("Self-check failed: border control clipped at minimum dialog size");
-                    CheckBox checkbox = borderPanel.Controls.OfType<CheckBox>().Single();
-                    if (checkbox.Width < checkbox.PreferredSize.Width || checkbox.Height < checkbox.PreferredSize.Height
-                        || root.GetRowHeights()[4] < borderPanel.Height + borderPanel.Margin.Vertical)
-                        throw new InvalidOperationException("Self-check failed: side borders checkbox or row clipped");
-                    Console.WriteLine("Minimum-size border layout passed: " + borderPanel.ClientSize + ", checkbox " + checkbox.Bounds);
+                    var settings = (TableLayoutPanel)root.GetControlFromPosition(0, 4);
+                    settings.PerformLayout();
+                    foreach (FlowLayoutPanel panel in settings.Controls.OfType<FlowLayoutPanel>())
+                    {
+                        panel.PerformLayout();
+                        foreach (Control control in panel.Controls)
+                            if (!panel.ClientRectangle.Contains(control.Bounds))
+                                throw new InvalidOperationException("Self-check failed: table output control clipped at minimum dialog size: " + control.Text);
+                    }
+                    if (root.GetRowHeights()[4] < settings.Height + settings.Margin.Vertical)
+                        throw new InvalidOperationException("Self-check failed: table settings row clipped");
+                    var outputPanel = (FlowLayoutPanel)settings.GetControlFromPosition(0, 1);
+                    outputPanel.Controls.OfType<TextBox>().Single().Text = "<표 1-{number}>";
+                    outputPanel.Controls.OfType<ComboBox>().Single().SelectedIndex = 3;
+                    foreach (CheckBox check in outputPanel.Controls.OfType<CheckBox>()) check.Checked = true;
+                    edited = dialog.ReadEditor();
+                    edited["preset_name"] = "출력 검증";
+                    store.Save(edited, false);
+                    var output = (Dictionary<string, object>)store.Get("출력 검증")["table_output"];
+                    if ((string)output["number_pattern"] != "<표 1-{number}>" || Convert.ToInt32(output["value_decimals"]) != 2 ||
+                        !(bool)output["inline"] || !(bool)output["sample_grouping"] || !styles.ContainsKey("표제목") || !styles.ContainsKey("표번호"))
+                        throw new InvalidOperationException("Self-check failed: table caption and output settings did not round-trip");
+                    Console.WriteLine("Minimum-size table settings layout and preset round-trip passed: " + settings.ClientSize);
                 }
             }
             finally

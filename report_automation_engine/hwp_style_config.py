@@ -9,6 +9,9 @@ from typing import Any, Dict
 
 REQUIRED_STYLE_NAMES = ("보고서 본문1", "보고서 본문2", "표보기", "표배너", "표숫자")
 TABLE_STYLE_NAMES = ("표보기", "표배너", "표숫자")
+CAPTION_STYLES = ("표제목", "표번호")
+TABLE_OUTPUT_DEFAULTS = {"number_pattern": "<표 {number}>", "inline": False, "value_decimals": -1,
+                         "value_grouping": True, "sample_grouping": False}
 OPTIONAL_ROLE_STYLES = {
     "header": "표머리행", "banner_horizontal": "표가로배너",
     "banner_vertical": "표세로배너", "base": "표BASE",
@@ -66,9 +69,10 @@ def validate_hwp_style_config(config: Dict[str, Any]) -> Dict[str, Any]:
 
     paragraph_styles = _object(normalized.get("paragraph_styles"), "paragraph_styles")
     optional = set(paragraph_styles) & set(OPTIONAL_ROLE_STYLES.values())
-    if set(paragraph_styles) != set(REQUIRED_STYLE_NAMES) | optional:
+    caption = set(paragraph_styles) & set(CAPTION_STYLES)
+    if set(paragraph_styles) != set(REQUIRED_STYLE_NAMES) | optional | caption:
         missing = [name for name in REQUIRED_STYLE_NAMES if name not in paragraph_styles]
-        extra = [name for name in paragraph_styles if name not in REQUIRED_STYLE_NAMES and name not in optional]
+        extra = [name for name in paragraph_styles if name not in REQUIRED_STYLE_NAMES and name not in optional | caption]
         raise ValueError(f"paragraph_styles: unknown or missing style; missing={missing}, extra={extra}")
     for name in paragraph_styles:
         style = _object(paragraph_styles[name], f"paragraph_styles.{name}")
@@ -121,6 +125,16 @@ def validate_hwp_style_config(config: Dict[str, Any]) -> Dict[str, Any]:
                 raise ValueError(f"{field}.type: unsupported line type")
             line["width_mm"] = _number(line.get("width_mm"), f"{field}.width_mm", 0.1, 5)
             line["color"] = _color(line.get("color"), f"{field}.color")
+    output = {**TABLE_OUTPUT_DEFAULTS, **_object(normalized.get("table_output", {}), "table_output")}
+    pattern = _text(output["number_pattern"], "table_output.number_pattern")
+    if len(pattern) > 80 or pattern.count("{number}") != 1 or any(c in pattern.replace("{number}", "") for c in "{}\r\n\t"):
+        raise ValueError("table_output.number_pattern: {number} 한 개를 포함한 한 줄을 입력하세요.")
+    if type(output["value_decimals"]) is not int or not -1 <= output["value_decimals"] <= 4:
+        raise ValueError("table_output.value_decimals: -1..4")
+    for key in ("inline", "value_grouping", "sample_grouping"):
+        if type(output[key]) is not bool:
+            raise ValueError(f"table_output.{key}: expected boolean")
+    normalized["table_output"] = output
     return normalized
 
 

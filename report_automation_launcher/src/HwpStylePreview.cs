@@ -111,6 +111,28 @@ namespace ReportAutomationLauncher
         {
             var cells = Map(config, "table_cell_styles");
             var border = Map(config, "table_border");
+            if (config.ContainsKey("table_output") && paragraphs.ContainsKey("표제목") && paragraphs.ContainsKey("표번호"))
+            {
+                var output = Map(config, "table_output");
+                var title = Map(paragraphs, "표제목");
+                string number = Convert.ToString(output["number_pattern"]).Replace("{number}", "1");
+                using (var numberFont = StyleFont(Map(paragraphs, "표번호")))
+                using (var titleFont = StyleFont(title))
+                {
+                    const string sampleTitle = "지역서점 이용 경험";
+                    float numberWidth = g.MeasureString(number + " ", numberFont).Width;
+                    float total = Math.Min(box.Width, numberWidth + g.MeasureString(sampleTitle, titleFont).Width);
+                    string align = Convert.ToString(title["alignment"]);
+                    float start = box.Left + (align == "right" ? box.Width - total : align == "center" ? (box.Width - total) / 2 : 0);
+                    float height = Math.Max(numberFont.GetHeight(g), titleFont.GetHeight(g)) + 2;
+                    numberWidth = Math.Min(total, numberWidth);
+                    DrawText(g, number, numberFont, new RectangleF(start, box.Y, numberWidth, height), "left", "center");
+                    if (total > numberWidth)
+                        DrawText(g, sampleTitle, titleFont, new RectangleF(start + numberWidth, box.Y, total - numberWidth, height), "left", "center");
+                    box.Y += height;
+                    box.Height -= height;
+                }
+            }
             float textHeight = Font.GetHeight(g) + 4;
             DrawText(g, BaseLine, Font, new RectangleF(box.X, box.Y, box.Width, textHeight), "right", "center");
             box.Y += textHeight;

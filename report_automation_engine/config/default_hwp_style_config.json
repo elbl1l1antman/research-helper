@@ -58,6 +58,13 @@
     "표배너": {"fill_color": "E7E7E7", "vertical_alignment": "center"},
     "표숫자": {"fill_color": "FFFFFF", "vertical_alignment": "center"}
   },
+  "table_output": {
+    "number_pattern": "<표 {number}>",
+    "inline": false,
+    "value_decimals": -1,
+    "value_grouping": true,
+    "sample_grouping": false
+  },
   "table_border": {
     "inner_width_mm": 0.12,
     "outer_width_mm": 0.4,

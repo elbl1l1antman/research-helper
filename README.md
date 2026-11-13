@@ -1,6 +1,6 @@
 # ReportAutomation
 
-Current version: `0.0.40`
+Current version: `0.0.41`
 
 `ReportAutomation`은 엑셀 집계표를 기반으로 조사 보고서 작성용 산출물을 자동 생성하는 런처 기반 프로젝트입니다.
 
@@ -419,6 +419,8 @@ writer의 `--style-config`를 생략하면 기본 JSON을 사용합니다. `--ta
 런처 CLI에서는 `--output-type "HWPX 보고서" --hwp-template "C:\path\report_template.hwpx" --hwp-style-config "C:\path\custom_style.json"`을 기존 Excel 실행 인자에 추가합니다. 입력 JSON은 선택 실행 파일 `hwp_style_config.json`으로 정규화됩니다. `--hwp-style-preset`만으로 저장된 사용자 서식을 불러오지는 않으며 실제 설정 JSON의 `preset_name`이 우선합니다.
 
 한글 작성이 중단되면 같은 원본, 출력 폴더, 양식, 서식과 문항 범위로 다시 실행하세요. 저장 완료된 문항이 있으면 해당 사본에서 이어서 작성하며, 작업 Excel이나 복구 파일이 바뀌면 재개하지 않습니다. 중간에 작성하던 문항은 처음부터 다시 작성합니다. 완료 전에는 산출 폴더의 `.research-helper-hwp-*` 파일을 유지하세요. 작업을 처음부터 다시 하려면 새 산출 폴더를 선택하세요.
+
+`내 서식 추가·편집`에서 `표제목`의 문단 서식과 `표번호`의 글꼴·크기·굵기를 지정합니다. 번호 형식 `<표 1-{number}>`의 `{number}`는 한글의 자동 번호 조판부호로 저장되며, 가로 분할표는 같은 번호를 사용합니다. 매출·인원 등의 소수점과 천 단위 쉼표, 사례수의 천 단위 쉼표는 별도로 지정할 수 있습니다. 숫자 옵션은 HWPX 표의 표시값만 바꾸며 비율, 원본 Excel과 분석문은 바꾸지 않습니다. `글자처럼 취급`은 한 쪽에 들어가는 표에만 적용하고 긴 표는 쪽 나눔을 유지합니다.
 실사용 환경에서 COM 실행이 지연되면 `writer_report.json`의 `stage`, `action`, `com.current_prog_id`, `com.steps`로 멈춘 지점을 확인합니다.
 
 아래한글 COM 환경만 먼저 확인할 수도 있습니다.

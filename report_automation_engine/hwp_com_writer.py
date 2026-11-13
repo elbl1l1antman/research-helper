@@ -22,21 +22,23 @@ from pathlib import Path
 from typing import Any, Dict, List
 
 try:
-    from .hwp_style_config import DEFAULT_HWP_STYLE_CONFIG, HWP_LINE_NAMES, REQUIRED_STYLE_NAMES, load_hwp_style_config, margin_units, style_name_for_cell_role
+    from .hwp_style_config import CAPTION_STYLES, DEFAULT_HWP_STYLE_CONFIG, HWP_LINE_NAMES, REQUIRED_STYLE_NAMES, TABLE_OUTPUT_DEFAULTS, load_hwp_style_config, margin_units, style_name_for_cell_role
     from .hwpx_style_registry import register_named_styles
     from .report_package import split_narrative_blocks
     from .report_table_matrix import resolve_table_metadata
     from .hwp_table_layout import plan_table_parts, prepare_report_table, _text_units
     from .hwp_page_setup import normalize_page_setup, apply_page_setup
     from .hwp_recovery import Recovery
+    from .hwp_table_output import format_table_display
 except ImportError:
-    from hwp_style_config import DEFAULT_HWP_STYLE_CONFIG, HWP_LINE_NAMES, REQUIRED_STYLE_NAMES, load_hwp_style_config, margin_units, style_name_for_cell_role
+    from hwp_style_config import CAPTION_STYLES, DEFAULT_HWP_STYLE_CONFIG, HWP_LINE_NAMES, REQUIRED_STYLE_NAMES, TABLE_OUTPUT_DEFAULTS, load_hwp_style_config, margin_units, style_name_for_cell_role
     from hwpx_style_registry import register_named_styles
     from report_package import split_narrative_blocks
     from report_table_matrix import resolve_table_metadata
     from hwp_table_layout import plan_table_parts, prepare_report_table, _text_units
     from hwp_page_setup import normalize_page_setup, apply_page_setup
     from hwp_recovery import Recovery
+    from hwp_table_output import format_table_display
 
 
 BODY_PLACEHOLDER = "{{BODY}}"
@@ -370,6 +372,10 @@ def register_styles_or_raise(
     report: Dict[str, Any],
 ) -> Dict[str, int]:
     try:
+        styles = dict(config["paragraph_styles"])
+        for name in CAPTION_STYLES:
+            styles.setdefault(name, {**styles["보고서 본문1"], "bullet": "", "alignment": "center", "bold": name == "표번호"})
+        config = {**config, "paragraph_styles": styles}
         indexes = register_named_styles(template, working_template, config)
     except Exception as exc:
         raise HwpWriterError("style", "register_named_styles", f"HWPX 스타일 등록에 실패했습니다: {exc}") from exc
@@ -626,6 +632,7 @@ def write_body(
                     # Resolve metadata before splitting so every fragment carries the same unit.
                     metadata = resolve_table_metadata(table)
                     source = {**table, "base_label": metadata["base_label"], "unit": metadata["unit"]}
+                    source = format_table_display(source, (style_config or {}).get("table_output", {}))
                     parts = [prepare_report_table(part) for part in plan_table_parts(source, width, font_size, style_config)]
                     if "확인 필요" in (metadata["base_label"], metadata["unit"]):
                         report["warnings"].append(f"{key}: BASE 조건 또는 단위를 확인해 주세요.")
@@ -682,13 +689,20 @@ def write_body(
 def write_table_part(hwp, table, title, report, profile, workbook, style_indexes, style_config, index, checkpoint_path=None):
     if int(table.get("part_index") or 1) > 1:
         run_action(hwp, "BreakPage", report, "body")
-    if style_indexes is not None:
-        apply_named_style(hwp, require_style_index(style_indexes, "보고서 본문1"), report, "보고서 본문1")
-    caption = f"〈표 {index}〉 {table.get('title') or title}"
+    caption = table.get('title') or title
     if int(table.get("part_count") or 1) > 1:
         caption += f" [{table['part_index']}/{table['part_count']}]"
-    insert_text(hwp, caption, report)
-    run_action(hwp, "BreakPara", report, "body")
+    options = {**TABLE_OUTPUT_DEFAULTS, **(style_config or {}).get("table_output", {})}
+    table.update(caption_text=caption, caption_number=index, caption_pattern=options["number_pattern"], inline_requested=options["inline"])
+    try:
+        params = hwp.HParameterSet.HAutoNum
+        if not hwp.HAction.GetDefault("NewNumber", params.HSet):
+            raise RuntimeError("NewNumber defaults unavailable")
+        params.NumType, params.NewNumber = 4, index
+        if not hwp.HAction.Execute("NewNumber", params.HSet):
+            raise RuntimeError("NewNumber failed")
+    except Exception as exc:
+        raise HwpWriterError("table", "NewNumber", f"한글 표 번호 조판부호 생성 실패: {exc}") from exc
     inserted = insert_clipboard_table(hwp, workbook, table, report, profile, style_indexes, style_config, checkpoint_path)
     if not inserted:
         inserted = insert_hwp_table(hwp, table_rows_for_hwp(table), report, profile,
@@ -698,6 +712,75 @@ def write_table_part(hwp, table, title, report, profile, workbook, style_indexes
     if not inserted:
         raise HwpWriterError("table", "TableCreate", f"HWP 표 생성에 실패했습니다: {table.get('table_key')}")
     run_action(hwp, "BreakPara", report, "body")
+
+
+def finish_table_object(hwp, control, table, report, style_indexes, style_config):
+    if not table.get("caption_text"):
+        leave_hwp_table(hwp, control, report)
+        return
+    try:
+        def select_table():
+            run_action(hwp, "Cancel", report, "table")
+            if not hwp.SetPosBySet(control.GetAnchorPos(0)):
+                raise RuntimeError("표 앵커를 찾지 못했습니다.")
+            hwp.FindCtrl()
+            if not same_hwp_control(hwp.CurSelectedCtrl, control):
+                raise RuntimeError("대상 표를 선택하지 못했습니다.")
+
+        select_table()
+        for action in ("ShapeObjCaption", "MoveListBegin", "MoveSelListEnd", "Delete"):
+            if not run_action(hwp, action, report, "caption"):
+                raise RuntimeError(action)
+        if style_indexes is not None:
+            apply_named_style(hwp, require_style_index(style_indexes, "표제목"), report, "표제목")
+        title_style = (style_config or {}).get("paragraph_styles", {}).get("표제목", {})
+        number_style = (style_config or {}).get("paragraph_styles", {}).get("표번호", {**title_style, "bold": True})
+        before, after = table["caption_pattern"].split("{number}")
+        apply_caption_char_shape(hwp, number_style)
+        insert_text(hwp, before, report)
+        auto_num = hwp.CreateSet("AutoNum")
+        auto_num.SetItem("NumType", 4)
+        if hwp.InsertCtrl("atno", auto_num).CtrlID != "atno":
+            raise RuntimeError("표 자동 번호 삽입 실패")
+        insert_text(hwp, after, report)
+        apply_caption_char_shape(hwp, title_style)
+        insert_text(hwp, " " + " ".join(table["caption_text"].splitlines()), report)
+        select_table()
+        params = hwp.HParameterSet.HShapeObject
+        if not hwp.HAction.GetDefault("TablePropertyDialog", params.HSet):
+            raise RuntimeError("TablePropertyDialog defaults unavailable")
+        params.ShapeCaption.Side = hwp.SideType("Top")
+        params.ShapeCaption.CapFullSize = 1
+        inline = False
+        if table.get("inline_requested"):
+            # Inline tables cannot be safely paginated when taller than one printable page.
+            pos = hwp.HParameterSet.HSecDef
+            hwp.HAction.GetDefault("PageSetup", pos.HSet)
+            page = pos.PageDef
+            height = (page.PaperWidth if page.Landscape else page.PaperHeight) - page.TopMargin - page.BottomMargin - page.HeaderLen - page.FooterLen
+            estimated = sum(compact_row_heights(table, style_config)) * 100 if table.get("layout_prepared") and table.get("matrix") else 0
+            inline = 0 < max(int(params.Height), estimated) + 5000 <= height
+            if not inline:
+                report["warnings"].append(f"{table.get('table_key')}: 한 쪽을 넘길 수 있어 표를 쪽 나눔 가능 상태로 유지했습니다.")
+        params.TreatAsChar = int(inline)
+        params.AffectsLine = int(inline)
+        if not hwp.HAction.Execute("TablePropertyDialog", params.HSet):
+            raise RuntimeError("표 캡션 위치 또는 글자처럼 취급 설정 실패")
+        table["inline_applied"] = inline
+        leave_hwp_table(hwp, control, report)
+    except Exception as exc:
+        raise HwpWriterError("caption", "ShapeObjCaption", f"표 캡션 작성 실패: {exc}") from exc
+
+
+def apply_caption_char_shape(hwp, style):
+    params = hwp.HParameterSet.HCharShape
+    hwp.HAction.GetDefault("CharShape", params.HSet)
+    params.Height = round(style.get("font_size_pt", 10) * 100)
+    params.Bold = int(style.get("bold", False))
+    for script in ("Hangul", "Latin", "Hanja", "Japanese", "Other", "Symbol", "User"):
+        setattr(params, "FaceName" + script, style.get("font_family", "맑은 고딕"))
+    if not hwp.HAction.Execute("CharShape", params.HSet):
+        raise RuntimeError("표 제목/번호 글자 모양 적용 실패")
 
 
 def current_body_width(hwp, report):
@@ -874,7 +957,7 @@ def insert_hwp_table(
         if final_cell_styles:
             # Merging can discard cell header flags; style the surviving anchors once.
             apply_table_matrix_styles(hwp, table, style_indexes, style_config, report, checkpoint_path)
-        leave_hwp_table(hwp, control, report)
+        finish_table_object(hwp, control, table or {}, report, style_indexes, style_config)
         report["tables_written"] += 1
         return True
     except HwpWriterError:
@@ -1274,6 +1357,7 @@ def apply_cell_appearance(
     cell_role: str = "",
     data_start_row: int = 0,
     header_edge_row: int | None = None,
+    guard_column: bool = False,
 ) -> None:
     cell_style = config["table_cell_styles"][style_name]
     border = config["table_border"]
@@ -1288,7 +1372,8 @@ def apply_cell_appearance(
         fill = params.FillAttr
         set_parameter_item(fill, "Type", 1)
         metadata = cell_role == "metadata"
-        set_parameter_item(fill, "WinBrushFaceColor", hwp_color(hwp, "FFFFFF" if metadata else cell_style["fill_color"]))
+        guard = cell_role == "merge_guard"
+        set_parameter_item(fill, "WinBrushFaceColor", hwp_color(hwp, "FFFFFF" if metadata or guard else cell_style["fill_color"]))
         set_parameter_item(fill, "WinBrushHatchColor", 0)
         set_parameter_item(fill, "WinBrushFaceStyle", -1)
         set_parameter_item(fill, "WindowsBrush", 1)
@@ -1298,20 +1383,20 @@ def apply_cell_appearance(
         set_parameter_item(params, "ApplyTo", 0)
         # Keep the metadata borderless, but retain both owners of ordinary shared lines.
         # Repeated headers need their own bottom edge on continuation pages.
-        set_parameter_item(params, "NoNeighborCell", int(metadata or row_index == data_start_row))
+        set_parameter_item(params, "NoNeighborCell", int(metadata or guard or row_index == data_start_row))
         selected = params.SelCellsBorderFill
         solid = hwp.HwpLineType("Solid")
         # BorderFill writes the fill too; selected-cell defaults can erase CellFill.
         for target in (params, selected):
             fill = target.FillAttr
             set_parameter_item(fill, "Type", 1)
-            set_parameter_item(fill, "WinBrushFaceColor", hwp_color(hwp, "FFFFFF" if metadata else cell_style["fill_color"]))
+            set_parameter_item(fill, "WinBrushFaceColor", hwp_color(hwp, "FFFFFF" if metadata or guard else cell_style["fill_color"]))
             set_parameter_item(fill, "WinBrushHatchColor", 0)
             set_parameter_item(fill, "WinBrushFaceStyle", -1)
             set_parameter_item(fill, "WindowsBrush", 1)
         for side, perimeter in {
             "Left": col_index == 0,
-            "Right": col_index + colspan == col_count,
+            "Right": col_index + colspan == col_count - int(guard_column),
             "Top": row_index == data_start_row,
             "Bottom": row_index + rowspan == row_count,
         }.items():
@@ -1320,7 +1405,7 @@ def apply_cell_appearance(
             line = edges.get(group)
             if not vertical and not perimeter and header_edge_row == (row_index if side == "Top" else row_index + rowspan):
                 line = edges.get("header_bottom", line)
-            hidden = metadata or (vertical and perimeter and not border.get("show_side_borders", False))
+            hidden = metadata or guard or (vertical and perimeter and not border.get("show_side_borders", False))
             line_type = solid
             if hidden or (line and line["type"] == "none"):
                 line_type = 0
@@ -1334,7 +1419,7 @@ def apply_cell_appearance(
                 set_parameter_item(target, f"BorderColor{side}", color)
         if not hwp.HAction.Execute("CellBorderFill", params.HSet):
             raise RuntimeError("CellBorderFill action returned False")
-        if not metadata and (margins := cell_style.get("margins_mm")) is not None:
+        if not metadata and not guard and (margins := cell_style.get("margins_mm")) is not None:
             params = hwp.HParameterSet.HShapeObject
             hwp.HAction.GetDefault("TablePropertyDialog", params.HSet)
             cell = params.ShapeTableCell
@@ -1541,7 +1626,7 @@ def insert_clipboard_table(
             apply_table_matrix_styles(hwp, table, style_indexes, style_config, report, checkpoint_path)
         else:
             apply_table_style_after_paste(hwp, profile, report)
-        leave_hwp_table(hwp, control, report)
+        finish_table_object(hwp, control, table, report, style_indexes, style_config)
         report["tables_written"] += 1
         report["table_results"].append(table_result(table, "clipboard", "tbl", "applied", ""))
         report.pop("clipboard_failure", None)
@@ -1615,6 +1700,8 @@ def compact_row_heights(table, style_config):
                 continue
             first = cell["col"] - 1
             role = table_cell_role(table, row_index, col_index)
+            if role == "merge_guard":
+                continue
             name = style_name_for_cell_role(role, config)
             paragraph = config["paragraph_styles"][name]
             font_size = paragraph["font_size_pt"]
@@ -1782,6 +1869,7 @@ def apply_table_matrix_styles(
             cell_role=table_cell_role(table, row_index, col_index),
             data_start_row=int(table.get("data_start_row", 0)),
             header_edge_row=visual_header + 1 if visual_header is not None else None,
+            guard_column=bool(table.get("protected_merge_rows")),
         )
         if "header_row_count" in table:
             apply_cell_header(hwp, row_index + rowspan <= table["header_row_count"], report)
@@ -1825,6 +1913,9 @@ def table_result(table: Dict[str, Any], insert_mode: str, ctrl_id: str, style_st
         "base_label": table.get("base_label", ""),
         "unit": table.get("unit", ""),
         "header_row_count": table.get("header_row_count", 0),
+        "protected_merge_rows": table.get("protected_merge_rows", []),
+        "caption_number": table.get("caption_number"),
+        "inline_applied": table.get("inline_applied", False),
     }
 
 
