@@ -7,11 +7,12 @@ import json
 from pathlib import Path
 import shutil
 import sys
+from threading import Event, Thread
 import time
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from report_automation_engine.hwp_chart_probe import verify_chart_document
+from report_automation_engine.hwp_chart_probe import preserve_chart_emfs, verify_chart_document
 from report_automation_engine.hwp_com_writer import (
     close_hwp, create_hwp_object, insert_text, leave_hwp_table, new_report,
     open_document, run_action, save_as_hwpx, set_parameter_item, set_visible,
@@ -79,6 +80,90 @@ def restrict_clipboard_to_emf():
             clip.CloseClipboard()
     finally:
         win32gui.DestroyWindow(owner)
+
+
+def read_clipboard_emf():
+    import win32clipboard as clip
+    import win32con
+
+    user, gdi = C.windll.user32, C.windll.gdi32
+    user.GetClipboardData.argtypes, user.GetClipboardData.restype = (W.UINT,), W.HANDLE
+    gdi.GetEnhMetaFileBits.argtypes, gdi.GetEnhMetaFileBits.restype = (W.HANDLE, W.UINT, C.c_void_p), W.UINT
+    clip.OpenClipboard()
+    try:
+        handle = user.GetClipboardData(win32con.CF_ENHMETAFILE)
+        size = gdi.GetEnhMetaFileBits(handle, 0, None) if handle else 0
+        if not size:
+            raise RuntimeError('PowerPoint did not provide EMF bytes')
+        buffer = C.create_string_buffer(size)
+        if gdi.GetEnhMetaFileBits(handle, size, buffer) != size:
+            raise RuntimeError('Could not read the PowerPoint EMF')
+        return buffer.raw
+    finally:
+        clip.CloseClipboard()
+
+
+def paste_special_by_keyboard(hwp, report, template):
+    import win32api
+    import win32con as wc
+    import win32gui as gui
+    import win32process
+
+    def windows(predicate):
+        matches = []
+        gui.EnumWindows(lambda hwnd, _: matches.append(hwnd) if predicate(hwnd) else None, None)
+        return matches
+
+    document = windows(lambda hwnd: template.name in gui.GetWindowText(hwnd)
+                       and str(template.parent) in gui.GetWindowText(hwnd))
+    if len(document) != 1:
+        raise RuntimeError('Could not identify the probe Hancom window')
+    pid = win32process.GetWindowThreadProcessId(document[0])[1]
+    stopped = Event()
+    result = []
+
+    def choose():
+        dialog = None
+        try:
+            for _ in range(100):
+                if stopped.is_set():
+                    return
+                matches = windows(lambda hwnd: gui.GetWindowText(hwnd) == '골라 붙이기'
+                                  and win32process.GetWindowThreadProcessId(hwnd)[1] == pid)
+                if len(matches) == 1:
+                    dialog, = matches
+                    break
+                stopped.wait(0.1)
+            if dialog is None:
+                raise RuntimeError('Hancom Paste Special dialog did not appear')
+            listing = gui.GetDlgItem(dialog, 505)
+            description = gui.GetDlgItem(dialog, 510)
+            if not listing or not description or gui.GetClassName(listing).lower() != 'listbox':
+                raise RuntimeError('Unknown Hancom format-list controls')
+            for _ in range(2):
+                gui.SendMessageTimeout(listing, wc.WM_KEYDOWN, wc.VK_DOWN, 0, wc.SMTO_ABORTIFHUNG, 1000)
+                gui.SendMessageTimeout(listing, wc.WM_KEYUP, wc.VK_DOWN, 0, wc.SMTO_ABORTIFHUNG, 1000)
+            if '내용을 그림 (메타파일)' not in gui.GetWindowText(description):
+                raise RuntimeError('Keyboard did not select 그림 (메타파일)')
+            if gui.GetForegroundWindow() != dialog:
+                raise RuntimeError('Paste Special lost keyboard focus')
+            win32api.keybd_event(wc.VK_RETURN, 0, 0, 0)
+            win32api.keybd_event(wc.VK_RETURN, 0, wc.KEYEVENTF_KEYUP, 0)
+            result.append(True)
+        except Exception as error:
+            result.append(error)
+            if dialog and gui.IsWindow(dialog):
+                gui.PostMessage(dialog, wc.WM_CLOSE, 0, 0)
+
+    worker = Thread(target=choose, daemon=True)
+    worker.start()
+    try:
+        pasted = run_action(hwp, 'PasteSpecial', report, 'probe')
+    finally:
+        stopped.set()
+        worker.join(timeout=3)
+    if not pasted or result != [True]:
+        raise RuntimeError(f'Paste Special keyboard confirmation failed: {result}')
 
 
 def add_container(hwp, title, prefix, report, paste=None):
@@ -166,14 +251,15 @@ def run(output, method):
         raise FileExistsError('Use a fresh output directory for each probe')
     shutil.copyfile(Path(__file__).resolve().parents[1] / 'templates/report_template_basic.hwpx', template)
     make_deck(pptx)
-    report = new_report(pptx, pptx, template, hwpx, method == 'special')
+    visible = method in {'special', 'keyboard'}
+    report = new_report(pptx, pptx, template, hwpx, visible)
     checkpoint = output / 'probe_progress.json'
     print('starting Hancom', flush=True)
     hwp = create_hwp_object(report, checkpoint, dispatch_mode='dispatch_ex')
     app = presentation = None
     try:
         print('opening template copy', flush=True)
-        set_visible(hwp, method == 'special', report, checkpoint)
+        set_visible(hwp, visible, report, checkpoint)
         open_document(hwp, template, report, checkpoint)
         run_action(hwp, 'MoveDocEnd', report, 'probe')
         run_action(hwp, 'BreakPara', report, 'probe')
@@ -181,6 +267,7 @@ def run(output, method):
             print('opening PowerPoint', flush=True)
             app = DispatchEx('PowerPoint.Application')
             presentation = app.Presentations.Open(str(pptx), -1, 0, 0)
+        originals = []
         for index, title in enumerate(('세로 막대 검증', '도넛 검증', '수동 보정 대기'), 1):
             print(f'container {index}', flush=True)
 
@@ -189,11 +276,14 @@ def run(output, method):
                 print('PowerPoint copied chart', flush=True)
                 if method == 'emf-only':
                     restrict_clipboard_to_emf()
-                action = 'PasteSpecial' if method == 'special' else 'Paste'
+                action = 'PasteSpecial' if visible else 'Paste'
                 if method == 'special':
                     print('Manual probe: choose 그림 (메타파일) in Hancom 골라 붙이기.', flush=True)
                 anchor = hwp.GetPosBySet()
-                if not run_action(hwp, action, report, 'probe'):
+                if method == 'keyboard':
+                    originals.append(read_clipboard_emf())
+                    paste_special_by_keyboard(hwp, report, template)
+                elif not run_action(hwp, action, report, 'probe'):
                     raise RuntimeError(f'{action} failed')
                 run_action(hwp, 'Cancel', report, 'probe')
                 if not hwp.SetPosBySet(anchor):
@@ -207,8 +297,13 @@ def run(output, method):
             add_container(hwp, title, '3', report, paste if presentation is not None and index < 3 else None)
         save_as_hwpx(hwp, hwpx, report)
         try:
-            figures = verify_chart_document(hwpx, prefix='3', expected=(method != 'empty', method != 'empty', False))
-            result = {'status': 'ready', 'figures': figures}
+            if method == 'keyboard':
+                target = output / 'chart_probe_emf.hwpx'
+                figures = preserve_chart_emfs(hwpx, target, prefix='3', originals=(*originals, None))
+            else:
+                target = hwpx
+                figures = verify_chart_document(target, prefix='3', expected=(method != 'empty', method != 'empty', False))
+            result = {'status': 'ready', 'figures': figures, 'output': target.name}
         except ValueError as error:
             from zipfile import ZipFile
 
@@ -220,7 +315,7 @@ def run(output, method):
             (output / 'verification.json').write_text(json.dumps(
                 {'method': method, 'manual_selection': method == 'special', **result},
                 ensure_ascii=False, indent=2), encoding='utf-8')
-        print(hwpx)
+        print(target)
     finally:
         if presentation is not None:
             presentation.Close()
@@ -232,7 +327,7 @@ def run(output, method):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--out-dir', type=Path, required=True)
-    parser.add_argument('--method', choices=('empty', 'emf-only', 'special'), default='emf-only',
-                        help='special opens a modal dialog and requires a human selection')
+    parser.add_argument('--method', choices=('empty', 'emf-only', 'special', 'keyboard'), default='emf-only',
+                        help='special requires manual selection; keyboard selects metafile and preserves original EMFs')
     args = parser.parse_args()
     run(args.out_dir.resolve(), args.method)

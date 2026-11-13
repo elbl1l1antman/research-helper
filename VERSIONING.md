@@ -1,6 +1,6 @@
 # Versioning
 
-Current version: `0.0.44`
+Current version: `0.0.45`
 
 ## Policy
 
@@ -16,6 +16,8 @@ Current version: `0.0.44`
   - Major: breaking file format, CLI, template, or workflow change.
 
 ## Current Baseline
+
+`0.0.45` verifies keyboard selection and preservation of the original chart EMF after reopening and saving the HWPX probe in Hancom. No launcher changes.
 
 `0.0.44` adds the HWPX figure-container probe and records the observed WMF conversion. Automatic chart insertion is not enabled.
 

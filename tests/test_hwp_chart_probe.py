@@ -3,7 +3,7 @@ from zipfile import ZipFile
 
 import pytest
 
-from report_automation_engine.hwp_chart_probe import verify_chart_document
+from report_automation_engine.hwp_chart_probe import preserve_chart_emfs, verify_chart_document
 
 
 @pytest.mark.parametrize('change,match', [('', ''), ('raster', 'EMF'), ('wmf', 'EMF'), ('double', 'NONE'),
@@ -19,9 +19,10 @@ def test_saved_chart_container(tmp_path, change, match):
     width = 10001 if change == 'overflow' else 9000
     inline = '0' if change == 'floating' else '1'
     with ZipFile(path, 'w') as archive:
-        archive.writestr('Contents/content.hpf', '<package><manifest><item id="image1" href="BinData/image1.emf"/></manifest></package>')
+        suffix = 'wmf' if change == 'wmf' else 'emf'
+        archive.writestr('Contents/content.hpf', f'<package><manifest><item id="image1" href="BinData/image1.{suffix}" media-type="image/{suffix}"/></manifest></package>')
         media = {'raster': b'PNG', 'wmf': b'\x01\0\x09\0\0\x03' + bytes(102)}.get(change, emf)
-        archive.writestr('BinData/image1.emf', media)
+        archive.writestr(f'BinData/image1.{suffix}', media)
         archive.writestr('Contents/section0.xml', f'''<sec><p><run>
           <tbl rowCnt="1" colCnt="1" numberingType="PICTURE"><pos treatAsChar="{inline}"/>
             <caption side="TOP"><p><t>&lt;그림 {prefix}-</t><autoNum num="1" numType="PICTURE"/><t>&gt; 첫 그림</t></p></caption>
@@ -36,6 +37,18 @@ def test_saved_chart_container(tmp_path, change, match):
     if match:
         with pytest.raises(ValueError, match=match):
             verify_chart_document(path, prefix='3', expected=(True, False))
+        if change == 'wmf':
+            target = tmp_path / 'preserved.hwpx'
+            original = path.read_bytes()
+            with pytest.raises(ValueError, match='EMF'):
+                preserve_chart_emfs(path, target, prefix='3', originals=(b'PNG', None))
+            assert not target.exists()
+            preserve_chart_emfs(path, target, prefix='3', originals=(bytes(emf), None))
+            assert path.read_bytes() == original
+            assert verify_chart_document(target, prefix='3', expected=(True, False))[0]['emf'] == 'BinData/image1.emf'
+            with ZipFile(target) as archive:
+                assert archive.read('BinData/image1.emf') == emf
+                assert 'BinData/image1.wmf' not in archive.namelist()
     else:
         assert verify_chart_document(path, prefix='3', expected=(True, False)) == [
             {'number': 1, 'title': '첫 그림', 'emf': 'BinData/image1.emf'},

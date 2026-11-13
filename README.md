@@ -1,8 +1,8 @@
 # ReportAutomation
 
-Current version: `0.0.44`
+Current version: `0.0.45`
 
-`0.0.44` records the [Hancom metafile probe](docs/superpowers/plans/2026-11-13-hwp-chart-paste-probe-results.md). The standalone executable is unchanged from `0.0.42`.
+`0.0.45` verifies [keyboard metafile selection and EMF preservation](docs/superpowers/plans/2026-11-13-hwp-chart-paste-probe-results.md). The standalone executable is unchanged from `0.0.42`.
 
 For editable HWPX starters and body/table presets, see the [HWPX preset guide](docs/hwp_reference_presets.md).
 
