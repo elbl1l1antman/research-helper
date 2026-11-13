@@ -93,6 +93,13 @@ Public Sub ReportAutomation_WriteTableList(ByVal ws As Worksheet, ByVal tables A
         ws.Cells(i + 1, 10).Value = CLng(rec(IDX_END_ROW)) - CLng(rec(IDX_START_ROW)) + 1
         ws.Cells(i + 1, 11).Value = CLng(rec(IDX_LAST_COL)) - ReportAutomation_FirstCol(rec) + 1
         ws.Cells(i + 1, 12).Value = rec(IDX_WARNING)
+        Dim profileTotal As Double: profileTotal = ReportAutomation_ProfileTotal(dataWs, rec)
+        If profileTotal > 0 Then
+            ws.Cells(i + 1, 4).Value = "응답자 특성"
+            ws.Cells(i + 1, 6).Value = "전체 응답자(n=" & Format(profileTotal, "#,##0") & ")"
+            ws.Cells(i + 1, 9).Value = "응답자 구성표"
+            If CStr(rec(IDX_WARNING)) = "BASE 행 확인 필요" Then ws.Cells(i + 1, 12).ClearContents
+        End If
     Next i
 
     ws.Columns("A:L").AutoFit

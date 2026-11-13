@@ -6,6 +6,11 @@ import re
 from typing import Any, Dict, List
 import unicodedata
 
+try:
+    from .report_table_evidence import aggregate_measure
+except ImportError:
+    from report_table_evidence import aggregate_measure
+
 
 HEADER_LABELS = ["항목", "비율", "가중 N", "원 N"]
 ALLOWED_ROLES = {"title", "base", "banner_horizontal", "banner_vertical", "stub", "value", "note", "source", "blank", "unknown"}
@@ -22,21 +27,24 @@ def resolve_table_metadata(table: Dict[str, Any], metadata: Dict[str, Any] | Non
     supplied = metadata or {}
     base = str(supplied.get("base_label") or table.get("base_label") or "").strip()
     unit = str(supplied.get("unit") or table.get("unit") or "").strip()
+    if base == "확인 필요":
+        base = ""
+    if unit == "확인 필요":
+        unit = ""
     base_pattern = r"BASE\s*[:：]\s*(.*?)(?=\s*(?:[,|]\s*)?단위\s*[:：]|\]|$)"
     match = re.search(base_pattern, base, re.I)
     if match:
         base = match.group(1).strip(" ,|")
-    elif not supplied.get("base_label"):
-        for label in labels:
-            match = re.match(base_pattern, label.strip(" ["), re.I)
-            if match:
-                explicit = match.group(1).strip(" ,|")
-                # Older table lists may concatenate every answer label after the BASE condition.
-                suffix = base[len(explicit):].lstrip() + " "
-                repeats_label = any(value.strip() and suffix.startswith(value.strip() + " ") for value in labels if value != label)
-                if explicit and (not base or (base.startswith(explicit + " ") and repeats_label)):
-                    base = explicit
-                break
+    for label in labels:
+        match = re.match(base_pattern, label.lstrip(" [※■●▣"), re.I)
+        if match:
+            explicit = match.group(1).strip(" ,|")
+            # The VBA table list can include adjacent header labels in its BASE text.
+            suffix = base[len(explicit):].lstrip() + " "
+            repeats_label = any(value.strip() and suffix.startswith(value.strip() + " ") for value in labels if value != label)
+            if explicit and (not base or (base.startswith(explicit + " ") and repeats_label)):
+                base = explicit
+            break
     if not unit:
         units = []
         for label in labels:
@@ -45,7 +53,9 @@ def resolve_table_metadata(table: Dict[str, Any], metadata: Dict[str, Any] | Non
                 unit = match.group(1).rstrip(" )]| ").strip()
                 break
             text = label.strip()
-            if re.fullmatch(r"명|개|건|원|천원|만원|억원|점|%", text):
+            if (measure := aggregate_measure(text)) is not None:
+                units.append(measure[1])
+            elif re.fullmatch(r"명|개|건|원|천원|만원|백만원|억원|점|%", text):
                 units.append(text)
             elif re.search(r"\d+\s*점\s*(?:평균|척도)", text):
                 units.append("점")

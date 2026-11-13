@@ -325,3 +325,71 @@ Private Function ReportAutomation_BannerRequested(ByVal bannerName As String, By
         End If
     Next t
 End Function
+
+Public Function ReportAutomation_IsProfileTitle(ByVal title As String) As Boolean
+    title = Replace(Replace(Replace(title, " ", ""), "[", ""), "]", "")
+    Select Case title
+        Case "응답자특성", "응답자특성표", "응답자구성", "응답자구성표", "표본특성표": ReportAutomation_IsProfileTitle = True
+    End Select
+End Function
+
+Public Function ReportAutomation_ProfileTotal(ByVal ws As Worksheet, ByVal rec As Variant) As Double
+    If Not ReportAutomation_IsProfileTitle(CStr(rec(IDX_TITLE))) Then Exit Function
+    Dim firstCol As Long: firstCol = ReportAutomation_FirstCol(rec)
+    Dim bodyRow As Long: bodyRow = ReportAutomation_BodyRowIndex(rec)
+    Dim lastCol As Long: lastCol = CLng(rec(IDX_LAST_COL))
+    Dim firstHeader As Long: firstHeader = ReportAutomation_HeaderRowIndex(rec)
+    Dim countCol As Long: countCol = ReportAutomation_BannerCountColumn(ws, firstHeader, bodyRow, firstCol, lastCol)
+    ' A profile has two label columns, one sample count and one share; do not reclassify a question by title alone.
+    If countCol <> firstCol + 2 Or lastCol <> countCol + 1 Then Exit Function
+    If Not ReportAutomation_IsPercentMeasureColumn(ws, firstHeader - 1, bodyRow, lastCol) Then Exit Function
+    Dim totalRow As Long: totalRow = ReportAutomation_FindTotalRow(ws, bodyRow, CLng(rec(IDX_END_ROW)), firstCol, lastCol)
+    If totalRow = 0 Then Exit Function
+    Dim rate As Variant: rate = ReportAutomation_PercentValue(ws.Cells(totalRow, lastCol))
+    If IsEmpty(rate) Then Exit Function
+    If Abs(CDbl(rate) - 100) > 0.05 Then Exit Function
+    Dim n As String: n = Trim$(Replace(Replace(Replace(CStr(ws.Cells(totalRow, countCol).Value2), "(", ""), ")", ""), ",", ""))
+    If IsNumeric(n) Then
+        If CDbl(n) > 0 And CDbl(n) = Fix(CDbl(n)) Then ReportAutomation_ProfileTotal = CDbl(n)
+    End If
+End Function
+
+Public Function ReportAutomation_WriteProfileNarrative(ByVal wsChart As Worksheet, ByRef chartRow As Long, _
+    ByVal ws As Worksheet, ByVal rec As Variant, ByVal setting As String, ByVal total As Double) As String
+    Dim lastCol As Long: lastCol = CLng(rec(IDX_LAST_COL))
+    Dim rows As Collection, member As Variant, rate As Variant, group As Variant
+    Dim groups As Object: Set groups = CreateObject("Scripting.Dictionary")
+    Dim points As Collection, items As Collection, item As Variant
+    Set rows = ReportAutomation_FindVerticalBannerRows(ws, ReportAutomation_HeaderRowIndex(rec), _
+        ReportAutomation_BodyRowIndex(rec), CLng(rec(IDX_END_ROW)), ReportAutomation_FirstCol(rec), lastCol)
+    For Each member In rows
+        group = CStr(member(0))
+        If ReportAutomation_BannerRequested(CStr(group), setting, "세로") Then
+            rate = ReportAutomation_PercentValue(ws.Cells(CLng(member(2)), lastCol))
+            If Not IsEmpty(rate) Then
+                If CDbl(rate) >= 0 And CDbl(rate) <= 100 Then
+                    If Not groups.Exists(group) Then
+                        Set items = New Collection
+                        groups.Add group, items
+                    End If
+                    Set items = groups(group)
+                    items.Add Array(member(1), CDbl(rate), ws.Cells(CLng(member(2)), lastCol).Address(False, False), CDbl(member(3)))
+                End If
+            End If
+        End If
+    Next member
+    Dim text As String, details As String
+    text = "전체 응답자는 " & Format(total, "#,##0") & "명임."
+    For Each group In groups.Keys
+        Set points = groups(group)
+        details = ""
+        For Each item In points
+            If Len(details) > 0 Then details = details & ", "
+            details = details & CStr(item(0)) & " " & ReportAutomation_FormatPercent(CDbl(item(1))) & _
+                "(" & Format(CDbl(item(3)), "#,##0") & "명)"
+        Next item
+        text = text & vbLf & CStr(group) & " 분포: " & details
+        ReportAutomation_WriteBannerPoints wsChart, chartRow, CStr(rec(IDX_TABLE_KEY)), "세로: " & CStr(group), points, text, False
+    Next group
+    ReportAutomation_WriteProfileNarrative = text
+End Function

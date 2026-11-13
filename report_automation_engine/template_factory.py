@@ -17,7 +17,10 @@ from pathlib import Path
 from typing import List
 
 
-def create_template(template_type: str, output: str | Path) -> Path:
+HWPX_VARIANTS = ("basic", "guardian", "screening")
+
+
+def create_template(template_type: str, output: str | Path, variant: str = "basic") -> Path:
     output_path = Path(output)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     if template_type == "pptx_report":
@@ -41,7 +44,9 @@ def create_template(template_type: str, output: str | Path) -> Path:
     elif template_type == "hwpx_report":
         if output_path.suffix.lower() != ".hwpx":
             raise ValueError("한글 기본 양식은 .hwpx 확장자로 저장하세요.")
-        source = Path(__file__).resolve().parent.parent / "templates" / "report_template_basic.hwpx"
+        if variant not in HWPX_VARIANTS:
+            raise ValueError(f"지원하지 않는 한글 양식입니다: {variant}")
+        source = Path(__file__).resolve().parent.parent / "templates" / f"report_template_{variant}.hwpx"
         shutil.copyfile(source, output_path)
     else:
         raise ValueError(f"지원하지 않는 템플릿 유형입니다: {template_type}")
@@ -314,8 +319,9 @@ def run_cli(argv: List[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="보고서 자동화 기본 템플릿을 생성합니다.")
     parser.add_argument("--type", required=True, choices=["hwpx_report", "pptx_report", "chart_review"])
     parser.add_argument("--output", required=True)
+    parser.add_argument("--variant", choices=HWPX_VARIANTS, default="basic")
     args = parser.parse_args(argv)
-    output = create_template(args.type, args.output)
+    output = create_template(args.type, args.output, args.variant)
     print(str(output))
     return 0
 

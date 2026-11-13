@@ -1,12 +1,16 @@
+import json
 from pathlib import Path
 import sys
+import tempfile
 import unittest
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from report_automation_engine.hwp_com_writer import (
     find_hwp_table_control,
     is_hwp_table_control,
+    record_cell_progress,
     same_hwp_control,
     table_cell_role,
     table_rows_for_hwp,
@@ -23,6 +27,24 @@ class FakeControl:
 
 
 class HwpComWriterTableTests(unittest.TestCase):
+    def test_cell_checkpoints_capture_coordinates_and_are_throttled(self):
+        report = {"progress": {"table_key": "T0002", "part": 3}}
+        with tempfile.TemporaryDirectory() as directory, patch(
+            "report_automation_engine.hwp_com_writer.time.monotonic", side_effect=[10, 11, 15]
+        ):
+            path = Path(directory) / "writer.json"
+            due = record_cell_progress(report, path, 10, 2, 3, 9, 50, "style")
+            self.assertEqual(due, 15)
+            self.assertEqual(record_cell_progress(report, path, due, 2, 4, 10, 50, "style"), 15)
+            self.assertEqual(json.loads(path.read_text(encoding="utf-8"))["progress"]["cells_done"], 9)
+            record_cell_progress(report, path, due, 3, 0, 11, 50, "style")
+            self.assertEqual(json.loads(path.read_text(encoding="utf-8")), {
+                "progress": {"table_key": "T0002", "part": 3, "row": 4, "col": 1, "cells_done": 11,
+                             "cell_count": 50, "phase": "style"},
+                "stage": "style", "action": "write_cells",
+            })
+            self.assertEqual(list(Path(directory).iterdir()), [path])
+
     def test_visual_header_role_does_not_depend_on_repeating_flags(self):
         table = {"visual_header_row": 2, "header_row_count": 1, "matrix": [
             [{"role": "metadata"}], [{"role": "banner_horizontal"}], [{"role": "banner_horizontal"}],

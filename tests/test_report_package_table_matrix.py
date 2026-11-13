@@ -75,6 +75,44 @@ def test_chart_series_keeps_banner_display_and_source():
     assert qa == []
 
 
+def test_number_recovery_does_not_replace_a_user_edited_narrative(tmp_path):
+    excel = tmp_path / "averages.xlsx"
+    make_cell_contract_workbook(excel)
+    wb = openpyxl.load_workbook(excel)
+    narrative = wb["보고서_분석문"]
+    narrative["B2"] = "매출(백만원/평균)"
+    narrative["C2"] = "수치를 찾지 못했습니다."
+    qa = wb.create_sheet("보고서_QA")
+    qa.append(["table_key", "qa_type", "severity", "message"])
+    qa.append(["T001", "수치 QA", "warning", "수치를 찾지 못했습니다."])
+    cells = wb["보고서_삽입표셀"]
+    cells["F2"] = 1
+    cells["H2"] = "※BASE : 조사 대상자"
+    cells["G3"] = "banner_horizontal"
+    cells["H3"] = "기업"
+    cells["P3"] = ""
+    cells["L4"] = "A7"
+    cells["L5"] = "B7"
+    cells["C4"] = cells["C5"] = 3
+    cells["H5"] = "3.3"
+    for index in range(2, 6):
+        cells[f"M{index}"] = "A5:B7"
+    cells.append(["T001", "매출(백만원/평균)", 2, 2, 1, 1, "banner_horizontal", "평균(백만원)", None, "", "결과표", "B6", "A5:B7"])
+    for index in range(2, 7):
+        cells[f"B{index}"] = "매출(백만원/평균)"
+    wb.save(excel)
+    recovered = build_report_package(excel)
+    assert "3.3백만원" in recovered["sections"][0]["narrative_final"]
+    assert recovered["sections"][0]["narrative_evidence"]["source_cells"] == ["B7"]
+    assert not any(q["category"] == "no_numeric_points" for q in recovered["qa"])
+    narrative["E2"] = "검토자가 확정한 분석문입니다."
+    wb.save(excel)
+    wb.close()
+    edited = build_report_package(excel)
+    assert edited["sections"][0]["narrative_final"] == "검토자가 확정한 분석문입니다."
+    assert any(q["category"] == "no_numeric_points" for q in edited["qa"])
+
+
 def test_package_resolves_workbook_path_before_export(tmp_path):
     excel = tmp_path / "relative_source.xlsx"
     make_cell_contract_workbook(excel)

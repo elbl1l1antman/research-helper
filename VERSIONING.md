@@ -1,6 +1,6 @@
 # Versioning
 
-Current version: `0.0.36`
+Current version: `0.0.42`
 
 ## Policy
 
@@ -16,6 +16,24 @@ Current version: `0.0.36`
   - Major: breaking file format, CLI, template, or workflow change.
 
 ## Current Baseline
+
+`0.0.42` adds two editable HWPX survey starters and three role-based body and
+table presets, including a Malgun Gothic option.
+
+`0.0.41` preserves fully covered merge rows and adds native HWP captions,
+table number styles, inline table placement, and numeric display options.
+
+`0.0.40` recovers supported survey measures from explicit Excel cell evidence
+and resumes interrupted HWPX jobs from the last saved section.
+
+`0.0.39` closes Excel before QA, extends the table preview beyond 5,000 rows,
+and uses HWP progress checkpoints to distinguish slow work from a stall.
+
+`0.0.38` fixes HWP report section selection and respondent profile summaries,
+and adds a separate destination for report outputs.
+
+`0.0.37` adds live narrative and table examples to the HWP style editor and
+requires saving edits before applying a changed preset.
 
 `0.0.36` removes manual Excel add-in selection from the launcher, loads the bundled
 add-in automatically, and keeps connection diagnostics available on failure.

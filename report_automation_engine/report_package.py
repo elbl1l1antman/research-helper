@@ -18,8 +18,10 @@ except ImportError:
 
 try:
     from .report_table_matrix import build_table_matrix, build_table_matrix_from_cells, resolve_table_metadata
+    from .report_table_evidence import measure_conflicts_with_title, recover_narrative, sample_count, table_head_and_total
 except ImportError:
     from report_table_matrix import build_table_matrix, build_table_matrix_from_cells, resolve_table_metadata
+    from report_table_evidence import measure_conflicts_with_title, recover_narrative, sample_count, table_head_and_total
 
 
 def build_report_package(excel_path: str | Path, meta: Dict[str, Any] | None = None) -> Dict[str, Any]:
@@ -33,11 +35,41 @@ def build_report_package(excel_path: str | Path, meta: Dict[str, Any] | None = N
         cell_rows = read_rows(wb, "보고서_삽입표셀")
         tables = group_cell_rows(cell_rows) if cell_rows else group_table_rows(read_rows(wb, "보고서_삽입표"), decimal_places)
         table_list = {clean(row.get("table_key")): row for row in read_rows(wb, "보고서_표목록")}
+        recovered = set()
+        missing_numbers = {q["table_key"] for q in qa if q["category"] == "no_numeric_points" and q["severity"] == "warning"}
+        sections_by_key = {section["table_key"]: section for section in sections}
         for table in tables:
-            table.update(resolve_table_metadata(table, table_list.get(table["table_key"])))
+            listing = table_list.get(table["table_key"]) or {}
+            if listing.get("table_type") == "응답자 구성표":
+                table["title"] = listing["title"]
+                listing = {**listing, "unit": "명, %"}
+            table.update(resolve_table_metadata(table, listing))
+            if table.get("cell_contract"):
+                sample = sample_count(*table_head_and_total(table))
+                if sample is not None:
+                    table["sample_count"], table["sample_count_source_cell"] = sample
+                if measure_conflicts_with_title(table):
+                    qa.append(issue(table["table_key"], "표 구조 QA", "warning", "표 제목과 열 헤더의 합계/평균 표시가 다릅니다. 원본을 확인하세요."))
+            section = sections_by_key.get(table["table_key"])
+            if (section and table["table_key"] in missing_numbers and section["narrative_source"] != "사용자 수정문"
+                    and section["narrative_final"] == section.get("_generated_narrative")):
+                evidence = recover_narrative(table, clean((meta or {}).get("style_profile")))
+                if evidence:
+                    narrative, kind, addresses = evidence
+                    section.update(narrative_final=narrative, narrative_blocks=split_narrative_blocks(narrative),
+                                   narrative_source="표 표시값 복구", summary=narrative, review_status="자동 복구",
+                                   narrative_evidence={"kind": kind, "source_sheet": table["source_sheet"], "source_cells": addresses},
+                                   qa_flags=[flag for flag in section["qa_flags"] if flag not in {"수치 없음", "너무 짧음", "종결 표현 확인"}])
+                    recovered.add(table["table_key"])
             for field, label in (("base_label", "BASE 조건"), ("unit", "단위")):
                 if table[field] == "확인 필요":
                     table.setdefault("qa", []).append({"severity": "warning", "message": f"표 {label} 확인 필요: 보고서_표목록의 {field}를 지정하세요."})
+        known_base = {table["table_key"] for table in tables if table["base_label"] != "확인 필요"}
+        qa[:] = [q for q in qa if not (q["severity"] == "warning" and (
+            (q["category"] == "no_numeric_points" and q["table_key"] in recovered) or
+            (q["message"] == "BASE 행 확인 필요" and q["table_key"] in known_base)))]
+        for section in sections:
+            section.pop("_generated_narrative", None)
         package = {
             "schema_version": "1.0",
             "meta": {
@@ -109,6 +141,7 @@ def read_sections(wb, qa: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
                 "narrative_final": narrative,
                 "narrative_blocks": split_narrative_blocks(narrative),
                 "narrative_source": narrative_source(row),
+                "_generated_narrative": clean(row.get("분석문_기본")),
                 "summary": clean(row.get("주요 수치 요약")),
                 "review_status": clean(row.get("검토 상태")),
                 "qa_flags": flags,
@@ -419,6 +452,7 @@ def run_cli(argv: List[str] | None = None) -> int:
     parser.add_argument("--ppt-template", default="")
     parser.add_argument("--output-type", default="Excel 산출 시트")
     parser.add_argument("--report-profile", default="")
+    parser.add_argument("--source-file-name", default="")
     parser.add_argument("--style-profile", default="")
     parser.add_argument("--banner", default="")
     parser.add_argument("--decimal-places", default="1")
@@ -432,6 +466,7 @@ def run_cli(argv: List[str] | None = None) -> int:
             "style_profile": args.style_profile,
             "banner": args.banner,
             "decimal_places": args.decimal_places,
+            **({"source_file_name": args.source_file_name} if args.source_file_name else {}),
         },
     )
     templates = [

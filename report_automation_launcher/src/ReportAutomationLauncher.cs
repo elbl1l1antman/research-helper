@@ -5,6 +5,7 @@ using System.Drawing;
 using System.IO;
 using System.Linq;
 using System.Runtime.InteropServices;
+using System.Security.Cryptography;
 using System.Threading;
 using System.Web.Script.Serialization;
 using System.Windows.Forms;
@@ -151,7 +152,12 @@ namespace ReportAutomationLauncher
         internal const string BuiltInName = "기본 보고서";
         internal const string GoldTableName = "기본 표 · 골드 배너";
         internal const string BlueTableName = "기본 표 · 청회색 머리행";
+        internal const string GuardianStyleName = "조사 보고서 · KoPub 청회색";
+        internal const string ScreeningStyleName = "검진 보고서 · KoPub 회색";
+        internal const string CompactStyleName = "실무 보고서 · 맑은 고딕";
+        private static readonly string[] ExtraBuiltInNames = { GoldTableName, BlueTableName, GuardianStyleName, ScreeningStyleName, CompactStyleName };
         internal static readonly string[] StyleNames = { "보고서 본문1", "보고서 본문2", "표보기", "표배너", "표숫자" };
+        internal static readonly string[] CaptionStyleNames = { "표제목", "표번호" };
         internal static readonly string[] TableStyleNames = { "표보기", "표배너", "표숫자" };
         internal static readonly Dictionary<string, string> RoleStyleDefaults = new Dictionary<string, string>
         {
@@ -191,6 +197,8 @@ namespace ReportAutomationLauncher
             // Preserve existing user presets even if they happen to use a new built-in name.
             if (!users.Any(item => SameName(item, GoldTableName))) result.Add(DefaultTableConfig(true));
             if (!users.Any(item => SameName(item, BlueTableName))) result.Add(DefaultTableConfig(false));
+            foreach (string name in ExtraBuiltInNames.Skip(2))
+                if (!users.Any(item => SameName(item, name))) result.Add(ReferenceReportConfig(name));
             result.AddRange(users);
             return result;
         }
@@ -203,8 +211,7 @@ namespace ReportAutomationLauncher
         internal bool IsBuiltIn(string name)
         {
             return string.Equals(name, BuiltInName, StringComparison.OrdinalIgnoreCase) ||
-                ((string.Equals(name, GoldTableName, StringComparison.OrdinalIgnoreCase) ||
-                  string.Equals(name, BlueTableName, StringComparison.OrdinalIgnoreCase)) &&
+                (ExtraBuiltInNames.Contains(name, StringComparer.OrdinalIgnoreCase) &&
                  !LoadUsers().Any(item => SameName(item, name)));
         }
 
@@ -283,7 +290,9 @@ namespace ReportAutomationLauncher
 
             Dictionary<string, object> paragraph = Map(Value(copy, "paragraph_styles"), "paragraph_styles");
             string[] optional = paragraph.Keys.Where(RoleStyleDefaults.ContainsKey).ToArray();
-            RequireExactKeys(paragraph, StyleNames.Concat(optional).ToArray(), "paragraph_styles");
+            RequireExactKeys(paragraph, StyleNames.Concat(optional).Concat(CaptionStyleNames.Where(paragraph.ContainsKey)).ToArray(), "paragraph_styles");
+            foreach (string name in CaptionStyleNames)
+                if (!paragraph.ContainsKey(name)) paragraph[name] = CaptionStyle(name);
             foreach (string name in paragraph.Keys)
             {
                 Dictionary<string, object> style = Map(paragraph[name], name);
@@ -334,7 +343,32 @@ namespace ReportAutomationLauncher
                     line["width_mm"] = Number(line, "width_mm", 0.1, 5, field);
                     line["color"] = ColorValue(line, "color", field);
                 }
+            var output = DefaultTableOutput();
+            if (copy.ContainsKey("table_output"))
+                foreach (var item in Map(copy["table_output"], "table_output")) output[item.Key] = item.Value;
+            RequireText(output, "number_pattern", "table_output");
+            string pattern = (string)output["number_pattern"];
+            int slot = pattern.IndexOf("{number}", StringComparison.Ordinal);
+            if (slot < 0 || pattern.Length > 80 || pattern.Remove(slot, 8).IndexOfAny(new[] { '{', '}', '\r', '\n', '\t' }) >= 0)
+                throw new InvalidOperationException("표 번호 형식에 {number}를 한 번 입력하세요. 예: <표 1-{number}>");
+            double decimals = Number(output, "value_decimals", -1, 4, "table_output");
+            if (decimals != Math.Truncate(decimals)) throw new InvalidOperationException("값 소수점 자리는 정수여야 합니다.");
+            output["value_decimals"] = (int)decimals;
+            foreach (string key in new[] { "inline", "value_grouping", "sample_grouping" })
+                if (!(output[key] is bool)) throw new InvalidOperationException("table_output." + key + " 값은 부울이어야 합니다.");
+            copy["table_output"] = output;
             return copy;
+        }
+
+        private static Dictionary<string, object> CaptionStyle(string name)
+        {
+            return Style("맑은 고딕", 10, name == "표번호", "", 160, 0, 0, "center");
+        }
+
+        private static Dictionary<string, object> DefaultTableOutput()
+        {
+            return new Dictionary<string, object> { { "number_pattern", "<표 {number}>" }, { "inline", false },
+                { "value_decimals", -1 }, { "value_grouping", true }, { "sample_grouping", false } };
         }
 
         internal static Dictionary<string, object> DefaultConfig()
@@ -345,11 +379,13 @@ namespace ReportAutomationLauncher
             styles["표보기"] = Style("맑은 고딕", 8.5, false, "", 130, 0, 0, "left");
             styles["표배너"] = Style("맑은 고딕", 8.5, true, "", 130, 0, 0, "center");
             styles["표숫자"] = Style("맑은 고딕", 8.5, false, "", 130, 0, 0, "center");
+            foreach (string name in CaptionStyleNames) styles[name] = CaptionStyle(name);
             return new Dictionary<string, object>
             {
                 { "schema_version", "1.0" },
                 { "preset_name", BuiltInName },
                 { "paragraph_styles", styles },
+                { "table_output", DefaultTableOutput() },
                 { "table_cell_styles", new Dictionary<string, object>
                     {
                         { "표보기", Cell("FFFFFF") }, { "표배너", Cell("E7E7E7") }, { "표숫자", Cell("FFFFFF") }
@@ -366,7 +402,9 @@ namespace ReportAutomationLauncher
         internal static void WriteConfig(string outputPath, Dictionary<string, object> config)
         {
             var serializer = new JavaScriptSerializer { MaxJsonLength = int.MaxValue };
-            AtomicWrite(outputPath, serializer.Serialize(Normalize(config)));
+            string content = serializer.Serialize(Normalize(config));
+            if (!File.Exists(outputPath) || File.ReadAllText(outputPath, System.Text.Encoding.UTF8) != content)
+                AtomicWrite(outputPath, content);
         }
 
         private static Dictionary<string, object> DefaultTableConfig(bool gold)
@@ -405,6 +443,46 @@ namespace ReportAutomationLauncher
             return Normalize(config);
         }
 
+        private static Dictionary<string, object> ReferenceReportConfig(string name)
+        {
+            bool screening = name == ScreeningStyleName, compact = name == CompactStyleName;
+            string light = compact ? "맑은 고딕" : "KoPub돋움체 Light";
+            string medium = compact ? light : "KoPub돋움체 Medium";
+            string bold = compact ? light : "KoPub돋움체 Bold";
+            var config = DefaultTableConfig(false);
+            config["preset_name"] = name;
+            var styles = Map(config["paragraph_styles"], "paragraph_styles");
+            styles["보고서 본문1"] = Style(light, compact ? 10 : 11, false, compact ? "" : "|", compact ? 145 : 160, compact ? 2 : 7.1, compact ? 2 : 0, compact ? "justify" : "left");
+            styles["보고서 본문2"] = Style(light, compact ? 10 : 11, false, compact ? "-" : "|", compact ? 145 : 160, compact ? 5 : screening ? 8 : 7.1, compact ? -3 : -2.5, compact ? "justify" : "left");
+            styles["표제목"] = Style(bold, screening ? 9.5 : 10, compact, "", 130, 0, 0, "left");
+            styles["표번호"] = Style(bold, 10, compact, "", 130, 0, 0, "left");
+            var cells = Map(config["table_cell_styles"], "table_cell_styles");
+            foreach (string role in cells.Keys)
+            {
+                bool header = role == "표배너" || role == "표머리행" || role == "표가로배너";
+                bool label = role == "표보기" || role == "표세로배너";
+                styles[role] = Style(header ? bold : role == "표숫자" ? medium : light,
+                    header ? (screening || compact ? 10 : 11) : (screening || compact ? 9 : 9.5),
+                    compact && header, "", header ? (screening ? 140 : 120) : (screening ? 130 : 100), 0, 0,
+                    label ? "left" : compact && role == "표숫자" ? "right" : "center");
+                var cell = Map(cells[role], role);
+                cell["fill_color"] = header ? (screening ? "E7E7E7" : compact ? "EDF3F2" : "F0F4F7") : role == "표BASE" ? "F3F4F5" : "FFFFFF";
+            }
+            var border = Map(config["table_border"], "table_border");
+            var edges = Map(border["edges"], "edges");
+            border["color"] = screening ? "808080" : "666666";
+            border["outer_width_mm"] = screening ? 0.4 : 0.3;
+            edges["outer"] = Edge("solid", (double)border["outer_width_mm"], screening ? "808080" : "000000");
+            edges["header_bottom"] = Edge("solid", screening ? 0.4 : 0.1, screening ? "808080" : "000000");
+            edges["inner_vertical"] = Edge(screening || compact ? "solid" : "dash", screening ? 0.2 : 0.1, screening ? "A6A6A6" : "666666");
+            return Normalize(config);
+        }
+
+        private static Dictionary<string, object> Edge(string type, double width, string color)
+        {
+            return new Dictionary<string, object> { { "type", type }, { "width_mm", width }, { "color", color } };
+        }
+
         internal static void RunSelfCheck()
         {
             string directory = Path.Combine(Path.GetTempPath(), "ResearchHelperPresetCheck_" + Guid.NewGuid().ToString("N"));
@@ -414,7 +492,15 @@ namespace ReportAutomationLauncher
                 string file = Path.Combine(directory, "presets.json");
                 var warnings = new List<string>();
                 var store = new HwpStylePresetStore(file, warnings.Add);
-                Assert(store.LoadAll().Count == 3, "default and two table presets");
+                int builtInCount = 1 + ExtraBuiltInNames.Length;
+                Assert(store.LoadAll().Count == builtInCount, "all built-in presets");
+                foreach (string name in ExtraBuiltInNames.Skip(2))
+                {
+                    var config = store.Get(name);
+                    var body = Map(Map(config["paragraph_styles"], "paragraph_styles")["보고서 본문1"], "보고서 본문1");
+                    Assert(store.IsBuiltIn(name) && (string)body["font_family"] == (name == CompactStyleName ? "맑은 고딕" : "KoPub돋움체 Light"), "reference preset font");
+                    AssertThrows(delegate { store.Save(config, true); }, "reference preset protected");
+                }
                 foreach (string name in new[] { GoldTableName, BlueTableName })
                 {
                     var builtIn = store.Get(name);
@@ -434,14 +520,14 @@ namespace ReportAutomationLauncher
                     preset["preset_name"] = "사용자 " + i;
                     store.Save(preset, false);
                 }
-                Assert(store.LoadAll().Count == 6, "three user presets in addition to defaults");
+                Assert(store.LoadAll().Count == builtInCount + 3, "three user presets in addition to defaults");
                 var checkSerializer = new JavaScriptSerializer();
                 Dictionary<string, object> legacy = checkSerializer.DeserializeObject(File.ReadAllText(file, System.Text.Encoding.UTF8)) as Dictionary<string, object>;
                 foreach (object item in (object[])legacy["presets"])
                     Map(Map(item, "preset")["table_border"], "table_border").Remove("show_side_borders");
                 string legacyJson = checkSerializer.Serialize(legacy);
                 File.WriteAllText(file, legacyJson, System.Text.Encoding.UTF8);
-                Assert(store.LoadAll().Count == 6, "three legacy presets retained");
+                Assert(store.LoadAll().Count == builtInCount + 3, "three legacy presets retained");
                 for (int i = 1; i <= 3; i++)
                     Assert(!(bool)Map(store.Get("사용자 " + i)["table_border"], "table_border")["show_side_borders"], "legacy side borders default off");
                 Assert(warnings.Count == 0 && string.IsNullOrWhiteSpace(store.RecoveryWarning)
@@ -461,7 +547,7 @@ namespace ReportAutomationLauncher
                 store.Save(duplicate, true);
                 Assert(!(bool)Map(store.Get("사용자 1")["table_border"], "table_border")["show_side_borders"], "side borders false roundtrip");
                 store.Delete("사용자 3");
-                Assert(store.LoadAll().Count == 5, "deletion");
+                Assert(store.LoadAll().Count == builtInCount + 2, "deletion");
 
                 Dictionary<string, object> partial = checkSerializer.DeserializeObject(File.ReadAllText(file, System.Text.Encoding.UTF8)) as Dictionary<string, object>;
                 object[] stored = (object[])partial["presets"];
@@ -476,14 +562,14 @@ namespace ReportAutomationLauncher
                 Assert(warnings.Count == 1, "recovered store does not repeat warning");
 
                 File.WriteAllText(file, "{broken", System.Text.Encoding.UTF8);
-                Assert(store.LoadAll().Count == 3, "corrupt recovery");
+                Assert(store.LoadAll().Count == builtInCount, "corrupt recovery");
                 Assert(Directory.GetFiles(directory, "presets.json.corrupt.*.bak").Length == 2, "corrupt backup");
                 string corruptBackup = store.RecoveryBackupPath;
                 Assert(corruptBackup != partialBackup && File.Exists(corruptBackup) && store.RecoveryWarning.Contains(corruptBackup), "corrupt recovery warning contains backup path");
                 Assert(warnings.Count == 2 && warnings[1] == store.RecoveryWarning, "corrupt recovery logged");
                 File.WriteAllText(file, "{broken", System.Text.Encoding.UTF8);
                 var quietStore = new HwpStylePresetStore(file);
-                Assert(quietStore.LoadAll().Count == 3 && !string.IsNullOrWhiteSpace(quietStore.RecoveryWarning), "recovery without interactive logging");
+                Assert(quietStore.LoadAll().Count == builtInCount && !string.IsNullOrWhiteSpace(quietStore.RecoveryWarning), "recovery without interactive logging");
                 AssertThrows(delegate { store.Delete(BuiltInName); }, "immutable default");
 
                 foreach (object invalid in new object[] { "false", 0, null })
@@ -1206,7 +1292,17 @@ namespace ReportAutomationLauncher
         private readonly NumericUpDown outerBorder = new NumericUpDown();
         private readonly TextBox borderColor = new TextBox();
         private readonly CheckBox showSideBorders = new CheckBox();
+        private readonly TextBox tableNumberPattern = new TextBox { Width = 155, AccessibleName = "표 번호 형식" };
+        private readonly CheckBox inlineTable = new CheckBox { Text = "글자처럼 취급 (한 쪽 표)", AutoSize = true };
+        private readonly CheckBox groupSamples = new CheckBox { Text = "사례수 천 단위 쉼표", AutoSize = true };
+        private readonly CheckBox groupValues = new CheckBox { Text = "값 천 단위 쉼표", AutoSize = true };
+        private readonly ComboBox valueDecimals = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Width = 105, AccessibleName = "매출·인원 소수점 자리" };
         private readonly Button importedLines = new Button { AutoSize = true };
+        private readonly HwpStylePreview preview = new HwpStylePreview { Dock = DockStyle.Fill, Margin = Padding.Empty };
+        private readonly Label previewNote = new Label { Dock = DockStyle.Fill, AutoEllipsis = true, TextAlign = ContentAlignment.MiddleLeft };
+        private readonly System.Windows.Forms.Timer previewTimer = new System.Windows.Forms.Timer { Interval = 100 };
+        private readonly JavaScriptSerializer previewSerializer = new JavaScriptSerializer();
+        private string savedEditor;
         private Dictionary<string, object> edges = new Dictionary<string, object>();
 
         internal string SelectedPresetName { get; private set; }
@@ -1217,22 +1313,26 @@ namespace ReportAutomationLauncher
             SelectedPresetName = selectedName;
             Text = "HWP 보고서 서식 설정";
             StartPosition = FormStartPosition.CenterParent;
-            MinimumSize = new Size(980, 620);
-            Size = new Size(1080, 700);
+            MinimumSize = new Size(980, 700);
+            Size = new Size(1080, 830);
             BuildUi();
+            previewTimer.Tick += delegate { RefreshPreview(); };
+            Disposed += delegate { previewTimer.Dispose(); };
             ReloadPresets(selectedName);
             LauncherUi.ApplyToForm(this);
             LauncherUi.ApplyTree(this);
+            RefreshPreview();
         }
 
         private void BuildUi()
         {
-            var root = new TableLayoutPanel { Dock = DockStyle.Fill, Padding = new Padding(16), RowCount = 6, ColumnCount = 1 };
+            var root = new TableLayoutPanel { Dock = DockStyle.Fill, Padding = new Padding(16), RowCount = 7, ColumnCount = 1 };
             root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
             root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-            root.RowStyles.Add(new RowStyle(SizeType.Percent, 62));
-            root.RowStyles.Add(new RowStyle(SizeType.Percent, 25));
+            root.RowStyles.Add(new RowStyle(SizeType.Percent, 58));
+            root.RowStyles.Add(new RowStyle(SizeType.Percent, 42));
             root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+            root.RowStyles.Add(new RowStyle(SizeType.Absolute, 226));
             root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
             Controls.Add(root);
 
@@ -1242,7 +1342,9 @@ namespace ReportAutomationLauncher
             presetCombo.Width = 200;
             presetCombo.SelectedIndexChanged += delegate
             {
-                if (presetCombo.SelectedItem != null) LoadPreset(presetCombo.SelectedItem.ToString());
+                if (presetCombo.SelectedItem == null) return;
+                LoadPreset(presetCombo.SelectedItem.ToString());
+                savedEditor = previewSerializer.Serialize(ReadEditor(false));
             };
             top.Controls.Add(presetCombo);
             top.Controls.Add(new Label { Text = "서식 이름", AutoSize = true, Margin = new Padding(18, 8, 8, 0) });
@@ -1267,6 +1369,16 @@ namespace ReportAutomationLauncher
             root.Controls.Add(paragraphGrid, 0, 2);
             ConfigureTableGrid();
             root.Controls.Add(tableGrid, 0, 3);
+            foreach (var editor in new[] { paragraphGrid, tableGrid })
+            {
+                editor.BackgroundColor = LauncherUi.ColorSurface;
+                editor.CellValueChanged += delegate { QueuePreview(); };
+                editor.CurrentCellDirtyStateChanged += delegate
+                {
+                    if (editor.IsCurrentCellDirty && (editor.CurrentCell is DataGridViewCheckBoxCell || editor.CurrentCell is DataGridViewComboBoxCell))
+                        editor.CommitEdit(DataGridViewDataErrorContexts.Commit);
+                };
+            }
 
             var borderPanel = new FlowLayoutPanel { Dock = DockStyle.Fill, AutoSize = true };
             borderPanel.Controls.Add(new Label { Text = "내부선(mm)", AutoSize = true, Margin = new Padding(0, 8, 6, 0) });
@@ -1285,13 +1397,46 @@ namespace ReportAutomationLauncher
             importedLines.Click += ShowImportedLines;
             borderPanel.Controls.Add(importedLines);
             borderPanel.Controls.Add(MakeButton("셀 배경색", ChooseCellFill));
-            root.Controls.Add(borderPanel, 0, 4);
+            var outputPanel = new FlowLayoutPanel { Dock = DockStyle.Fill, AutoSize = true };
+            outputPanel.Controls.Add(new Label { Text = "표 번호 형식", AutoSize = true, Margin = new Padding(0, 8, 6, 0) });
+            outputPanel.Controls.Add(tableNumberPattern);
+            outputPanel.Controls.Add(new Label { Text = "매출·인원 소수점", AutoSize = true, Margin = new Padding(12, 8, 6, 0) });
+            valueDecimals.Items.AddRange(new object[] { "Excel 표시값", "0자리", "1자리", "2자리", "3자리", "4자리" });
+            outputPanel.Controls.Add(valueDecimals);
+            outputPanel.Controls.Add(groupValues);
+            outputPanel.Controls.Add(groupSamples);
+            outputPanel.Controls.Add(inlineTable);
+            var settings = new TableLayoutPanel { Dock = DockStyle.Fill, AutoSize = true, ColumnCount = 1, RowCount = 2 };
+            settings.Controls.Add(borderPanel, 0, 0);
+            settings.Controls.Add(outputPanel, 0, 1);
+            root.Controls.Add(settings, 0, 4);
+            tableNumberPattern.TextChanged += delegate { QueuePreview(); };
+            valueDecimals.SelectedIndexChanged += delegate { groupValues.Enabled = valueDecimals.SelectedIndex > 0; QueuePreview(); };
+            foreach (var check in new[] { inlineTable, groupSamples, groupValues }) check.CheckedChanged += delegate { QueuePreview(); };
+            innerBorder.ValueChanged += delegate { QueuePreview(); };
+            outerBorder.ValueChanged += delegate { QueuePreview(); };
+            borderColor.TextChanged += delegate { QueuePreview(); };
+            showSideBorders.CheckedChanged += delegate { QueuePreview(); };
+            nameText.TextChanged += delegate { QueuePreview(); };
+
+            var previewArea = new TableLayoutPanel { Dock = DockStyle.Fill, RowCount = 2, ColumnCount = 1, Margin = new Padding(3, 8, 3, 0) };
+            previewArea.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+            previewArea.RowStyles.Add(new RowStyle(SizeType.Absolute, 25));
+            previewArea.Controls.Add(preview, 0, 0);
+            previewArea.Controls.Add(previewNote, 0, 1);
+            root.Controls.Add(previewArea, 0, 5);
 
             var buttons = new FlowLayoutPanel { Dock = DockStyle.Fill, AutoSize = true, FlowDirection = FlowDirection.RightToLeft };
             Button close = MakeButton("이 서식 사용", delegate
             {
-                SelectedPresetName = presetCombo.SelectedItem == null ? HwpStylePresetStore.BuiltInName : presetCombo.SelectedItem.ToString();
-                DialogResult = DialogResult.OK;
+                ExecuteEditorAction(delegate
+                {
+                    var edited = ReadEditor();
+                    if (previewSerializer.Serialize(edited) != savedEditor)
+                        throw new InvalidOperationException("편집한 서식을 적용하려면 [내 서식으로 저장] 또는 [덮어쓰기]를 먼저 누르세요.");
+                    SelectedPresetName = Convert.ToString(edited["preset_name"]);
+                    DialogResult = DialogResult.OK;
+                });
             });
             Button cancel = MakeButton("취소", delegate { DialogResult = DialogResult.Cancel; });
             close.Tag = LauncherButtonKind.Primary;
@@ -1305,7 +1450,7 @@ namespace ReportAutomationLauncher
             buttons.Controls.Add(overwrite);
             buttons.Controls.Add(delete);
             buttons.Controls.Add(reset);
-            root.Controls.Add(buttons, 0, 5);
+            root.Controls.Add(buttons, 0, 6);
         }
 
         private void ConfigureParagraphGrid()
@@ -1316,7 +1461,8 @@ namespace ReportAutomationLauncher
             paragraphGrid.RowHeadersVisible = false;
             paragraphGrid.AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.Fill;
             paragraphGrid.Columns.Add(new DataGridViewTextBoxColumn { Name = "StyleName", HeaderText = "스타일", ReadOnly = true, FillWeight = 110 });
-            paragraphGrid.Columns.Add(new DataGridViewCheckBoxColumn { Name = "Enabled", HeaderText = "개별", FillWeight = 48 });
+            paragraphGrid.Columns.Add(new DataGridViewCheckBoxColumn { Name = "Enabled", HeaderText = "개별", FillWeight = 48,
+                ToolTipText = "켜면 이 역할에 별도 서식을 적용합니다. 끄면 공통 표 서식을 사용합니다." });
             paragraphGrid.Columns.Add(new DataGridViewTextBoxColumn { Name = "Font", HeaderText = "글꼴", FillWeight = 110 });
             paragraphGrid.Columns.Add(new DataGridViewTextBoxColumn { Name = "Size", HeaderText = "크기(pt)", FillWeight = 65 });
             paragraphGrid.Columns.Add(new DataGridViewCheckBoxColumn { Name = "Bold", HeaderText = "굵게", FillWeight = 48 });
@@ -1367,17 +1513,19 @@ namespace ReportAutomationLauncher
 
         private void LoadPreset(string name)
         {
-            Dictionary<string, object> config = store.Get(name);
+            Dictionary<string, object> config = HwpStylePresetStore.Normalize(store.Get(name));
             nameText.Text = Convert.ToString(config["preset_name"]);
             paragraphGrid.Rows.Clear();
             Dictionary<string, object> styles = (Dictionary<string, object>)config["paragraph_styles"];
-            foreach (string styleName in HwpStylePresetStore.StyleNames.Concat(HwpStylePresetStore.RoleStyleDefaults.Keys))
+            foreach (string styleName in HwpStylePresetStore.StyleNames.Concat(HwpStylePresetStore.RoleStyleDefaults.Keys).Concat(HwpStylePresetStore.CaptionStyleNames))
             {
                 bool separate = HwpStylePresetStore.RoleStyleDefaults.ContainsKey(styleName);
                 bool enabled = styles.ContainsKey(styleName);
                 var style = (Dictionary<string, object>)styles[enabled ? styleName : HwpStylePresetStore.RoleStyleDefaults[styleName]];
                 int index = paragraphGrid.Rows.Add(styleName, separate ? (object)enabled : null, style["font_family"], style["font_size_pt"], style["bold"], style["bullet"], style["line_spacing_percent"], style["left_indent_mm"], style["first_line_indent_mm"], style["alignment"]);
                 paragraphGrid.Rows[index].Cells["Enabled"].ReadOnly = !separate;
+                if (styleName == "표번호")
+                    foreach (string column in new[] { "Bullet", "Spacing", "Left", "First", "Align" }) paragraphGrid.Rows[index].Cells[column].ReadOnly = true;
             }
             tableGrid.Rows.Clear();
             Dictionary<string, object> cells = (Dictionary<string, object>)config["table_cell_styles"];
@@ -1392,14 +1540,23 @@ namespace ReportAutomationLauncher
             outerBorder.Value = Convert.ToDecimal(border["outer_width_mm"]);
             borderColor.Text = Convert.ToString(border["color"]);
             showSideBorders.Checked = (bool)border["show_side_borders"];
+            var output = (Dictionary<string, object>)config["table_output"];
+            tableNumberPattern.Text = Convert.ToString(output["number_pattern"]);
+            valueDecimals.SelectedIndex = Convert.ToInt32(output["value_decimals"]) + 1;
+            groupValues.Checked = (bool)output["value_grouping"];
+            groupSamples.Checked = (bool)output["sample_grouping"];
+            inlineTable.Checked = (bool)output["inline"];
             edges = border.ContainsKey("edges") ? (Dictionary<string, object>)border["edges"] : new Dictionary<string, object>();
             UpdateImportedLines();
         }
 
-        internal Dictionary<string, object> ReadEditor()
+        internal Dictionary<string, object> ReadEditor(bool commitEdits = true)
         {
-            paragraphGrid.EndEdit();
-            tableGrid.EndEdit();
+            if (commitEdits)
+            {
+                paragraphGrid.EndEdit();
+                tableGrid.EndEdit();
+            }
             var styles = new Dictionary<string, object>();
             foreach (DataGridViewRow row in paragraphGrid.Rows)
             {
@@ -1439,8 +1596,12 @@ namespace ReportAutomationLauncher
             }
             var config = new Dictionary<string, object>
             {
-                { "schema_version", "1.0" }, { "preset_name", nameText.Text.Trim() },
+                { "schema_version", "1.0" }, { "preset_name", !commitEdits && string.IsNullOrWhiteSpace(nameText.Text)
+                    ? HwpStylePresetStore.BuiltInName : nameText.Text.Trim() },
                 { "paragraph_styles", styles }, { "table_cell_styles", cells },
+                { "table_output", new Dictionary<string, object> { { "number_pattern", tableNumberPattern.Text },
+                    { "value_decimals", Math.Max(-1, valueDecimals.SelectedIndex - 1) }, { "value_grouping", groupValues.Checked },
+                    { "sample_grouping", groupSamples.Checked }, { "inline", inlineTable.Checked } } },
                 { "table_border", new Dictionary<string, object>
                     {
                         { "inner_width_mm", Convert.ToDouble(innerBorder.Value) },
@@ -1452,6 +1613,70 @@ namespace ReportAutomationLauncher
             };
             if (edges.Count > 0) ((Dictionary<string, object>)config["table_border"])["edges"] = edges;
             return HwpStylePresetStore.Normalize(config);
+        }
+
+        private void QueuePreview()
+        {
+            previewTimer.Stop();
+            previewTimer.Start();
+        }
+
+        private void RefreshPreview()
+        {
+            previewTimer.Stop();
+            try
+            {
+                var config = ReadEditor(false);
+                preview.UpdateStyle(config);
+                bool changed = previewSerializer.Serialize(config) != savedEditor || string.IsNullOrWhiteSpace(nameText.Text);
+                previewNote.ForeColor = LauncherUi.ColorMutedText;
+                previewNote.Text = (changed ? "편집 중 · 저장 후 적용  |  " : "") + "예시 데이터 · 실제 줄바꿈, 표 폭, 쪽 나눔은 한글에서 달라질 수 있습니다.";
+            }
+            catch (InvalidOperationException ex)
+            {
+                previewNote.ForeColor = LauncherUi.ColorWarning;
+                previewNote.Text = "마지막 정상 미리보기 · " + ex.Message;
+            }
+        }
+
+        internal void CheckPreview()
+        {
+            LoadPreset(HwpStylePresetStore.GoldTableName);
+            RefreshPreview();
+            if (!PreviewContainsColor("F1CB7E")) throw new InvalidOperationException("Self-check failed: gold preview");
+            LoadPreset(HwpStylePresetStore.BlueTableName);
+            RefreshPreview();
+            if (!PreviewContainsColor("F0F4F7") || PreviewContainsColor("F1CB7E"))
+                throw new InvalidOperationException("Self-check failed: preset preview did not change");
+
+            ApplyTemplateCell("표머리행", new Dictionary<string, object> { { "fill_color", "C8E3D5" } });
+            if (!previewTimer.Enabled) throw new InvalidOperationException("Self-check failed: imported cell did not schedule preview");
+            paragraphGrid.Rows[1].Cells["Bullet"].Value = "※";
+            RefreshPreview();
+            if (!PreviewContainsColor("C8E3D5") || !preview.AccessibleDescription.Contains("※") ||
+                !previewNote.Text.Contains("저장 후 적용"))
+                throw new InvalidOperationException("Self-check failed: edited preview");
+
+            borderColor.Text = "invalid";
+            RefreshPreview();
+            if (!previewNote.Text.Contains("마지막 정상") || !PreviewContainsColor("C8E3D5"))
+                throw new InvalidOperationException("Self-check failed: invalid style lost last valid preview");
+
+            LoadPreset(HwpStylePresetStore.BuiltInName);
+            RefreshPreview();
+        }
+
+        private bool PreviewContainsColor(string hex)
+        {
+            using (var bitmap = new Bitmap(preview.Width, preview.Height))
+            {
+                preview.DrawToBitmap(bitmap, preview.ClientRectangle);
+                int rgb = ColorTranslator.FromHtml("#" + hex).ToArgb();
+                for (int y = 0; y < bitmap.Height; y += 2)
+                    for (int x = 0; x < bitmap.Width; x += 2)
+                        if (bitmap.GetPixel(x, y).ToArgb() == rgb) return true;
+                return false;
+            }
         }
 
         private static string FormatMargins(Dictionary<string, object> values)
@@ -1484,6 +1709,7 @@ namespace ReportAutomationLauncher
         private void UpdateImportedLines()
         {
             importedLines.Text = "선 설정 (" + edges.Count + ")";
+            QueuePreview();
         }
 
         private static string LineText(Dictionary<string, object> line)
@@ -1811,6 +2037,8 @@ namespace ReportAutomationLauncher
         private readonly Button inspectTemplateButton = new Button();
         private readonly Button createHwpTemplateButton = new Button();
         private readonly Button useBasicHwpTemplateButton = new Button();
+        private readonly ComboBox basicHwpVariant = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Width = 180, AccessibleName = "기본 한글 양식" };
+        private static readonly string[] BasicHwpVariantIds = { "basic", "guardian", "screening" };
         private readonly Button createPptTemplateButton = new Button();
         private readonly Button createChartTemplateButton = new Button();
         private readonly Button autoFixTemplateButton = new Button();
@@ -1862,6 +2090,7 @@ namespace ReportAutomationLauncher
         private readonly TextBox llmModelText = new TextBox();
         private readonly TextBox llmApiKeyText = new TextBox();
         private readonly CheckBox copyWorkbookCheck = new CheckBox();
+        private readonly TextBox outputFolderText = new TextBox();
         private readonly CheckBox keepExcelOpenCheck = new CheckBox();
         private readonly Button runButton = new Button();
         private bool reportRunning;
@@ -2035,6 +2264,19 @@ namespace ReportAutomationLauncher
             hwpTemplateText.Text = bundledAddin;
             if (!runButton.Enabled)
                 throw new InvalidOperationException("입력이 준비된 한글 보고서의 실행 버튼이 비활성 상태입니다.");
+            var expectedScope = new[] { 1, 3, 0 };
+            for (int i = 0; i < expectedScope.Length; i++)
+            {
+                hwpMaxSectionsCombo.SelectedIndex = i;
+                if (ReadOptions().HwpMaxSections != expectedScope[i])
+                    throw new InvalidOperationException("한글 출력 범위가 선택값과 일치하지 않습니다.");
+            }
+            hwpMaxSectionsCombo.SelectedIndex = 0;
+            outputFolderText.Text = Path.GetTempPath();
+            if (copyWorkbookCheck.Enabled || !ReadOptions().CopyWorkbook ||
+                ReadOptions().ArtifactDirectory != Path.GetFullPath(Path.GetTempPath()))
+                throw new InvalidOperationException("저장 폴더 선택 시 Excel 작업 복사본이 필요합니다.");
+            outputFolderText.Clear();
 
             var examples = new HashSet<string>();
             for (int index = 0; index < reportProfileCombo.Items.Count; index++)
@@ -2300,17 +2542,28 @@ namespace ReportAutomationLauncher
         {
             var page = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, AutoScroll = true };
             var source = new GroupBox { Text = "원본 집계표", Dock = DockStyle.Top, AutoSize = true };
-            var input = CreateGrid(2);
+            var input = CreateGrid(4);
             source.Controls.Add(input);
             AddPathRow(input, 0, "Excel 집계표", workbookPathText, "Excel 파일 선택…", BrowseWorkbook);
             var checks = new FlowLayoutPanel { Dock = DockStyle.Fill, AutoSize = true };
             copyWorkbookCheck.Text = "작업 복사본에 저장";
-            keepExcelOpenCheck.Text = "산출 후 Excel 열어두기";
+            keepExcelOpenCheck.Text = "산출 완료 후 Excel 다시 열기";
             checks.Controls.Add(copyWorkbookCheck);
             checks.Controls.Add(keepExcelOpenCheck);
             AddLabel(input, 1, "산출 파일");
             input.Controls.Add(checks, 1, 1);
             input.SetColumnSpan(checks, 2);
+            AddPathRow(input, 2, "산출물 저장 폴더", outputFolderText, "폴더 선택…", BrowseOutputFolder);
+            var folderHint = new Label { Text = "비워 두면 원본 옆에 저장합니다. 폴더를 지정하면 원본을 보존하고 작업 복사본을 만듭니다.",
+                AutoSize = true, ForeColor = LauncherUi.ColorMutedText, Margin = new Padding(0, 4, 0, 0) };
+            input.Controls.Add(folderHint, 1, 3);
+            input.SetColumnSpan(folderHint, 2);
+            outputFolderText.TextChanged += delegate
+            {
+                bool custom = !string.IsNullOrWhiteSpace(outputFolderText.Text);
+                if (custom) copyWorkbookCheck.Checked = true;
+                copyWorkbookCheck.Enabled = !custom;
+            };
             page.Controls.Add(source, 0, 0);
 
             return page;
@@ -2345,7 +2598,9 @@ namespace ReportAutomationLauncher
             templateButtons.AutoSize = true;
             inspectTemplateButton.Text = "양식 검사";
             inspectTemplateButton.Click += InspectTemplateButton_Click;
-            useBasicHwpTemplateButton.Text = "기본 한글 양식 사용";
+            basicHwpVariant.Items.AddRange(new object[] { "기본 보고서", "조사 보고서 · 청회색", "검진 보고서 · 파란 제목" });
+            basicHwpVariant.SelectedIndex = 0;
+            useBasicHwpTemplateButton.Text = "선택한 기본 양식 적용";
             useBasicHwpTemplateButton.Click += UseBasicHwpTemplateButton_Click;
             createHwpTemplateButton.Text = "편집용 양식 사본 저장…";
             createHwpTemplateButton.Click += CreateHwpTemplateButton_Click;
@@ -2357,6 +2612,7 @@ namespace ReportAutomationLauncher
             autoFixTemplateButton.Click += AutoFixTemplateButton_Click;
             openTemplateGuideButton.Text = "양식 가이드 열기";
             openTemplateGuideButton.Click += OpenTemplateGuideButton_Click;
+            templateButtons.Controls.Add(basicHwpVariant);
             templateButtons.Controls.Add(useBasicHwpTemplateButton);
             templateButtons.Controls.Add(createHwpTemplateButton);
             templateButtons.Controls.Add(inspectTemplateButton);
@@ -2364,7 +2620,7 @@ namespace ReportAutomationLauncher
             templateButtons.Controls.Add(createPptTemplateButton);
             templateButtons.Controls.Add(createChartTemplateButton);
             templateButtons.Controls.Add(openTemplateGuideButton);
-            foreach (Button button in templateButtons.Controls) button.AutoSize = true;
+            foreach (Button button in templateButtons.Controls.OfType<Button>()) button.AutoSize = true;
             AddLabel(grid, 4, "양식 도구");
             grid.Controls.Add(templateButtons, 1, 4);
             grid.SetColumnSpan(templateButtons, 2);
@@ -2386,10 +2642,10 @@ namespace ReportAutomationLauncher
             hwpLimitLabel.AutoSize = true;
             hwpLimitLabel.Margin = new Padding(12, 7, 6, 0);
             hwpMaxSectionsCombo.DropDownStyle = ComboBoxStyle.DropDownList;
-            hwpMaxSectionsCombo.Width = 120;
-            hwpMaxSectionsCombo.Items.Add("첫 문항만");
-            hwpMaxSectionsCombo.Items.Add("첫 3개 문항");
-            hwpMaxSectionsCombo.Items.Add("모든 문항");
+            hwpMaxSectionsCombo.Width = 145;
+            hwpMaxSectionsCombo.Items.Add("첫 표만 (시험 출력)");
+            hwpMaxSectionsCombo.Items.Add("첫 3개 표");
+            hwpMaxSectionsCombo.Items.Add("모든 표");
             var hwpDispatchLabel = new Label();
             hwpDispatchLabel.Text = "한글 연결 방식";
             hwpDispatchLabel.AutoSize = true;
@@ -2469,7 +2725,7 @@ namespace ReportAutomationLauncher
                         (hwp && (row == 1 || row == 3 || row == 6 || row == 8)) ||
                         (ppt && row == 2) || ((hwp || ppt) && (row == 4 || row == 5));
                 }
-                useBasicHwpTemplateButton.Visible = createHwpTemplateButton.Visible = hwp;
+                basicHwpVariant.Visible = useBasicHwpTemplateButton.Visible = createHwpTemplateButton.Visible = hwp;
                 createPptTemplateButton.Visible = ppt;
                 createChartTemplateButton.Visible = ppt;
                 grid.ResumeLayout(true);
@@ -3491,6 +3747,15 @@ namespace ReportAutomationLauncher
             }
         }
 
+        private void BrowseOutputFolder(object sender, EventArgs e)
+        {
+            using (var dialog = new FolderBrowserDialog { Description = "Excel 작업본, HWPX 보고서, QA 기록을 저장할 폴더를 선택하세요." })
+            {
+                if (Directory.Exists(outputFolderText.Text.Trim())) dialog.SelectedPath = outputFolderText.Text.Trim();
+                if (dialog.ShowDialog(this) == DialogResult.OK) outputFolderText.Text = dialog.SelectedPath;
+            }
+        }
+
         private void LoadBannerPreviewAsync()
         {
             LoadWorkbookPreviewAsync();
@@ -3890,19 +4155,22 @@ namespace ReportAutomationLauncher
 
         private void CreateHwpTemplateButton_Click(object sender, EventArgs e)
         {
-            CreateTemplate("hwpx_report", "report_template_basic.hwpx", "HWPX files (*.hwpx)|*.hwpx", hwpTemplateText);
+            string variant = BasicHwpVariantIds[Math.Max(0, basicHwpVariant.SelectedIndex)];
+            CreateTemplate("hwpx_report", "report_template_" + variant + ".hwpx", "HWPX files (*.hwpx)|*.hwpx", hwpTemplateText, variant);
         }
 
         private void UseBasicHwpTemplateButton_Click(object sender, EventArgs e)
         {
             string engineDirectory = Path.GetDirectoryName(PathResolver.ResolveEngineToolPath("template_factory.py"));
-            string path = Path.GetFullPath(Path.Combine(engineDirectory, "..", "templates", "report_template_basic.hwpx"));
+            int index = Math.Max(0, basicHwpVariant.SelectedIndex);
+            string path = Path.GetFullPath(Path.Combine(engineDirectory, "..", "templates", "report_template_" + BasicHwpVariantIds[index] + ".hwpx"));
             try
             {
                 InspectTemplate(path, "hwpx_report", false);
                 if (!IsTemplateStatusUsable()) throw new InvalidOperationException("기본 한글 양식을 확인할 수 없습니다.");
                 hwpTemplateText.Text = path;
-                templateStatusLabel.Text = "기본 한글 양식을 사용합니다. 본문·표 서식은 아래에서 별도로 선택할 수 있습니다.";
+                if (index > 0) SelectReferenceStyle(index);
+                templateStatusLabel.Text = Convert.ToString(basicHwpVariant.SelectedItem) + " 양식을 사용합니다. 본문·표 서식은 별도로 바꿀 수 있습니다.";
             }
             catch (Exception ex)
             {
@@ -3921,7 +4189,22 @@ namespace ReportAutomationLauncher
             CreateTemplate("chart_review", "chart_review_template_basic.pptx", "PowerPoint files (*.pptx)|*.pptx", pptTemplateText);
         }
 
-        private void CreateTemplate(string templateType, string defaultName, string filter, TextBox targetTextBox)
+        private void SelectReferenceStyle(int index)
+        {
+            string name = index == 1 ? HwpStylePresetStore.GuardianStyleName : HwpStylePresetStore.ScreeningStyleName;
+            if (!hwpStylePresetStore.IsBuiltIn(name)) return;
+            using (var fonts = new System.Drawing.Text.InstalledFontCollection())
+            {
+                bool hasKoPub = new[] { "Light", "Medium", "Bold" }.All(weight => fonts.Families.Any(font =>
+                    font.Name.Equals("KoPub돋움체 " + weight, StringComparison.OrdinalIgnoreCase) ||
+                    font.Name.Equals("KoPubDotum " + weight, StringComparison.OrdinalIgnoreCase) ||
+                    font.Name.Equals("KoPub Dotum " + weight, StringComparison.OrdinalIgnoreCase)));
+                RefreshHwpStylePresetCombo(hasKoPub ? name : HwpStylePresetStore.CompactStyleName);
+                if (!hasKoPub) Log("KoPub돋움체가 없어 맑은 고딕 기본 서식을 선택했습니다.");
+            }
+        }
+
+        private void CreateTemplate(string templateType, string defaultName, string filter, TextBox targetTextBox, string variant = "basic")
         {
             using (var dialog = new SaveFileDialog())
             {
@@ -3937,11 +4220,13 @@ namespace ReportAutomationLauncher
                 try
                 {
                     string outputPath = dialog.FileName;
-                    string arguments = "--type " + QuoteArg(templateType) + " --output " + QuoteArg(outputPath);
+                    string arguments = "--type " + QuoteArg(templateType) + " --output " + QuoteArg(outputPath) + " --variant " + QuoteArg(variant);
                     RunTemplateTool("template_factory.py", arguments, 60000);
                     targetTextBox.Text = outputPath;
                     Log("기본 템플릿 생성: " + outputPath);
                     InspectTemplate(outputPath, templateType, false);
+                    if (templateType == "hwpx_report" && variant != "basic" && IsTemplateStatusUsable())
+                        SelectReferenceStyle(Array.IndexOf(BasicHwpVariantIds, variant));
                     MessageBox.Show(this, "기본 템플릿을 생성했습니다." + Environment.NewLine + outputPath, "템플릿 생성", MessageBoxButtons.OK, MessageBoxIcon.Information);
                 }
                 catch (Exception ex)
@@ -4216,7 +4501,7 @@ namespace ReportAutomationLauncher
             return "보고서 자동화 템플릿 가이드" + Environment.NewLine +
                    Environment.NewLine +
                    "1. 최소 HWPX 템플릿" + Environment.NewLine +
-                   "- [기본 한글 양식 사용]은 내장 양식을 바로 선택합니다. 편집하려면 [편집용 양식 사본 저장]을 누르세요." + Environment.NewLine +
+                   "- 기본 한글 양식을 고르고 [선택한 기본 양식 적용]을 누르세요. 편집하려면 [편집용 양식 사본 저장]을 누르세요." + Environment.NewLine +
                    "- 한글 문서에서 본문이 들어갈 위치에 {{BODY}} 한 줄을 유지합니다." + Environment.NewLine +
                    "- 표지, 글꼴, 여백, 제목 스타일, 로고, 쪽번호는 자유롭게 수정할 수 있습니다." + Environment.NewLine +
                    "- 본문·표 서식은 문서 양식과 별개입니다. 골드 배너 또는 청회색 머리행을 선택할 수 있습니다." + Environment.NewLine +
@@ -4288,7 +4573,7 @@ namespace ReportAutomationLauncher
                     {
                         try
                         {
-                            string path = Path.Combine(Path.GetDirectoryName(options.WorkbookPath), "excel_addin_error_" + DateTime.Now.ToString("yyyyMMdd_HHmmss") + ".json");
+                            string path = Path.Combine(options.ArtifactDirectory, "excel_addin_error_" + DateTime.Now.ToString("yyyyMMdd_HHmmss") + ".json");
                             ExcelAddinDiagnostics.Save(path, addinError.Report);
                             diagnosticPath = path;
                             Log("Excel 연결 오류 기록: " + diagnosticPath);
@@ -4333,7 +4618,10 @@ namespace ReportAutomationLauncher
             lines.Add("차트 출력: " + options.ChartOutputMode);
             lines.Add("삽입표 방식: " + options.TableInsertMode);
             lines.Add("LLM 문장 고도화: " + (options.UseLlm ? options.LlmProvider + " / " + options.LlmModel : "사용 안 함"));
-            lines.Add("작업 방식: " + (options.CopyWorkbook ? "원본 옆 복사본 생성" : "원본 파일 직접 산출"));
+            lines.Add("작업 방식: " + (options.CopyWorkbook ? "Excel 작업 복사본 생성" : "원본 파일 직접 산출"));
+            lines.Add("저장 폴더: " + options.ArtifactDirectory);
+            if (options.OutputType.IndexOf("HWP", StringComparison.OrdinalIgnoreCase) >= 0)
+                lines.Add("한글 출력 범위: " + (options.HwpMaxSections == 0 ? "모든 표" : "첫 " + options.HwpMaxSections + "개 표"));
             lines.Add("선택 배너: " + options.BannerSetting);
             lines.Add("구성요소: " + BuildComponentSummary(options));
             if (!string.IsNullOrWhiteSpace(options.LastGeneratedWorkbookPath))
@@ -5504,6 +5792,7 @@ namespace ReportAutomationLauncher
         {
             var options = new LauncherOptions();
             options.WorkbookPath = workbookPathText.Text.Trim();
+            options.OutputDirectory = outputFolderText.Text.Trim();
             options.OutputType = outputTypeCombo.SelectedItem == null ? "" : outputTypeCombo.SelectedItem.ToString();
             options.ReportProfile = reportProfileCombo.SelectedItem == null ? "" : reportProfileCombo.SelectedItem.ToString();
             options.StyleProfile = styleProfileCombo.SelectedItem == null ? "" : styleProfileCombo.SelectedItem.ToString();
@@ -5587,6 +5876,7 @@ namespace ReportAutomationLauncher
 
         private string ResolveHwpDiagnosticOutputDirectory()
         {
+            if (Directory.Exists(outputFolderText.Text.Trim())) return Path.GetFullPath(outputFolderText.Text.Trim());
             string workbookPath = workbookPathText.Text.Trim();
             if (!string.IsNullOrWhiteSpace(workbookPath))
             {
@@ -5612,16 +5902,7 @@ namespace ReportAutomationLauncher
 
         private int SelectedHwpMaxSections()
         {
-            string value = hwpMaxSectionsCombo.SelectedItem == null ? "" : hwpMaxSectionsCombo.SelectedItem.ToString();
-            if (value.StartsWith("3", StringComparison.OrdinalIgnoreCase))
-            {
-                return 3;
-            }
-            if (value.IndexOf("전체", StringComparison.OrdinalIgnoreCase) >= 0)
-            {
-                return 0;
-            }
-            return 1;
+            return hwpMaxSectionsCombo.SelectedIndex == 1 ? 3 : hwpMaxSectionsCombo.SelectedIndex == 2 ? 0 : 1;
         }
 
         private int SelectedDecimalPlaces()
@@ -5647,6 +5928,8 @@ namespace ReportAutomationLauncher
     internal sealed class LauncherOptions
     {
         public string WorkbookPath;
+        public string OutputDirectory;
+        public string ArtifactDirectory { get { return OutputDirectory ?? Path.GetDirectoryName(WorkbookPath); } }
         public string AddinPath;
         public string OutputType = "Excel 산출 시트";
         public string ReportProfile = "인식도/만족도 조사형";
@@ -5686,6 +5969,7 @@ namespace ReportAutomationLauncher
         public string LastPreflightReportPath;
         public string LastHwpOutputPath;
         public string LastHwpWriterReportPath;
+        public string HwpRecoveryPath;
 
         public void Validate()
         {
@@ -5699,6 +5983,12 @@ namespace ReportAutomationLauncher
                 throw new FileNotFoundException("집계표 엑셀 파일을 찾을 수 없습니다.", WorkbookPath);
             }
             AddinPath = Path.GetFullPath(string.IsNullOrWhiteSpace(AddinPath) ? PathResolver.ResolveDefaultAddinPath() : AddinPath);
+            OutputDirectory = string.IsNullOrWhiteSpace(OutputDirectory) ? null : Path.GetFullPath(OutputDirectory);
+            if (OutputDirectory != null)
+            {
+                if (!CopyWorkbook) throw new InvalidOperationException("별도 저장 폴더를 사용하려면 Excel 작업 복사본을 만들어야 합니다.");
+                if (!Directory.Exists(OutputDirectory)) throw new DirectoryNotFoundException("산출물 저장 폴더를 찾을 수 없습니다: " + OutputDirectory);
+            }
             if (!string.IsNullOrWhiteSpace(HwpTemplatePath))
             {
                 HwpTemplatePath = Path.GetFullPath(HwpTemplatePath);
@@ -5811,6 +6101,8 @@ namespace ReportAutomationLauncher
 
             var options = new LauncherOptions();
             options.WorkbookPath = Get(values, "workbook", "");
+            if (flags.Contains("output-dir")) throw new InvalidOperationException("--output-dir <path> 값을 지정하세요.");
+            options.OutputDirectory = Get(values, "output-dir", "");
             options.AddinPath = Get(values, "addin", "");
             options.OutputType = Get(values, "output", "Excel 산출 시트");
             options.ReportProfile = Get(values, "report-profile", "인식도/만족도 조사형");
@@ -6032,9 +6324,24 @@ namespace ReportAutomationLauncher
         {
             options.Validate();
             ExcelAddinDiagnostics.RequireFile(options.AddinPath);
+            if (options.OutputDirectory != null)
+            {
+                try
+                {
+                    string probe = Path.Combine(options.ArtifactDirectory, ".research-helper-" + Guid.NewGuid().ToString("N") + ".tmp");
+                    using (new FileStream(probe, FileMode.CreateNew, FileAccess.Write, FileShare.None, 4096, FileOptions.DeleteOnClose)) { }
+                }
+                catch (IOException ex)
+                {
+                    throw new IOException("산출물 저장 폴더에 쓸 수 없습니다: " + options.ArtifactDirectory, ex);
+                }
+                catch (UnauthorizedAccessException ex)
+                {
+                    throw new IOException("산출물 저장 폴더에 쓸 수 없습니다: " + options.ArtifactDirectory, ex);
+                }
+            }
             string workbookToOpen = options.WorkbookPath;
             bool legacyFormat = Path.GetExtension(workbookToOpen).Equals(".xls", StringComparison.OrdinalIgnoreCase);
-            bool originalEnableEvents = true;
             log("추가기능: " + options.AddinPath);
 
             object excel = null;
@@ -6062,7 +6369,6 @@ namespace ReportAutomationLauncher
                 {
                     // The cell export can exceed the 65,536 rows of an Excel 97–2003 sheet.
                     int previousSecurity = xl.AutomationSecurity;
-                    originalEnableEvents = xl.EnableEvents;
                     xl.EnableEvents = false;
                     try
                     {
@@ -6070,7 +6376,7 @@ namespace ReportAutomationLauncher
                         workbook = xl.Workbooks.Open(options.WorkbookPath, 0, true);
                         dynamic legacy = workbook;
                         bool hasMacros = legacy.HasVBProject;
-                        workbookToOpen = WorkingCopyPath(options.WorkbookPath, hasMacros ? ".xlsm" : ".xlsx");
+                        workbookToOpen = WorkingCopyPath(options, hasMacros ? ".xlsm" : ".xlsx");
                         if (File.Exists(workbookToOpen)) throw new IOException("작업 사본이 이미 있습니다: " + workbookToOpen);
                         legacy.SaveAs(workbookToOpen, hasMacros ? 52 : 51);
                         // SaveAs alone leaves the workbook in 65,536-row compatibility mode.
@@ -6090,7 +6396,7 @@ namespace ReportAutomationLauncher
                 }
                 else
                 {
-                    workbookToOpen = options.CopyWorkbook ? CreateWorkingCopy(options.WorkbookPath) : options.WorkbookPath;
+                    workbookToOpen = options.CopyWorkbook ? CreateWorkingCopy(options) : options.WorkbookPath;
                     workbook = xl.Workbooks.Open(workbookToOpen);
                 }
                 log("대상 파일: " + workbookToOpen);
@@ -6113,36 +6419,10 @@ namespace ReportAutomationLauncher
                 WriteLauncherConfig(workbookToOpen, options);
                 log("저장 완료");
 
-                if (options.KeepExcelOpen)
-                {
-                    try
-                    {
-                        dynamic addinBook = addin;
-                        addinBook.Close(false);
-                        addin = null;
-                    }
-                    catch
-                    {
-                    }
-                    xl.DisplayAlerts = true;
-                    xl.Visible = true;
-                    wb.Activate();
-                    if (legacyFormat) xl.EnableEvents = originalEnableEvents;
-                    log("Excel 창을 열어둡니다.");
-                    workbook = null;
-                    excel = null;
-                }
-                else
-                {
-                    dynamic addinBook = addin;
-                    addinBook.Close(false);
-                    addin = null;
-                    wb.Close(true);
-                    workbook = null;
-                    xl.Quit();
-                    excel = null;
-                    log("Excel을 종료했습니다.");
-                }
+                // QA and the HWP writer need to read the saved work file without an Excel write lock.
+                wb.Close(false);
+                ReleaseComForLauncher(workbook);
+                workbook = null;
             }
             finally
             {
@@ -6155,20 +6435,21 @@ namespace ReportAutomationLauncher
                 ReleaseComForLauncher(excel);
             }
 
+            log("산출 Excel 작업 파일을 닫았습니다.");
             return workbookToOpen;
         }
 
-        private static string CreateWorkingCopy(string sourcePath)
+        private static string CreateWorkingCopy(LauncherOptions options)
         {
-            string copyPath = WorkingCopyPath(sourcePath, Path.GetExtension(sourcePath));
-            File.Copy(sourcePath, copyPath, true);
+            string copyPath = WorkingCopyPath(options, Path.GetExtension(options.WorkbookPath));
+            File.Copy(options.WorkbookPath, copyPath, false);
             return copyPath;
         }
 
-        private static string WorkingCopyPath(string sourcePath, string extension)
+        private static string WorkingCopyPath(LauncherOptions options, string extension)
         {
-            return Path.Combine(Path.GetDirectoryName(sourcePath),
-                Path.GetFileNameWithoutExtension(sourcePath) + "_report_alpha_" + DateTime.Now.ToString("yyyyMMdd_HHmmss") + extension);
+            return Path.Combine(options.ArtifactDirectory,
+                Path.GetFileNameWithoutExtension(options.WorkbookPath) + "_report_alpha_" + DateTime.Now.ToString("yyyyMMdd_HHmmss") + extension);
         }
 
         internal static void WriteLauncherConfig(string workbookPath, LauncherOptions options)
@@ -6176,8 +6457,9 @@ namespace ReportAutomationLauncher
             string path = Path.Combine(Path.GetDirectoryName(workbookPath), Path.GetFileNameWithoutExtension(workbookPath) + "_launcher_config.txt");
             using (var writer = new StreamWriter(path, false, System.Text.Encoding.UTF8))
             {
-                writer.WriteLine("Workbook=" + workbookPath);
+                writer.WriteLine("Workbook=" + options.WorkbookPath);
                 writer.WriteLine("GeneratedWorkbook=" + workbookPath);
+                writer.WriteLine("OutputDirectory=" + options.ArtifactDirectory);
                 writer.WriteLine("Addin=" + options.AddinPath);
                 writer.WriteLine("OutputType=" + options.OutputType);
                 writer.WriteLine("ReportProfile=" + options.ReportProfile);
@@ -6268,28 +6550,115 @@ namespace ReportAutomationLauncher
         internal static void RunWorkflow(LauncherOptions options, Action<string> log)
         {
             bool hwp = options.OutputType.IndexOf("HWP", StringComparison.OrdinalIgnoreCase) >= 0;
-            if (hwp)
+            if (!hwp)
             {
-                log("한글 양식의 본문 위치를 확인합니다.");
-                RequireHwpTemplate(options.HwpTemplatePath);
+                RunWorkflowCore(options, log, null);
+                return;
             }
+            // HWP table insertion uses the shared Windows clipboard.
+            using (var mutex = new Mutex(false, @"Local\ResearchHelper.HwpWriter"))
+            {
+                bool acquired;
+                try { acquired = mutex.WaitOne(0); }
+                catch (AbandonedMutexException) { acquired = true; }
+                if (!acquired) throw new InvalidOperationException("다른 한글 보고서를 작성 중입니다. 완료 후 다시 실행하세요.");
+                try
+                {
+                    log("한글 양식의 본문 위치를 확인합니다.");
+                    RequireHwpTemplate(options.HwpTemplatePath);
+                    RunWorkflowCore(options, log, HwpJobPath(options));
+                }
+                finally { mutex.ReleaseMutex(); }
+            }
+        }
 
-            log("1단계: 원본 집계표에서 Excel 산출 시트를 자동 생성합니다.");
-            string workbookPath = AutomationRunner.Run(options, log);
-            options.LastGeneratedWorkbookPath = workbookPath;
-            log("2단계: 생성된 산출 시트에서 분석문·표를 읽어 QA를 검사합니다.");
-            TryGenerateReportPackage(workbookPath, options, log);
-            if (hwp)
+        private static void RunWorkflowCore(LauncherOptions options, Action<string> log, string jobPath)
+        {
+            bool resume = jobPath != null && File.Exists(jobPath) && File.Exists(jobPath + ".recovery.json");
+            string workbookPath;
+            if (resume)
             {
-                RequireHwpPreflight(options);
-                log("3단계: QA를 통과한 산출 데이터로 한글 보고서를 만듭니다.");
-                TryGenerateHwpDocument(options, log);
-                if (string.IsNullOrWhiteSpace(options.LastHwpOutputPath))
-                    throw new InvalidOperationException("한글 보고서를 저장하지 못했습니다. 진행 기록과 한글 생성 기록을 확인하세요.");
+                workbookPath = File.ReadAllText(jobPath, System.Text.Encoding.UTF8).Trim();
+                if (!File.Exists(workbookPath) || !string.Equals(Path.GetDirectoryName(Path.GetFullPath(workbookPath)).TrimEnd(Path.DirectorySeparatorChar),
+                    Path.GetFullPath(options.ArtifactDirectory).TrimEnd(Path.DirectorySeparatorChar), StringComparison.OrdinalIgnoreCase))
+                    throw new IOException("자동 재개에 필요한 산출 Excel 작업 파일을 찾을 수 없습니다.");
+                string stem = Path.ChangeExtension(workbookPath, null);
+                options.LastReportPackagePath = stem + "_report_package.json";
+                options.LastPreflightReportPath = stem + "_preflight_report.json";
+                log("자동 재개: 이전 작업의 Excel 산출물과 QA를 사용합니다.");
             }
-            if (options.GenerateDraftText)
-                options.LastDraftTextPath = TryGenerateDraft(workbookPath, log);
-            AutomationRunner.WriteLauncherConfig(workbookPath, options);
+            else
+            {
+                log("1단계: 원본 집계표에서 Excel 산출 시트를 자동 생성합니다.");
+                workbookPath = AutomationRunner.Run(options, log);
+            }
+            options.LastGeneratedWorkbookPath = workbookPath;
+            try
+            {
+                if (!resume)
+                {
+                    log("2단계: 생성된 산출 시트에서 분석문·표를 읽어 QA를 검사합니다.");
+                    TryGenerateReportPackage(workbookPath, options, log);
+                }
+                if (jobPath != null)
+                {
+                    RequireHwpPreflight(options);
+                    if (!resume) File.WriteAllText(jobPath, workbookPath, System.Text.Encoding.UTF8);
+                    options.HwpRecoveryPath = jobPath + ".recovery.json";
+                    log("3단계: QA를 통과한 산출 데이터로 한글 보고서를 만듭니다.");
+                    TryGenerateHwpDocument(options, log);
+                    if (string.IsNullOrWhiteSpace(options.LastHwpOutputPath))
+                        throw new InvalidOperationException("한글 보고서를 저장하지 못했습니다. 진행 기록과 한글 생성 기록을 확인하세요.");
+                    try { File.Delete(jobPath); }
+                    catch (IOException ex) { log("자동 재개 기록 정리 실패: " + ex.Message); }
+                    catch (UnauthorizedAccessException ex) { log("자동 재개 기록 정리 실패: " + ex.Message); }
+                }
+                if (options.GenerateDraftText)
+                    options.LastDraftTextPath = TryGenerateDraft(workbookPath, log);
+                AutomationRunner.WriteLauncherConfig(workbookPath, options);
+            }
+            finally
+            {
+                if (options.KeepExcelOpen && !File.Exists(options.HwpRecoveryPath))
+                {
+                    try
+                    {
+                        Process.Start(new ProcessStartInfo(workbookPath) { UseShellExecute = true });
+                        log("산출 작업을 마친 뒤 저장된 Excel 파일을 다시 열었습니다.");
+                    }
+                    catch (Exception ex) { log("산출 Excel 다시 열기 실패 (저장 파일은 유지): " + ex.Message); }
+                }
+                else if (options.KeepExcelOpen)
+                    log("자동 재개용 Excel 작업 파일을 잠그지 않도록 열지 않았습니다.");
+            }
+        }
+
+        private static string HwpJobPath(LauncherOptions options)
+        {
+            var serializer = new JavaScriptSerializer { MaxJsonLength = int.MaxValue };
+            string settings = serializer.Serialize(new object[] {
+                "0.0.41", options.WorkbookPath,
+                options.CopyWorkbook || Path.GetExtension(options.WorkbookPath).Equals(".xls", StringComparison.OrdinalIgnoreCase)
+                    ? HashFile(options.WorkbookPath) : "checked in recovery manifest",
+                HashFile(options.AddinPath),
+                options.HwpTemplatePath, HashFile(options.HwpTemplatePath), HashFile(options.HwpTableStyleProfilePath),
+                options.HwpStyleConfig, HashFile(options.HwpStyleConfigPath), options.HwpPageSetup, options.HwpMaxSections, options.ReportProfile, options.StyleProfile,
+                options.BannerSetting, options.TitlePrefixes, options.DecimalPlaces, options.TableRangeOverrides,
+                options.OutputType, options.CopyWorkbook, options.ChartOutputMode, options.TableInsertMode,
+                options.IncludeAnalysis, options.IncludeCharts, options.IncludeTables, options.IncludeQa,
+                options.UseLlm, options.LlmProvider, options.LlmModel
+            });
+            string token;
+            using (var sha = SHA256.Create()) token = BitConverter.ToString(sha.ComputeHash(System.Text.Encoding.UTF8.GetBytes(settings))).Replace("-", "");
+            return Path.Combine(options.ArtifactDirectory, ".research-helper-hwp-" + token.Substring(0, 24));
+        }
+
+        private static string HashFile(string path)
+        {
+            if (string.IsNullOrWhiteSpace(path)) return "";
+            using (var sha = SHA256.Create())
+            using (var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete))
+                return BitConverter.ToString(sha.ComputeHash(stream));
         }
 
         private static void RequireHwpTemplate(string path)
@@ -6330,7 +6699,10 @@ namespace ReportAutomationLauncher
         private static Dictionary<string, object> ReadWorkflowReport(string path)
         {
             var serializer = new JavaScriptSerializer { MaxJsonLength = int.MaxValue };
-            var report = serializer.DeserializeObject(File.ReadAllText(path, System.Text.Encoding.UTF8)) as Dictionary<string, object>;
+            Dictionary<string, object> report;
+            using (var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete))
+            using (var reader = new StreamReader(stream, System.Text.Encoding.UTF8))
+                report = serializer.DeserializeObject(reader.ReadToEnd()) as Dictionary<string, object>;
             if (report == null) throw new InvalidOperationException("검사 결과가 비어 있습니다: " + path);
             return report;
         }
@@ -6429,7 +6801,7 @@ namespace ReportAutomationLauncher
             try
             {
                 var options = new LauncherOptions { LastReportPackagePath = Path.Combine(directory, "report_package.json") };
-                string emitted = Path.Combine(directory, "hwp_page_setup.json");
+                string emitted = Path.Combine(directory, "report_package_hwp_page_setup.json");
                 PrepareHwpPageSetup(options);
                 CheckPageSetup(options.HwpPageSetup == null && options.HwpPageSetupPath == null && !File.Exists(emitted), "fresh preserve mode does not emit JSON");
                 options.HwpPageSetup = defaults;
@@ -6516,7 +6888,7 @@ namespace ReportAutomationLauncher
                 catch (InvalidOperationException ex) { qaBlocked = ex.Message.Contains("T0001 missing source range"); }
                 if (!qaBlocked) throw new InvalidOperationException("Self-check failed: blocked QA did not surface the table error");
                 PrepareHwpStyleConfig(options);
-                string expected = Path.Combine(directory, "hwp_style_config.json");
+                string expected = Path.Combine(directory, "report_package_hwp_style_config.json");
                 if (!string.Equals(options.HwpStyleConfigPath, expected, StringComparison.OrdinalIgnoreCase) || !File.Exists(expected))
                     throw new InvalidOperationException("Self-check failed: normalized style config emission");
                 string arguments = BuildHwpWriterArguments("writer.py", options, "output.hwpx", "writer_report.json", "render_plan.json");
@@ -6550,16 +6922,30 @@ namespace ReportAutomationLauncher
                     dialog.PerformLayout();
                     var root = (TableLayoutPanel)dialog.Controls[0];
                     root.PerformLayout();
-                    var borderPanel = (FlowLayoutPanel)root.GetControlFromPosition(0, 4);
-                    borderPanel.PerformLayout();
-                    foreach (Control control in borderPanel.Controls)
-                        if (!borderPanel.ClientRectangle.Contains(control.Bounds))
-                            throw new InvalidOperationException("Self-check failed: border control clipped at minimum dialog size");
-                    CheckBox checkbox = borderPanel.Controls.OfType<CheckBox>().Single();
-                    if (checkbox.Width < checkbox.PreferredSize.Width || checkbox.Height < checkbox.PreferredSize.Height
-                        || root.GetRowHeights()[4] < borderPanel.Height + borderPanel.Margin.Vertical)
-                        throw new InvalidOperationException("Self-check failed: side borders checkbox or row clipped");
-                    Console.WriteLine("Minimum-size border layout passed: " + borderPanel.ClientSize + ", checkbox " + checkbox.Bounds);
+                    dialog.CheckPreview();
+                    var settings = (TableLayoutPanel)root.GetControlFromPosition(0, 4);
+                    settings.PerformLayout();
+                    foreach (FlowLayoutPanel panel in settings.Controls.OfType<FlowLayoutPanel>())
+                    {
+                        panel.PerformLayout();
+                        foreach (Control control in panel.Controls)
+                            if (!panel.ClientRectangle.Contains(control.Bounds))
+                                throw new InvalidOperationException("Self-check failed: table output control clipped at minimum dialog size: " + control.Text);
+                    }
+                    if (root.GetRowHeights()[4] < settings.Height + settings.Margin.Vertical)
+                        throw new InvalidOperationException("Self-check failed: table settings row clipped");
+                    var outputPanel = (FlowLayoutPanel)settings.GetControlFromPosition(0, 1);
+                    outputPanel.Controls.OfType<TextBox>().Single().Text = "<표 1-{number}>";
+                    outputPanel.Controls.OfType<ComboBox>().Single().SelectedIndex = 3;
+                    foreach (CheckBox check in outputPanel.Controls.OfType<CheckBox>()) check.Checked = true;
+                    edited = dialog.ReadEditor();
+                    edited["preset_name"] = "출력 검증";
+                    store.Save(edited, false);
+                    var output = (Dictionary<string, object>)store.Get("출력 검증")["table_output"];
+                    if ((string)output["number_pattern"] != "<표 1-{number}>" || Convert.ToInt32(output["value_decimals"]) != 2 ||
+                        !(bool)output["inline"] || !(bool)output["sample_grouping"] || !styles.ContainsKey("표제목") || !styles.ContainsKey("표번호"))
+                        throw new InvalidOperationException("Self-check failed: table caption and output settings did not round-trip");
+                    Console.WriteLine("Minimum-size table settings layout and preset round-trip passed: " + settings.ClientSize);
                 }
             }
             finally
@@ -6672,6 +7058,7 @@ namespace ReportAutomationLauncher
                                       " --preflight-output " + Quote(preflightPath) +
                                       " --hwp-template " + Quote(options.OutputType.IndexOf("HWP", StringComparison.OrdinalIgnoreCase) >= 0 ? options.HwpTemplatePath : "") +
                                       " --output-type " + Quote(options.OutputType) +
+                                      " --source-file-name " + Quote(Path.GetFileName(options.WorkbookPath)) +
                                       " --report-profile " + Quote(options.ReportProfile) +
                                       " --style-profile " + Quote(options.StyleProfile) +
                                       " --banner " + Quote(options.BannerSetting) +
@@ -6777,10 +7164,8 @@ namespace ReportAutomationLauncher
                 {
                     var stdoutTask = process.StandardOutput.ReadToEndAsync();
                     var stderrTask = process.StandardError.ReadToEndAsync();
-                    if (!process.WaitForExit(180000))
+                    if (!WaitForHwpWriter(process, reportPath, log))
                     {
-                        try { process.Kill(); } catch { }
-                        log("HWPX 생성 시간이 길어져 이번 실행에서는 중단했습니다.");
                         options.LastHwpWriterReportPath = File.Exists(reportPath) ? reportPath : "";
                         return;
                     }
@@ -6794,8 +7179,11 @@ namespace ReportAutomationLauncher
                     }
                 }
 
-                options.LastHwpOutputPath = File.Exists(outputPath) ? outputPath : "";
                 options.LastHwpWriterReportPath = File.Exists(reportPath) ? reportPath : "";
+                var result = ReadWorkflowReport(reportPath);
+                object saved;
+                options.LastHwpOutputPath = GetString(result, "status") == "ready" && result.TryGetValue("document_saved", out saved) &&
+                    object.Equals(saved, true) && File.Exists(outputPath) ? outputPath : "";
                 if (!string.IsNullOrWhiteSpace(options.LastHwpOutputPath))
                 {
                     log("HWPX 초본 저장: " + options.LastHwpOutputPath);
@@ -6815,12 +7203,83 @@ namespace ReportAutomationLauncher
             }
         }
 
+        internal static string HwpProgressText(Dictionary<string, object> report)
+        {
+            object value;
+            var progress = report.TryGetValue("progress", out value) ? value as Dictionary<string, object> : null;
+            string status = "한글: " + GetString(report, "sections_written") + "/" + GetString(report, "section_count_selected") + "문항 완료";
+            string saved = GetString(report, "recovery_sections");
+            if (saved.Length > 0) status += " · 재개 가능 " + saved + "문항";
+            if (progress != null && GetString(report, "action") != "save_as")
+            {
+                status += " · " + GetString(progress, "table_key");
+                if (GetString(progress, "part") != "0") status += " · 분할 " + GetString(progress, "part") + "/" + GetString(progress, "part_count");
+                if (GetString(progress, "cell_count") != "0" && GetString(progress, "cells_done").Length > 0)
+                    status += " · 셀 " + GetString(progress, "cells_done") + "/" + GetString(progress, "cell_count");
+            }
+            return status + " · " + GetString(report, "stage") + "/" + GetString(report, "action");
+        }
+
+        internal static bool WaitForHwpWriter(Process process, string reportPath, Action<string> log, int idleSeconds = 600, int pollMs = 1000)
+        {
+            var idle = Stopwatch.StartNew();
+            var lastLog = Stopwatch.StartNew();
+            DateTime stamp = DateTime.UtcNow;
+            Dictionary<string, object> last = null;
+            while (!process.WaitForExit(pollMs))
+            {
+                DateTime updated = File.GetLastWriteTimeUtc(reportPath);
+                if (updated > stamp)
+                {
+                    try
+                    {
+                        last = ReadWorkflowReport(reportPath);
+                        stamp = updated;
+                        idle.Restart();
+                        if (lastLog.Elapsed.TotalSeconds >= 15)
+                        {
+                            log(HwpProgressText(last));
+                            lastLog.Restart();
+                        }
+                    }
+                    catch (IOException) { } // A checkpoint can be replaced between stat and open.
+                }
+                if (idle.Elapsed.TotalSeconds < idleSeconds) continue;
+                try { process.Kill(); }
+                catch (InvalidOperationException) { if (process.HasExited) return true; throw; }
+                if (!process.WaitForExit(5000)) throw new IOException("중단된 한글 작성 프로세스의 종료를 확인하지 못했습니다.");
+
+                if (last == null && File.Exists(reportPath)) last = ReadWorkflowReport(reportPath);
+                last = last ?? new Dictionary<string, object>();
+                string message = "한글 작성 진행이 " + idleSeconds + "초 동안 갱신되지 않아 중단했습니다. " + HwpProgressText(last);
+                last["status"] = "timed_out";
+                last["finished_at"] = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss");
+                last["document_saved"] = false;
+                object errors;
+                var previous = last.TryGetValue("errors", out errors) ? errors as object[] : null;
+                last["errors"] = (previous ?? new object[0]).Concat(new[] { message }).ToArray();
+                var serializer = new JavaScriptSerializer { MaxJsonLength = int.MaxValue };
+                File.WriteAllText(reportPath, serializer.Serialize(last), System.Text.Encoding.UTF8);
+                log(message);
+                return false;
+            }
+            return true;
+        }
+
         private static void PrepareHwpStyleConfig(LauncherOptions options)
         {
             Dictionary<string, object> config = options.HwpStyleConfig ?? HwpStylePresetStore.DefaultConfig();
-            options.HwpStyleConfigPath = Path.Combine(Path.GetDirectoryName(options.LastReportPackagePath), "hwp_style_config.json");
+            options.HwpStyleConfigPath = HwpConfigPath(options, "_hwp_style_config.json");
             HwpStylePresetStore.WriteConfig(options.HwpStyleConfigPath, config);
             options.HwpStylePresetName = Convert.ToString(config["preset_name"]);
+        }
+
+        private static string HwpConfigPath(LauncherOptions options, string suffix)
+        {
+            string stem = Path.ChangeExtension(options.LastReportPackagePath, null);
+            const string packageSuffix = "_report_package";
+            if (stem.EndsWith(packageSuffix, StringComparison.Ordinal)) stem = stem.Substring(0, stem.Length - packageSuffix.Length);
+            return stem + suffix;
         }
 
         private static string BuildHwpWriterArguments(string toolPath, LauncherOptions options, string outputPath, string reportPath, string renderPlanPath)
@@ -6838,6 +7297,7 @@ namespace ReportAutomationLauncher
                    " --style-config " + Quote(options.HwpStyleConfigPath) +
                    (options.HwpPageSetup == null ? "" : OptionalArgument(" --page-setup ", options.HwpPageSetupPath)) +
                    OptionalArgument(" --table-style-profile ", options.HwpTableStyleProfilePath) +
+                   OptionalArgument(" --recovery ", options.HwpRecoveryPath) +
                    (options.HwpKeepOpenOnError ? " --keep-open-on-error" : "");
         }
 
@@ -6846,7 +7306,7 @@ namespace ReportAutomationLauncher
             // Null is authoritative: never reuse a previous run's file in template-preserve mode.
             options.HwpPageSetupPath = null;
             if (options.HwpPageSetup == null) return;
-            string path = Path.Combine(Path.GetDirectoryName(options.LastReportPackagePath), "hwp_page_setup.json");
+            string path = HwpConfigPath(options, "_hwp_page_setup.json");
             HwpPageSetup.WriteConfig(path, options.HwpPageSetup);
             options.HwpPageSetupPath = path;
         }
@@ -7176,8 +7636,8 @@ namespace ReportAutomationLauncher
 
     internal static class BannerInspector
     {
-        private const int MaxPreviewRows = 5000;
-        private const int MaxPreviewColumns = 300;
+        private const int PreviewChunkCells = 200000;
+        private const long MaxPreviewCells = 8000000;
 
         public static List<string> ReadBanners(string workbookPath)
         {
@@ -7384,6 +7844,22 @@ namespace ReportAutomationLauncher
             check(blocks.Count == 1 && blocks[0].BodyRow == 3, "numeric year labels before case-count column");
             var index = snapshot(new[] { new object[] { "INDEX" }, new object[] { "[표 1] 서비스", "GO" }, new object[] { "사례수에 관한 안내" } });
             check(DetectBlocks(index).Count == 0, "contents and narrative mentions are not tables");
+            var large = ReadSnapshot(4998, 301, 7521, 303, (first, last) =>
+            {
+                var values = Array.CreateInstance(typeof(object), new[] { last - first + 1, 3 }, new[] { 1, 1 });
+                for (int row = first; row <= last; row++)
+                {
+                    int offset = (row - 4998) % 5, local = row - first + 1;
+                    if (offset == 0) values.SetValue("표 " + ((row - 4998) / 5 + 1) + " 이용", local, 1);
+                    if (offset == 1) { values.SetValue("구분", local, 1); values.SetValue("N", local, 2); values.SetValue("%", local, 3); }
+                    if (offset == 2 || offset == 3) { values.SetValue("이용", local, 1); values.SetValue(10, local, 2); values.SetValue(60, local, 3); }
+                }
+                return values;
+            }, 4);
+            var largePreviews = new List<TablePreview>();
+            foreach (TableBlock block in DetectBlocks(large)) AddTablePreview(largePreviews, "Large", block);
+            check(largePreviews.Count == 505 && largePreviews[0].RowCount == 3 && largePreviews[504].ColCount == 3 && largePreviews[504].Row == 7518,
+                "large preview retains table boundaries across chunks, row 5000, column 300 and table 500");
         }
 
         private static bool IsNumericCell(string text)
@@ -7521,11 +7997,6 @@ namespace ReportAutomationLauncher
 
         private static void AddTablePreview(List<TablePreview> tables, string sheetName, TableBlock block)
         {
-            if (tables.Count >= 500)
-            {
-                return;
-            }
-
             var preview = new TablePreview();
             preview.TableKey = "T" + (tables.Count + 1).ToString("0000");
             preview.SheetName = sheetName;
@@ -7554,28 +8025,12 @@ namespace ReportAutomationLauncher
                     return ws;
                 }
             }
-            try
-            {
-                dynamic active = workbook.ActiveSheet;
-                if (active != null && HasTableTitles(active))
-                {
-                    return active;
-                }
-            }
-            catch
-            {
-            }
-            try
-            {
-                dynamic sheet1 = workbook.Worksheets["Sheet1"];
-                if (HasTableTitles(sheet1))
-                {
-                    return sheet1;
-                }
-            }
-            catch
-            {
-            }
+            dynamic active = workbook.ActiveSheet;
+            if (active != null && HasTableTitles(active)) return active;
+            dynamic sheet1 = null;
+            try { sheet1 = workbook.Worksheets["Sheet1"]; }
+            catch (COMException) { }
+            if (sheet1 != null && HasTableTitles(sheet1)) return sheet1;
             foreach (dynamic ws in workbook.Worksheets)
             {
                 if (!IsGeneratedSheet(Convert.ToString(ws.Name)) && HasTableTitles(ws))
@@ -7588,16 +8043,10 @@ namespace ReportAutomationLauncher
 
         private static bool HasTableTitles(dynamic worksheet)
         {
-            try
-            {
-                if (IsGeneratedSheet(Convert.ToString(worksheet.Name)) || string.Equals(Convert.ToString(worksheet.Name), "INDEX", StringComparison.OrdinalIgnoreCase) || Convert.ToString(worksheet.Name) == "목차") return false;
-                SheetSnapshot sheet;
-                return TryReadSheetSnapshot(worksheet, out sheet) && DetectBlocks(sheet).Count > 0;
-            }
-            catch
-            {
-            }
-            return false;
+            if (IsGeneratedSheet(Convert.ToString(worksheet.Name)) || string.Equals(Convert.ToString(worksheet.Name), "INDEX", StringComparison.OrdinalIgnoreCase) || Convert.ToString(worksheet.Name) == "목차") return false;
+            if (Convert.ToInt32(worksheet.Type) != -4167) return false; // Skip chart or other non-worksheet tabs.
+            SheetSnapshot sheet;
+            return TryReadSheetSnapshot(worksheet, out sheet) && DetectBlocks(sheet).Count > 0;
         }
 
         private static string ExcelColumnName(int column)
@@ -7644,37 +8093,31 @@ namespace ReportAutomationLauncher
         private static bool TryReadSheetSnapshot(dynamic ws, out SheetSnapshot sheet)
         {
             sheet = null;
-            try
-            {
-                dynamic used = ws.UsedRange;
-                int firstRow = Convert.ToInt32(used.Row);
-                int firstCol = Convert.ToInt32(used.Column);
-                int lastRow = firstRow + Convert.ToInt32(used.Rows.Count) - 1;
-                int lastCol = firstCol + Convert.ToInt32(used.Columns.Count) - 1;
-                if (lastRow > MaxPreviewRows)
-                {
-                    lastRow = MaxPreviewRows;
-                }
-                if (lastCol > MaxPreviewColumns)
-                {
-                    lastCol = MaxPreviewColumns;
-                }
-                if (lastRow < firstRow || lastCol < 1)
-                {
-                    return false;
-                }
+            dynamic used = ws.UsedRange;
+            int firstRow = Convert.ToInt32(used.Row);
+            int firstCol = Convert.ToInt32(used.Column);
+            dynamic firstCell = ws.Cells[firstRow, firstCol];
+            // Find cells with values or formulas rather than counting a formatted-but-empty tail.
+            dynamic lastValueRow = used.Find("*", firstCell, -4123, 2, 1, 2, false, false, false);
+            if (lastValueRow == null) return false;
+            dynamic lastValueCol = used.Find("*", firstCell, -4123, 2, 2, 2, false, false, false);
+            int lastRow = Convert.ToInt32(lastValueRow.Row);
+            int lastCol = Convert.ToInt32(lastValueCol.Column);
+            int columns = lastCol - firstCol + 1;
+            if ((long)(lastRow - firstRow + 1) * columns > MaxPreviewCells)
+                throw new InvalidOperationException(Convert.ToString(ws.Name) + ": 미리보기 범위가 너무 큽니다. 표가 있는 범위를 별도 시트에 모아 다시 시도하세요.");
+            sheet = ReadSnapshot(firstRow, firstCol, lastRow, lastCol,
+                (start, end) => (object)ws.Range[ws.Cells[start, firstCol], ws.Cells[end, lastCol]].Value2,
+                Math.Max(1, PreviewChunkCells / columns));
+            return true;
+        }
 
-                int rowCount = lastRow - firstRow + 1;
-                int colCount = lastCol - firstCol + 1;
-                dynamic limitedRange = ws.Range[ws.Cells[firstRow, firstCol], ws.Cells[lastRow, lastCol]];
-                object values = limitedRange.Value2;
-                sheet = new SheetSnapshot(firstRow, firstCol, rowCount, colCount, values);
-                return true;
-            }
-            catch
-            {
-                return false;
-            }
+        private static SheetSnapshot ReadSnapshot(int firstRow, int firstCol, int lastRow, int lastCol, Func<int, int, object> readRows, int chunkRows)
+        {
+            var chunks = new List<object>();
+            for (int start = firstRow; start <= lastRow; start += chunkRows)
+                chunks.Add(readRows(start, Math.Min(lastRow, start + chunkRows - 1)));
+            return new SheetSnapshot(firstRow, firstCol, lastRow - firstRow + 1, lastCol - firstCol + 1, chunks.ToArray(), chunkRows);
         }
 
         private static int FindTotalRow(SheetSnapshot sheet, int startRow, int endRow)
@@ -7918,15 +8361,20 @@ namespace ReportAutomationLauncher
             private readonly int firstCol;
             private readonly int rowCount;
             private readonly int colCount;
-            private readonly object values;
+            private readonly object[] chunks;
+            private readonly int chunkRows;
 
             public SheetSnapshot(int firstRow, int firstCol, int rowCount, int colCount, object values)
+                : this(firstRow, firstCol, rowCount, colCount, new[] { values }, rowCount) { }
+
+            public SheetSnapshot(int firstRow, int firstCol, int rowCount, int colCount, object[] chunks, int chunkRows)
             {
                 this.firstRow = firstRow;
                 this.firstCol = firstCol;
                 this.rowCount = rowCount;
                 this.colCount = colCount;
-                this.values = values;
+                this.chunks = chunks;
+                this.chunkRows = chunkRows;
             }
 
             public int FirstRow { get { return firstRow; } }
@@ -7943,15 +8391,12 @@ namespace ReportAutomationLauncher
                     return "";
                 }
 
-                object value = null;
+                object values = chunks[(r - 1) / chunkRows];
+                object value = values;
                 Array array = values as Array;
                 if (array != null && array.Rank == 2)
                 {
-                    value = array.GetValue(r, c);
-                }
-                else if (rowCount == 1 && colCount == 1)
-                {
-                    value = values;
+                    value = array.GetValue((r - 1) % chunkRows + 1, c);
                 }
                 return Convert.ToString(value ?? "").Trim();
             }

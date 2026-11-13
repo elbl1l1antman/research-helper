@@ -28,6 +28,24 @@ def prepare_report_table(table):
     """Add a render-only merged metadata row; Excel/source coordinates stay intact."""
     result = copy.deepcopy(table)
     matrix = result["matrix"]
+    # Hancom collapses a row with no cell anchor, even on a native TableMergeCell.
+    # A narrow, empty edge column keeps the original data coordinates unchanged.
+    protected = [i + 2 for i, row in enumerate(matrix) if all(cell.get("covered_by") for cell in row)]
+    if protected:
+        cols = len(matrix[0])
+        widths = result.get("column_widths_hwpunit")
+        if not widths or min(widths) <= 1300:
+            raise ValueError("병합행 보존용 여백을 확보할 수 없습니다.")
+        guard_width = 1200
+        budget = sum(widths) - guard_width
+        adjusted = [width * budget // sum(widths) for width in widths]
+        adjusted[-1] += budget - sum(adjusted)
+        result["column_widths_hwpunit"] = [*adjusted, guard_width]
+        result["col_count"] = cols + 1
+        result["protected_merge_rows"] = protected
+        for i, row in enumerate(matrix, 1):
+            row.append({"row": i, "col": cols + 1, "rowspan": 1, "colspan": 1,
+                        "role": "merge_guard", "display_text": "", "covered_by": "", "source_cell": ""})
     headers = _header_row_count(matrix)
     # Repeating a merged header can be unsafe even when its visual role is known.
     result["visual_header_row"] = headers if headers else None

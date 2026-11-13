@@ -10,29 +10,35 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import os
 import platform
 import shutil
 import sys
 import tempfile
 import time
 from datetime import datetime
+from itertools import groupby
 from pathlib import Path
 from typing import Any, Dict, List
 
 try:
-    from .hwp_style_config import DEFAULT_HWP_STYLE_CONFIG, HWP_LINE_NAMES, REQUIRED_STYLE_NAMES, load_hwp_style_config, margin_units, style_name_for_cell_role
+    from .hwp_style_config import CAPTION_STYLES, DEFAULT_HWP_STYLE_CONFIG, HWP_LINE_NAMES, REQUIRED_STYLE_NAMES, TABLE_OUTPUT_DEFAULTS, load_hwp_style_config, margin_units, style_name_for_cell_role
     from .hwpx_style_registry import register_named_styles
     from .report_package import split_narrative_blocks
     from .report_table_matrix import resolve_table_metadata
     from .hwp_table_layout import plan_table_parts, prepare_report_table, _text_units
     from .hwp_page_setup import normalize_page_setup, apply_page_setup
+    from .hwp_recovery import Recovery
+    from .hwp_table_output import format_table_display
 except ImportError:
-    from hwp_style_config import DEFAULT_HWP_STYLE_CONFIG, HWP_LINE_NAMES, REQUIRED_STYLE_NAMES, load_hwp_style_config, margin_units, style_name_for_cell_role
+    from hwp_style_config import CAPTION_STYLES, DEFAULT_HWP_STYLE_CONFIG, HWP_LINE_NAMES, REQUIRED_STYLE_NAMES, TABLE_OUTPUT_DEFAULTS, load_hwp_style_config, margin_units, style_name_for_cell_role
     from hwpx_style_registry import register_named_styles
     from report_package import split_narrative_blocks
     from report_table_matrix import resolve_table_metadata
     from hwp_table_layout import plan_table_parts, prepare_report_table, _text_units
     from hwp_page_setup import normalize_page_setup, apply_page_setup
+    from hwp_recovery import Recovery
+    from hwp_table_output import format_table_display
 
 
 BODY_PLACEHOLDER = "{{BODY}}"
@@ -71,6 +77,7 @@ def write_hwp_document(
     dispatch_mode: str = "ensure_dispatch",
     style_config_path: str | Path | None = None,
     page_setup_path: str | Path | None = None,
+    recovery_path: str | Path | None = None,
 ) -> Path:
     """Write a report draft and always write a companion JSON report."""
 
@@ -90,6 +97,8 @@ def write_hwp_document(
     excel = None
     excel_workbook = None
     temporary_root = None
+    recovery = None
+    writer_lock = None
 
     try:
         package = load_json(package_file)
@@ -122,10 +131,29 @@ def write_hwp_document(
             return render_plan_file
 
         validate_files(template_file, output_file)
+        writer_lock = acquire_writer_lock()
 
         output_file.parent.mkdir(parents=True, exist_ok=True)
         if template_file.resolve() == output_file.resolve():
             raise HwpWriterError("validate", "output", "원본 템플릿과 출력 경로가 같습니다. 원본 보호를 위해 중단합니다.")
+
+        if recovery_path:
+            if output_file.suffix.lower() != ".hwpx" or template_file.suffix.lower() != ".hwpx":
+                raise HwpWriterError("recovery", "format", "자동 재개는 HWPX 템플릿과 출력에만 지원합니다.")
+            workbook_path = package.get("meta", {}).get("source_workbook")
+            path = Path(recovery_path).resolve()
+            sources = (package_file, preflight_file, template_file, workbook_path, style_config_path, table_style_profile_path, page_setup_path)
+            reserved = {Path(source).resolve() for source in (*sources, output_file, report_file, render_plan_file) if source}
+            if reserved.intersection({path, *(path.with_name(f"{path.stem}_{slot}.hwpx") for slot in (0, 1))}):
+                raise HwpWriterError("recovery", "verify", "자동 재개 파일 경로가 입력 또는 출력 경로와 같습니다.")
+            writer_report.update(stage="recovery", action="verify", recovery_path=str(path))
+            recovery = Recovery(path, sources, max_sections)
+            if recovery.state:
+                saved = recovery.state["report"]
+                count = saved.get("sections_written", 0)
+                if type(count) is not int or not 0 < count <= render_plan["section_count_selected"]:
+                    raise HwpWriterError("recovery", "verify", "자동 재개 문항 수가 올바르지 않습니다.")
+                writer_report.update(saved, resumed_sections=count, recovery_sections=count)
 
         temporary_root = Path(tempfile.mkdtemp(prefix="research-helper-hwp-"))
         working_template = temporary_root / "styled_template.hwpx"
@@ -146,20 +174,29 @@ def write_hwp_document(
             close_current_document(hwp)
             writer_report["document_saved"] = False
             style_indexes = register_styles_or_raise(converted_template, working_template, style_config, writer_report)
+        recovering = recovery is not None and recovery.state is not None
+        if recovering:
+            # Open an expendable copy, never the snapshot that backs the manifest.
+            shutil.copy2(recovery.snapshot(recovery.state["slot"]), working_template)
+            if page_setup is not None:
+                writer_report["page_setup"]["applied"] = True
         open_document(hwp, working_template, writer_report, report_file)
         writer_report["template_copied"] = True
         write_json(report_file, writer_report)
 
         excel, excel_workbook = open_excel_clipboard_source(package, package_file, writer_report)
 
-        replace_header_placeholders(hwp, package, writer_report)
-        if not find_placeholder(hwp, BODY_PLACEHOLDER):
-            raise HwpWriterError("template", "find_body", "{{BODY}} placeholder를 문서 본문에서 찾지 못했습니다.")
-        writer_report["placeholders"]["body_found"] = True
-        run_action(hwp, "Delete", writer_report, "template")
+        if recovering:
+            remove_recovery_marker(hwp, recovery, writer_report)
+        else:
+            replace_header_placeholders(hwp, package, writer_report, max_sections)
+            if not find_placeholder(hwp, BODY_PLACEHOLDER):
+                raise HwpWriterError("template", "find_body", "{{BODY}} placeholder를 문서 본문에서 찾지 못했습니다.")
+            writer_report["placeholders"]["body_found"] = True
+            run_action(hwp, "Delete", writer_report, "template")
         write_json(report_file, writer_report)
 
-        if page_setup is not None:
+        if page_setup is not None and not recovering:
             writer_report["stage"], writer_report["action"] = "page_setup", "PageSetup"
             write_json(report_file, writer_report)
             try:
@@ -176,12 +213,19 @@ def write_hwp_document(
             excel_workbook,
             style_indexes,
             style_config,
+            report_file,
+            recovery,
         )
         write_json(report_file, writer_report)
         save_as_hwpx(hwp, output_file, writer_report, report_file)
         writer_report["status"] = "ready"
         writer_report["finished_at"] = now()
         write_json(report_file, writer_report)
+        if recovery:
+            try:
+                recovery.clear()
+            except OSError as exc:
+                writer_report["warnings"].append(f"자동 재개 사본 정리 실패: {exc}")
         return output_file
     except HwpWriterError as exc:
         writer_report["status"] = "failed"
@@ -198,15 +242,32 @@ def write_hwp_document(
         writer_report["finished_at"] = now()
         raise
     finally:
-        close_excel_clipboard_source(excel, excel_workbook, writer_report)
-        finalize_hwp_resources(
-            temporary_root,
-            hwp,
-            writer_report,
-            keep_open_on_error,
-            keep_open_after_save,
-        )
-        write_json(report_file, writer_report)
+        try:
+            close_excel_clipboard_source(excel, excel_workbook, writer_report)
+            finalize_hwp_resources(temporary_root, hwp, writer_report, keep_open_on_error, keep_open_after_save)
+            write_json(report_file, writer_report)
+        finally:
+            if writer_lock is not None:
+                release_writer_lock(writer_lock)
+
+
+def acquire_writer_lock():
+    import win32event
+
+    lock = win32event.CreateMutex(None, False, r"Local\ResearchHelper.HwpClipboard")
+    if win32event.WaitForSingleObject(lock, 0) not in (0, 128):  # signaled or abandoned
+        lock.Close()
+        raise HwpWriterError("environment", "writer_lock", "다른 한글 작성기가 클립보드를 사용 중입니다.")
+    return lock
+
+
+def release_writer_lock(lock):
+    import win32event
+
+    try:
+        win32event.ReleaseMutex(lock)
+    finally:
+        lock.Close()
 
 
 def check_environment(
@@ -239,6 +300,7 @@ def check_environment(
         "errors": [],
     }
     hwp = None
+    writer_lock = None
     try:
         dispatch_mode = normalize_dispatch_mode(dispatch_mode)
         report["com"]["dispatch_mode"] = dispatch_mode
@@ -246,6 +308,7 @@ def check_environment(
             raise HwpWriterError("environment", "platform", "아래한글 COM writer는 Windows에서만 실행할 수 있습니다.")
         checkpoint_file = Path(report_path).resolve() if report_path else None
         write_checkpoint(report, checkpoint_file)
+        writer_lock = acquire_writer_lock()
         hwp = create_hwp_object(report, checkpoint_file, dispatch_mode)
         set_visible(hwp, visible, report, checkpoint_file)
         write_checkpoint(report, checkpoint_file)
@@ -266,10 +329,14 @@ def check_environment(
         report["finished_at"] = now()
         return report
     finally:
-        if hwp is not None:
-            close_hwp(hwp, report)
-        if report_path:
-            write_json(report_path, report)
+        try:
+            if hwp is not None:
+                close_hwp(hwp, report)
+            if report_path:
+                write_json(report_path, report)
+        finally:
+            if writer_lock is not None:
+                release_writer_lock(writer_lock)
 
 
 def validate_preflight(preflight: Dict[str, Any]) -> None:
@@ -305,6 +372,10 @@ def register_styles_or_raise(
     report: Dict[str, Any],
 ) -> Dict[str, int]:
     try:
+        styles = dict(config["paragraph_styles"])
+        for name in CAPTION_STYLES:
+            styles.setdefault(name, {**styles["보고서 본문1"], "bullet": "", "alignment": "center", "bold": name == "표번호"})
+        config = {**config, "paragraph_styles": styles}
         indexes = register_named_styles(template, working_template, config)
     except Exception as exc:
         raise HwpWriterError("style", "register_named_styles", f"HWPX 스타일 등록에 실패했습니다: {exc}") from exc
@@ -465,13 +536,13 @@ def open_document(hwp, path: Path, report: Dict[str, Any], checkpoint_path: Path
     raise HwpWriterError("document", "open", f"템플릿 사본을 아래한글로 열지 못했습니다: {last_error}")
 
 
-def replace_header_placeholders(hwp, package: Dict[str, Any], report: Dict[str, Any]) -> None:
+def replace_header_placeholders(hwp, package: Dict[str, Any], report: Dict[str, Any], max_sections: int | None = None) -> None:
     meta = package.get("meta", {})
     values = {
-        "report_title": str(meta.get("report_title") or meta.get("source_file_name") or "보고서 초안"),
+        "report_title": str(meta.get("report_title") or Path(str(meta.get("source_file_name") or "")).stem or "보고서 초안"),
         "project_name": str(meta.get("project_name") or meta.get("report_profile") or ""),
         "created_at": str(meta.get("created_at") or now()),
-        "qa_summary": qa_summary(package),
+        "qa_summary": qa_summary(package, max_sections),
     }
     for placeholder, value_key in REPORT_PLACEHOLDERS.items():
         if find_placeholder(hwp, placeholder):
@@ -530,14 +601,20 @@ def write_body(
     excel_workbook=None,
     style_indexes: Dict[str, int] | None = None,
     style_config: Dict[str, Any] | None = None,
+    checkpoint_path: Path | None = None,
+    recovery: Recovery | None = None,
 ) -> None:
     tables_by_key = {str(table.get("table_key", "")): table for table in package.get("tables", [])}
     charts_by_key = group_charts(package.get("charts", []))
     sections = select_sections(package, max_sections)
-    for index, section in enumerate(sections, start=1):
+    completed = report.get("sections_written", 0)
+    for index, section in enumerate(sections[completed:], start=completed + 1):
+        key = str(section.get("table_key", ""))
+        progress = report["progress"] = {"table_key": key, "section": index, "part": 0, "part_count": 0}
+        report.update(stage="body", action="start_section")
+        write_checkpoint(report, checkpoint_path)
         if index > 1:
             run_action(hwp, "BreakPage", report, "body")
-        key = str(section.get("table_key", ""))
         title = str(section.get("title") or key or f"문항 {index}")
         if style_indexes is not None:
             apply_named_style(hwp, require_style_index(style_indexes, "보고서 본문1"), report, "보고서 본문1")
@@ -555,6 +632,7 @@ def write_body(
                     # Resolve metadata before splitting so every fragment carries the same unit.
                     metadata = resolve_table_metadata(table)
                     source = {**table, "base_label": metadata["base_label"], "unit": metadata["unit"]}
+                    source = format_table_display(source, (style_config or {}).get("table_output", {}))
                     parts = [prepare_report_table(part) for part in plan_table_parts(source, width, font_size, style_config)]
                     if "확인 필요" in (metadata["base_label"], metadata["unit"]):
                         report["warnings"].append(f"{key}: BASE 조건 또는 단위를 확인해 주세요.")
@@ -581,45 +659,128 @@ def write_body(
             if len(parts) > 1:
                 report["warnings"].append(f"{key}: 본문 폭에 맞춰 {len(parts)}개 표로 가로 분할했습니다. 보기/BASE 열은 반복됩니다.")
             for part in parts:
-                write_table_part(hwp, part, title, report, table_style_profile, excel_workbook, style_indexes, style_config)
+                progress.update(part=part.get("part_index", 1), part_count=len(parts), row=0, col=0, cells_done=0, cell_count=0, phase="")
+                report.update(stage="table", action="start_part")
+                write_checkpoint(report, checkpoint_path)
+                write_table_part(hwp, part, title, report, table_style_profile, excel_workbook, style_indexes, style_config, index, checkpoint_path)
+                write_checkpoint(report, checkpoint_path)
             report["source_tables_written"] = report.get("source_tables_written", 0) + 1
         else:
             report["warnings"].append(f"삽입표 데이터 없음: {key}")
 
         if charts_by_key.get(key):
-            if style_indexes is not None:
-                apply_named_style(hwp, require_style_index(style_indexes, "보고서 본문1"), report, "보고서 본문1")
-            insert_text(hwp, f"[차트 삽입 필요] {title}", report)
-            run_action(hwp, "BreakPara", report, "body")
             report["charts_deferred"] += 1
 
-        if style_indexes is not None:
-            apply_named_style(hwp, require_style_index(style_indexes, "보고서 본문1"), report, "보고서 본문1")
-        insert_text(hwp, f"source: {key}", report)
-        run_action(hwp, "BreakPara", report, "body")
-        run_action(hwp, "BreakPara", report, "body")
+        if table and table.get("source_sheet") and table.get("source_range"):
+            if style_indexes is not None:
+                apply_named_style(hwp, require_style_index(style_indexes, "보고서 본문1"), report, "보고서 본문1")
+            insert_text(hwp, f"출처: 원본 집계표 ({table['source_sheet']}!{table['source_range']})", report)
+            run_action(hwp, "BreakPara", report, "body")
         report["sections_written"] += 1
+        if recovery:
+            insert_text(hwp, recovery.marker, report)
+            save_as_hwpx(hwp, recovery.next_snapshot(), report, checkpoint_path, recovery_copy=True)
+            recovery.commit(report, write_json)
+            report["recovery_sections"] = index
+            remove_recovery_marker(hwp, recovery, report)
+        write_checkpoint(report, checkpoint_path)
 
 
-def write_table_part(hwp, table, title, report, profile, workbook, style_indexes, style_config):
+def write_table_part(hwp, table, title, report, profile, workbook, style_indexes, style_config, index, checkpoint_path=None):
     if int(table.get("part_index") or 1) > 1:
         run_action(hwp, "BreakPage", report, "body")
-    if style_indexes is not None:
-        apply_named_style(hwp, require_style_index(style_indexes, "보고서 본문1"), report, "보고서 본문1")
-    caption = str(table.get("title") or title)
+    caption = table.get('title') or title
     if int(table.get("part_count") or 1) > 1:
         caption += f" [{table['part_index']}/{table['part_count']}]"
-    insert_text(hwp, caption, report)
-    run_action(hwp, "BreakPara", report, "body")
-    inserted = insert_clipboard_table(hwp, workbook, table, report, profile, style_indexes, style_config)
+    options = {**TABLE_OUTPUT_DEFAULTS, **(style_config or {}).get("table_output", {})}
+    table.update(caption_text=caption, caption_number=index, caption_pattern=options["number_pattern"], inline_requested=options["inline"])
+    try:
+        params = hwp.HParameterSet.HAutoNum
+        if not hwp.HAction.GetDefault("NewNumber", params.HSet):
+            raise RuntimeError("NewNumber defaults unavailable")
+        params.NumType, params.NewNumber = 4, index
+        if not hwp.HAction.Execute("NewNumber", params.HSet):
+            raise RuntimeError("NewNumber failed")
+    except Exception as exc:
+        raise HwpWriterError("table", "NewNumber", f"한글 표 번호 조판부호 생성 실패: {exc}") from exc
+    inserted = insert_clipboard_table(hwp, workbook, table, report, profile, style_indexes, style_config, checkpoint_path)
     if not inserted:
         inserted = insert_hwp_table(hwp, table_rows_for_hwp(table), report, profile,
-                                    table.get("merged_ranges", []), table, style_indexes, style_config)
+                                    table.get("merged_ranges", []), table, style_indexes, style_config, checkpoint_path)
         report["table_results"].append(table_result(table, "contract_fallback", "tbl" if inserted else "",
             "applied" if inserted else "failed", report.pop("clipboard_failure", "")))
     if not inserted:
         raise HwpWriterError("table", "TableCreate", f"HWP 표 생성에 실패했습니다: {table.get('table_key')}")
     run_action(hwp, "BreakPara", report, "body")
+
+
+def finish_table_object(hwp, control, table, report, style_indexes, style_config):
+    if not table.get("caption_text"):
+        leave_hwp_table(hwp, control, report)
+        return
+    try:
+        def select_table():
+            run_action(hwp, "Cancel", report, "table")
+            if not hwp.SetPosBySet(control.GetAnchorPos(0)):
+                raise RuntimeError("표 앵커를 찾지 못했습니다.")
+            hwp.FindCtrl()
+            if not same_hwp_control(hwp.CurSelectedCtrl, control):
+                raise RuntimeError("대상 표를 선택하지 못했습니다.")
+
+        select_table()
+        for action in ("ShapeObjCaption", "MoveListBegin", "MoveSelListEnd", "Delete"):
+            if not run_action(hwp, action, report, "caption"):
+                raise RuntimeError(action)
+        if style_indexes is not None:
+            apply_named_style(hwp, require_style_index(style_indexes, "표제목"), report, "표제목")
+        title_style = (style_config or {}).get("paragraph_styles", {}).get("표제목", {})
+        number_style = (style_config or {}).get("paragraph_styles", {}).get("표번호", {**title_style, "bold": True})
+        before, after = table["caption_pattern"].split("{number}")
+        apply_caption_char_shape(hwp, number_style)
+        insert_text(hwp, before, report)
+        auto_num = hwp.CreateSet("AutoNum")
+        auto_num.SetItem("NumType", 4)
+        if hwp.InsertCtrl("atno", auto_num).CtrlID != "atno":
+            raise RuntimeError("표 자동 번호 삽입 실패")
+        insert_text(hwp, after, report)
+        apply_caption_char_shape(hwp, title_style)
+        insert_text(hwp, " " + " ".join(table["caption_text"].splitlines()), report)
+        select_table()
+        params = hwp.HParameterSet.HShapeObject
+        if not hwp.HAction.GetDefault("TablePropertyDialog", params.HSet):
+            raise RuntimeError("TablePropertyDialog defaults unavailable")
+        params.ShapeCaption.Side = hwp.SideType("Top")
+        params.ShapeCaption.CapFullSize = 1
+        inline = False
+        if table.get("inline_requested"):
+            # Inline tables cannot be safely paginated when taller than one printable page.
+            pos = hwp.HParameterSet.HSecDef
+            hwp.HAction.GetDefault("PageSetup", pos.HSet)
+            page = pos.PageDef
+            height = (page.PaperWidth if page.Landscape else page.PaperHeight) - page.TopMargin - page.BottomMargin - page.HeaderLen - page.FooterLen
+            estimated = sum(compact_row_heights(table, style_config)) * 100 if table.get("layout_prepared") and table.get("matrix") else 0
+            inline = 0 < max(int(params.Height), estimated) + 5000 <= height
+            if not inline:
+                report["warnings"].append(f"{table.get('table_key')}: 한 쪽을 넘길 수 있어 표를 쪽 나눔 가능 상태로 유지했습니다.")
+        params.TreatAsChar = int(inline)
+        params.AffectsLine = int(inline)
+        if not hwp.HAction.Execute("TablePropertyDialog", params.HSet):
+            raise RuntimeError("표 캡션 위치 또는 글자처럼 취급 설정 실패")
+        table["inline_applied"] = inline
+        leave_hwp_table(hwp, control, report)
+    except Exception as exc:
+        raise HwpWriterError("caption", "ShapeObjCaption", f"표 캡션 작성 실패: {exc}") from exc
+
+
+def apply_caption_char_shape(hwp, style):
+    params = hwp.HParameterSet.HCharShape
+    hwp.HAction.GetDefault("CharShape", params.HSet)
+    params.Height = round(style.get("font_size_pt", 10) * 100)
+    params.Bold = int(style.get("bold", False))
+    for script in ("Hangul", "Latin", "Hanja", "Japanese", "Other", "Symbol", "User"):
+        setattr(params, "FaceName" + script, style.get("font_family", "맑은 고딕"))
+    if not hwp.HAction.Execute("CharShape", params.HSet):
+        raise RuntimeError("표 제목/번호 글자 모양 적용 실패")
 
 
 def current_body_width(hwp, report):
@@ -732,6 +893,7 @@ def insert_hwp_table(
     table: Dict[str, Any] | None = None,
     style_indexes: Dict[str, int] | None = None,
     style_config: Dict[str, Any] | None = None,
+    checkpoint_path: Path | None = None,
 ) -> bool:
     """Try to create a real HWP table. Fall back to text table when COM differs."""
 
@@ -767,8 +929,11 @@ def insert_hwp_table(
             return False
         control = hwp.ParentCtrl
         final_cell_styles = bool(table and "header_row_count" in table and style_config and style_indexes)
+        next_checkpoint = time.monotonic()
         for row_idx, row in enumerate(rows):
             for col_idx, value in enumerate(row):
+                next_checkpoint = record_cell_progress(report, checkpoint_path, next_checkpoint,
+                    row_idx, col_idx, row_idx * len(row) + col_idx, len(rows) * len(row), "fill")
                 role = table_cell_role(table or {}, row_idx, col_idx)
                 style_name = style_name_for_cell_role(role, style_config)
                 if style_indexes is not None and not final_cell_styles:
@@ -791,8 +956,8 @@ def insert_hwp_table(
         verify_table_width(control, table or {})
         if final_cell_styles:
             # Merging can discard cell header flags; style the surviving anchors once.
-            apply_table_matrix_styles(hwp, table, style_indexes, style_config, report)
-        leave_hwp_table(hwp, control, report)
+            apply_table_matrix_styles(hwp, table, style_indexes, style_config, report, checkpoint_path)
+        finish_table_object(hwp, control, table or {}, report, style_indexes, style_config)
         report["tables_written"] += 1
         return True
     except HwpWriterError:
@@ -1192,6 +1357,7 @@ def apply_cell_appearance(
     cell_role: str = "",
     data_start_row: int = 0,
     header_edge_row: int | None = None,
+    guard_column: bool = False,
 ) -> None:
     cell_style = config["table_cell_styles"][style_name]
     border = config["table_border"]
@@ -1206,7 +1372,8 @@ def apply_cell_appearance(
         fill = params.FillAttr
         set_parameter_item(fill, "Type", 1)
         metadata = cell_role == "metadata"
-        set_parameter_item(fill, "WinBrushFaceColor", hwp_color(hwp, "FFFFFF" if metadata else cell_style["fill_color"]))
+        guard = cell_role == "merge_guard"
+        set_parameter_item(fill, "WinBrushFaceColor", hwp_color(hwp, "FFFFFF" if metadata or guard else cell_style["fill_color"]))
         set_parameter_item(fill, "WinBrushHatchColor", 0)
         set_parameter_item(fill, "WinBrushFaceStyle", -1)
         set_parameter_item(fill, "WindowsBrush", 1)
@@ -1216,20 +1383,20 @@ def apply_cell_appearance(
         set_parameter_item(params, "ApplyTo", 0)
         # Keep the metadata borderless, but retain both owners of ordinary shared lines.
         # Repeated headers need their own bottom edge on continuation pages.
-        set_parameter_item(params, "NoNeighborCell", int(metadata or row_index == data_start_row))
+        set_parameter_item(params, "NoNeighborCell", int(metadata or guard or row_index == data_start_row))
         selected = params.SelCellsBorderFill
         solid = hwp.HwpLineType("Solid")
         # BorderFill writes the fill too; selected-cell defaults can erase CellFill.
         for target in (params, selected):
             fill = target.FillAttr
             set_parameter_item(fill, "Type", 1)
-            set_parameter_item(fill, "WinBrushFaceColor", hwp_color(hwp, "FFFFFF" if metadata else cell_style["fill_color"]))
+            set_parameter_item(fill, "WinBrushFaceColor", hwp_color(hwp, "FFFFFF" if metadata or guard else cell_style["fill_color"]))
             set_parameter_item(fill, "WinBrushHatchColor", 0)
             set_parameter_item(fill, "WinBrushFaceStyle", -1)
             set_parameter_item(fill, "WindowsBrush", 1)
         for side, perimeter in {
             "Left": col_index == 0,
-            "Right": col_index + colspan == col_count,
+            "Right": col_index + colspan == col_count - int(guard_column),
             "Top": row_index == data_start_row,
             "Bottom": row_index + rowspan == row_count,
         }.items():
@@ -1238,7 +1405,7 @@ def apply_cell_appearance(
             line = edges.get(group)
             if not vertical and not perimeter and header_edge_row == (row_index if side == "Top" else row_index + rowspan):
                 line = edges.get("header_bottom", line)
-            hidden = metadata or (vertical and perimeter and not border.get("show_side_borders", False))
+            hidden = metadata or guard or (vertical and perimeter and not border.get("show_side_borders", False))
             line_type = solid
             if hidden or (line and line["type"] == "none"):
                 line_type = 0
@@ -1252,7 +1419,7 @@ def apply_cell_appearance(
                 set_parameter_item(target, f"BorderColor{side}", color)
         if not hwp.HAction.Execute("CellBorderFill", params.HSet):
             raise RuntimeError("CellBorderFill action returned False")
-        if not metadata and (margins := cell_style.get("margins_mm")) is not None:
+        if not metadata and not guard and (margins := cell_style.get("margins_mm")) is not None:
             params = hwp.HParameterSet.HShapeObject
             hwp.HAction.GetDefault("TablePropertyDialog", params.HSet)
             cell = params.ShapeTableCell
@@ -1382,6 +1549,7 @@ def insert_clipboard_table(
     profile: Dict[str, Any] | None,
     style_indexes: Dict[str, int] | None = None,
     style_config: Dict[str, Any] | None = None,
+    checkpoint_path: Path | None = None,
 ) -> bool:
     if workbook is None or not table.get("cell_contract"):
         report["clipboard_failure"] = "Excel source unavailable" if table.get("cell_contract") else "legacy table contract"
@@ -1389,6 +1557,8 @@ def insert_clipboard_table(
     editing_started = False
     scratch = None
     try:
+        report.update(stage="table", action="prepare_clipboard")
+        write_checkpoint(report, checkpoint_path)
         if table.get("layout_prepared"):
             scratch = workbook.Application.Workbooks.Add()
             source_range = prepare_layout_range(scratch, table, style_config)
@@ -1409,6 +1579,8 @@ def insert_clipboard_table(
 
         before = snapshot_hwp_controls(hwp)
         disable_picture_paste(hwp, report)
+        report.update(stage="table", action="Paste")
+        write_checkpoint(report, checkpoint_path)
         paste_result = run_action(hwp, "Paste", report, "table")
         time.sleep(0.5)
         after = snapshot_hwp_controls(hwp)
@@ -1451,10 +1623,10 @@ def insert_clipboard_table(
 
         editing_started = True
         if style_indexes is not None and style_config is not None:
-            apply_table_matrix_styles(hwp, table, style_indexes, style_config, report)
+            apply_table_matrix_styles(hwp, table, style_indexes, style_config, report, checkpoint_path)
         else:
             apply_table_style_after_paste(hwp, profile, report)
-        leave_hwp_table(hwp, control, report)
+        finish_table_object(hwp, control, table, report, style_indexes, style_config)
         report["tables_written"] += 1
         report["table_results"].append(table_result(table, "clipboard", "tbl", "applied", ""))
         report.pop("clipboard_failure", None)
@@ -1487,23 +1659,29 @@ def prepare_layout_range(workbook, table, style_config):
     area.Font.Size = body_style["font_size_pt"]
     area.WrapText = True
     widths = table["column_widths_hwpunit"]
+    measured_widths = {}
     for index, width in enumerate(widths, 1):
         column = sheet.Columns.Item(index)
-        low, high = 0.1, 255
-        # Excel column units depend on the Normal font. Measure actual points instead.
-        for _ in range(12):
-            middle = (low + high) / 2
-            column.ColumnWidth = middle
-            if column.Width <= width / 100:
-                low = middle
-            else:
-                high = middle
-        column.ColumnWidth = low
+        if width not in measured_widths:
+            low, high = 0.1, 255
+            # The same workbook Normal font gives equal measured widths for equal target widths.
+            for _ in range(12):
+                middle = (low + high) / 2
+                column.ColumnWidth = middle
+                if column.Width <= width / 100:
+                    low = middle
+                else:
+                    high = middle
+            measured_widths[width] = low
+        column.ColumnWidth = measured_widths[width]
     for merged in table.get("merged_ranges", []):
         row, col = merged["row"], merged["col"]
         sheet.Range(sheet.Cells(row, col), sheet.Cells(row + merged["rowspan"] - 1, col + merged["colspan"] - 1)).Merge()
-    for index, height in enumerate(compact_row_heights(table, style_config), 1):
-        sheet.Rows.Item(index).RowHeight = height
+    start = 1
+    for height, group in groupby(compact_row_heights(table, style_config)):
+        end = start + sum(1 for _ in group) - 1
+        sheet.Range(sheet.Cells(start, 1), sheet.Cells(end, 1)).EntireRow.RowHeight = height
+        start = end + 1
     return area
 
 
@@ -1522,6 +1700,8 @@ def compact_row_heights(table, style_config):
                 continue
             first = cell["col"] - 1
             role = table_cell_role(table, row_index, col_index)
+            if role == "merge_guard":
+                continue
             name = style_name_for_cell_role(role, config)
             paragraph = config["paragraph_styles"][name]
             font_size = paragraph["font_size_pt"]
@@ -1637,6 +1817,7 @@ def apply_table_matrix_styles(
     style_indexes: Dict[str, int],
     style_config: Dict[str, Any],
     report: Dict[str, Any],
+    checkpoint_path: Path | None = None,
 ) -> None:
     rows = table_rows_for_hwp(table)
     if not rows:
@@ -1658,7 +1839,10 @@ def apply_table_matrix_styles(
             cells.append((row_index, col_index, value, len(row), int(cell.get("rowspan") or 1), int(cell.get("colspan") or 1)))
     visited_lists = set()
     visual_header = table.get("visual_header_row")
+    next_checkpoint = time.monotonic()
     for position, (row_index, col_index, value, col_count, rowspan, colspan) in enumerate(cells):
+        next_checkpoint = record_cell_progress(report, checkpoint_path, next_checkpoint,
+            row_index, col_index, position, len(cells), "style")
         visited_lists.add(int(hwp.GetPos()[0]))
         style_name = style_name_for_cell_role(table_cell_role(table, row_index, col_index), style_config)
         # Select the cell's text list, not the cell block (Delete on a block is not text deletion).
@@ -1685,6 +1869,7 @@ def apply_table_matrix_styles(
             cell_role=table_cell_role(table, row_index, col_index),
             data_start_row=int(table.get("data_start_row", 0)),
             header_edge_row=visual_header + 1 if visual_header is not None else None,
+            guard_column=bool(table.get("protected_merge_rows")),
         )
         if "header_row_count" in table:
             apply_cell_header(hwp, row_index + rowspan <= table["header_row_count"], report)
@@ -1699,6 +1884,16 @@ def apply_table_matrix_styles(
                     break
             else:
                 raise HwpWriterError("style", "TableRightCell", "병합 셀 이동이 반복되어 표 서식 적용을 중단합니다.")
+
+
+def record_cell_progress(report, path, due, row, col, position, total, phase):
+    progress = report.setdefault("progress", {})
+    progress.update(row=row + 1, col=col + 1, cells_done=position, cell_count=total, phase=phase)
+    if path and (current := time.monotonic()) >= due:
+        report.update(stage="style" if phase == "style" else "table", action="write_cells")
+        write_checkpoint(report, path)
+        return current + 5
+    return due
 
 
 def table_result(table: Dict[str, Any], insert_mode: str, ctrl_id: str, style_status: str, fallback_reason: str) -> Dict[str, Any]:
@@ -1718,6 +1913,9 @@ def table_result(table: Dict[str, Any], insert_mode: str, ctrl_id: str, style_st
         "base_label": table.get("base_label", ""),
         "unit": table.get("unit", ""),
         "header_row_count": table.get("header_row_count", 0),
+        "protected_merge_rows": table.get("protected_merge_rows", []),
+        "caption_number": table.get("caption_number"),
+        "inline_applied": table.get("inline_applied", False),
     }
 
 
@@ -1746,10 +1944,16 @@ def run_action(hwp, action: str, report: Dict[str, Any], stage: str) -> bool:
             return False
 
 
-def save_as_hwpx(hwp, output_file: Path, report: Dict[str, Any], checkpoint_path: Path | None = None) -> None:
+def remove_recovery_marker(hwp, recovery, report):
+    if not find_placeholder(hwp, recovery.marker) or not run_action(hwp, "Delete", report, "recovery"):
+        raise HwpWriterError("recovery", "find_marker", "저장된 문항 끝 위치를 한글에서 찾거나 제거하지 못했습니다.")
+
+
+def save_as_hwpx(hwp, output_file: Path, report: Dict[str, Any], checkpoint_path: Path | None = None, *, recovery_copy=False) -> None:
     report["stage"] = "document"
-    report["action"] = "save_as"
-    record_com_step(report, "save_as", "started", path=str(output_file))
+    action = "save_recovery" if recovery_copy else "save_as"
+    report["action"] = action
+    record_com_step(report, action, "started", path=str(output_file))
     write_checkpoint(report, checkpoint_path)
     format_name = "HWPX" if output_file.suffix.lower() == ".hwpx" else "HWP"
     temp_output = Path(tempfile.gettempdir()) / f"report_automation_{time.time_ns()}{output_file.suffix}"
@@ -1772,9 +1976,16 @@ def save_as_hwpx(hwp, output_file: Path, report: Dict[str, Any], checkpoint_path
                 continue
             if temp_output.exists():
                 output_file.parent.mkdir(parents=True, exist_ok=True)
-                shutil.copy2(temp_output, output_file)
-                report["document_saved"] = True
-                record_com_step(report, "save_as", "ready", path=str(output_file))
+                # The launcher may terminate a stalled writer; never expose a half-copied final file.
+                pending = output_file.with_name(f".{output_file.name}.{time.time_ns()}.tmp")
+                try:
+                    shutil.copy2(temp_output, pending)
+                    os.replace(pending, output_file)
+                finally:
+                    pending.unlink(missing_ok=True)
+                if not recovery_copy:
+                    report["document_saved"] = True
+                record_com_step(report, action, "ready", path=str(output_file))
                 write_checkpoint(report, checkpoint_path)
                 try:
                     temp_output.unlink()
@@ -1808,11 +2019,12 @@ def group_charts(rows: List[Dict[str, Any]]) -> Dict[str, List[Dict[str, Any]]]:
     return grouped
 
 
-def qa_summary(package: Dict[str, Any]) -> str:
-    qa = package.get("qa", [])
-    if not qa:
-        return "QA 이슈 없음"
-    return "\n".join(f"{item.get('severity', '')}: {item.get('message', '')}" for item in qa[:20])
+def qa_summary(package: Dict[str, Any], max_sections: int | None = None) -> str:
+    keys = {str(section.get("table_key", "")) for section in select_sections(package, max_sections)}
+    qa = [item for item in package.get("qa", []) if not item.get("table_key") or item["table_key"] in keys]
+    errors = sum(item.get("severity") == "error" for item in qa)
+    warnings = sum(item.get("severity") == "warning" for item in qa)
+    return f"수록 표 {len(keys)}개 · 오류 {errors}건 · 경고 {warnings}건. 상세 항목은 QA 검사 기록을 확인하세요."
 
 
 def display_percent(row: Dict[str, Any]) -> str:
@@ -1895,8 +2107,26 @@ def load_json(path: str | Path) -> Dict[str, Any]:
 
 
 def write_json(path: str | Path, value: Dict[str, Any]) -> None:
-    Path(path).parent.mkdir(parents=True, exist_ok=True)
-    Path(path).write_text(json.dumps(value, ensure_ascii=False, indent=2), encoding="utf-8")
+    target = Path(path)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    data = json.dumps(value, ensure_ascii=False, indent=2)
+    pending = None
+    try:
+        with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=target.parent, delete=False) as output:
+            pending = Path(output.name)
+            output.write(data)
+        # Windows readers or a sync client may briefly hold the previous version without delete sharing.
+        for attempt in range(6):
+            try:
+                os.replace(pending, target)
+                break
+            except PermissionError:
+                if attempt == 5:
+                    raise
+                time.sleep(0.1 * (attempt + 1))
+    finally:
+        if pending is not None:
+            pending.unlink(missing_ok=True)
 
 
 def now() -> str:
@@ -1922,6 +2152,7 @@ def run_cli(argv: List[str] | None = None) -> int:
     parser.add_argument("--table-style-profile")
     parser.add_argument("--style-config")
     parser.add_argument("--page-setup", help="Optional mm page settings JSON; applied to the BODY section only.")
+    parser.add_argument("--recovery", help="Persist completed HWPX sections and resume a matching interrupted run.")
     parser.add_argument("--keep-open-after-save", action="store_true")
     parser.add_argument("--dispatch-mode", choices=DISPATCH_MODES, default="ensure_dispatch")
     parser.add_argument("--check-environment", action="store_true")
@@ -1959,6 +2190,7 @@ def run_cli(argv: List[str] | None = None) -> int:
             args.dispatch_mode,
             args.style_config,
             args.page_setup,
+            args.recovery,
         )
         print(str(output))
         return 0
