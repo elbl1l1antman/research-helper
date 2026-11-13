@@ -1,8 +1,8 @@
 # ReportAutomation
 
-Current version: `0.0.45`
+Current version: `0.0.46`
 
-`0.0.45` verifies [keyboard metafile selection and EMF preservation](docs/superpowers/plans/2026-11-13-hwp-chart-paste-probe-results.md). The standalone executable is unchanged from `0.0.42`.
+`0.0.46` adds [editable PowerPoint chart styles and chart-review export](docs/survey_chart_style.md). Automatic HWPX chart insertion is not enabled.
 
 For editable HWPX starters and body/table presets, see the [HWPX preset guide](docs/hwp_reference_presets.md).
 

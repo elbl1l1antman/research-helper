@@ -2084,6 +2084,8 @@ namespace ReportAutomationLauncher
         private readonly CheckBox draftTextCheck = new CheckBox();
         private readonly ComboBox decimalPlacesCombo = new ComboBox();
         private readonly ComboBox chartOutputCombo = new ComboBox();
+        private readonly Button createSurveyChartReviewButton = new Button();
+        private readonly Label surveyChartStyleStatus = new Label { AutoSize = true };
         private readonly ComboBox tableInsertModeCombo = new ComboBox();
         private readonly CheckBox llmEnabledCheck = new CheckBox();
         private readonly ComboBox llmProviderCombo = new ComboBox();
@@ -2247,6 +2249,9 @@ namespace ReportAutomationLauncher
         internal void CheckWorkflowLayout()
         {
             Size = MinimumSize;
+            var rulesTabs = workflowTabs.TabPages[2].Controls[0] as TabControl;
+            if (rulesTabs == null || !rulesTabs.TabPages.Cast<TabPage>().Any(page => page.Text == "PPTX 차트 서식") || createSurveyChartReviewButton.Enabled)
+                throw new InvalidOperationException("PPTX 차트 서식 화면 또는 초기 버튼 상태가 올바르지 않습니다.");
             if (runButton.Enabled || runButton.Text != "Excel 산출 시트 만들기")
                 throw new InvalidOperationException("원본 파일이 없는 Excel 산출 상태가 올바르지 않습니다.");
 
@@ -2808,7 +2813,102 @@ namespace ReportAutomationLauncher
                 tabs.TabPages.Add(page);
             }
             tabs.TabPages.Insert(2, CreateStepPage("집계표별 산출 예시", BuildTableExamplePage()));
+            var chartPage = CreateStepPage("PPTX 차트 서식", BuildSurveyChartStyleGroup());
+            chartPage.AutoScroll = true;
+            tabs.TabPages.Add(chartPage);
             return tabs;
+        }
+
+        private static string SurveyChartStylePath
+        {
+            get { return Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "ResearchHelper", "survey_chart_style.pptx"); }
+        }
+
+        private void RefreshSurveyChartStyle()
+        {
+            bool registered = File.Exists(SurveyChartStylePath);
+            surveyChartStyleStatus.Text = registered ? "현재 서식: 내 공통 서식" : "현재 서식: 기본 세로 막대 · 도넛";
+        }
+
+        private Control BuildSurveyChartStyleGroup()
+        {
+            var layout = new FlowLayoutPanel { Dock = DockStyle.Top, AutoSize = true, FlowDirection = FlowDirection.TopDown, WrapContents = false, Padding = new Padding(12) };
+            var commands = new FlowLayoutPanel { AutoSize = true };
+            var save = new Button { Text = "편집용 기본 PPTX 저장…", AutoSize = true };
+            var register = new Button { Text = "편집한 PPTX 등록…", AutoSize = true };
+            var reset = new Button { Text = "기본 서식으로 되돌리기", AutoSize = true };
+            var guide = new Button { Text = "서식 편집 안내", AutoSize = true };
+            save.Click += async delegate
+            {
+                using (var dialog = new SaveFileDialog { Filter = "PowerPoint (*.pptx)|*.pptx", FileName = "기본 차트 서식.pptx", DefaultExt = "pptx" })
+                {
+                    if (dialog.ShowDialog(this) != DialogResult.OK) return;
+                    if (IsRegisteredChartStyle(dialog.FileName)) { MessageBox.Show(this, "등록된 서식이 아닌 다른 경로에 저장하세요.", "차트 서식"); return; }
+                    await RunSurveyChartCommand(commands, "create --output " + QuoteArg(dialog.FileName), "편집용 기본 PPTX를 저장했습니다.");
+                }
+            };
+            register.Click += async delegate
+            {
+                using (var dialog = new OpenFileDialog { Filter = "PowerPoint (*.pptx)|*.pptx", CheckFileExists = true })
+                {
+                    if (dialog.ShowDialog(this) != DialogResult.OK) return;
+                    if (File.Exists(SurveyChartStylePath) && MessageBox.Show(this, "현재 공통 차트 서식을 교체할까요?", "차트 서식 등록", MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes) return;
+                    await RunSurveyChartCommand(commands, "register --input " + QuoteArg(dialog.FileName) + " --output " + QuoteArg(SurveyChartStylePath), "모든 프로젝트에 사용할 공통 서식을 등록했습니다.");
+                    RefreshSurveyChartStyle();
+                }
+            };
+            reset.Click += delegate
+            {
+                if (!File.Exists(SurveyChartStylePath)) return;
+                if (MessageBox.Show(this, "등록한 서식 사본만 제거하고 기본 서식으로 돌아갈까요?", "차트 서식", MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes) return;
+                try { File.Delete(SurveyChartStylePath); RefreshSurveyChartStyle(); }
+                catch (IOException ex) { MessageBox.Show(this, ex.Message, "차트 서식", MessageBoxButtons.OK, MessageBoxIcon.Warning); }
+                catch (UnauthorizedAccessException ex) { MessageBox.Show(this, ex.Message, "차트 서식", MessageBoxButtons.OK, MessageBoxIcon.Warning); }
+            };
+            guide.Click += delegate
+            {
+                MessageBox.Show(this, "기본 PPTX를 PowerPoint에서 열고 차트의 글꼴, 색, 막대 간격, 축, 범례, 레이블을 조정한 뒤 등록하세요." + Environment.NewLine +
+                    "첫 번째 보기 또는 조각은 기본색, 두 번째는 최대값 강조색입니다. 예제 데이터는 보고서 값으로 교체됩니다." + Environment.NewLine +
+                    "차트 종류와 개체 이름(RA_CHART_COLUMN, RA_CHART_DOUGHNUT)은 유지하세요. 기존 업무용 PPTX는 직접 등록할 수 없습니다.", "차트 서식 편집 안내");
+            };
+            foreach (var button in new[] { save, register, reset, guide }) commands.Controls.Add(button);
+            layout.Controls.Add(surveyChartStyleStatus);
+            layout.Controls.Add(commands);
+            RefreshSurveyChartStyle();
+            return layout;
+        }
+
+        private static bool IsRegisteredChartStyle(string path)
+        {
+            return string.Equals(Path.GetFullPath(path), SurveyChartStylePath, StringComparison.OrdinalIgnoreCase);
+        }
+
+        private async System.Threading.Tasks.Task RunSurveyChartCommand(Control controls, string arguments, string success)
+        {
+            controls.Enabled = false;
+            try
+            {
+                await System.Threading.Tasks.Task.Run(() => RunTemplateTool("survey_chart_style.py", arguments, 120000));
+                Log(success);
+                MessageBox.Show(this, success, "PPTX 차트", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            }
+            catch (Exception ex) { MessageBox.Show(this, ex.Message, "PPTX 차트", MessageBoxButtons.OK, MessageBoxIcon.Warning); }
+            finally { controls.Enabled = true; }
+        }
+
+        private async void CreateSurveyChartReview(object sender, EventArgs e)
+        {
+            string packagePath = createSurveyChartReviewButton.Tag as string;
+            if (reportRunning || !File.Exists(packagePath)) return;
+            using (var dialog = new SaveFileDialog { Filter = "PowerPoint (*.pptx)|*.pptx", FileName = "차트 검토.pptx", DefaultExt = "pptx", InitialDirectory = Path.GetDirectoryName(packagePath) })
+            {
+                if (dialog.ShowDialog(this) != DialogResult.OK) return;
+                if (IsRegisteredChartStyle(dialog.FileName)) { MessageBox.Show(this, "등록된 서식이 아닌 다른 경로에 저장하세요.", "차트 서식"); return; }
+                string style = File.Exists(SurveyChartStylePath) ? " --style " + QuoteArg(SurveyChartStylePath) : "";
+                await RunSurveyChartCommand(createSurveyChartReviewButton, "review --input " + QuoteArg(packagePath) +
+                    " --output " + QuoteArg(dialog.FileName) + style, "차트 검토 PPTX: " + dialog.FileName);
+                createSurveyChartReviewButton.Enabled = !reportRunning && File.Exists(createSurveyChartReviewButton.Tag as string);
+            }
         }
 
         private Control BuildAdvancedOptionsGroup()
@@ -2952,7 +3052,10 @@ namespace ReportAutomationLauncher
             draftPreviewStatusLabel.ForeColor = LauncherUi.ColorMutedText;
             draftPreviewStatusLabel.Margin = new Padding(10, 7, 0, 0);
             draftPreviewStatusLabel.Text = "문장 초안 없음";
-            foreach (var button in new[] { openHwpOutputButton, openWorkbookButton, openDraftButton, openPreflightButton, openHwpReportButton })
+            createSurveyChartReviewButton.Text = "차트 검토 PPTX 만들기…";
+            createSurveyChartReviewButton.Enabled = false;
+            createSurveyChartReviewButton.Click += CreateSurveyChartReview;
+            foreach (var button in new[] { openHwpOutputButton, openWorkbookButton, openDraftButton, openPreflightButton, openHwpReportButton, createSurveyChartReviewButton })
             {
                 button.AutoSize = true;
                 resultButtons.Controls.Add(button);
@@ -4549,6 +4652,7 @@ namespace ReportAutomationLauncher
             openHwpOutputButton.Enabled = false;
             openHwpReportButton.Enabled = false;
             openPreflightButton.Enabled = false;
+            createSurveyChartReviewButton.Enabled = false;
             copyDraftButton.Enabled = false;
             Log("실행을 시작합니다.");
 
@@ -4598,6 +4702,7 @@ namespace ReportAutomationLauncher
                     BeginInvoke(new Action(delegate()
                     {
                         reportRunning = false;
+                        createSurveyChartReviewButton.Enabled = File.Exists(createSurveyChartReviewButton.Tag as string);
                         UpdateWorkflowStatus();
                     }));
                 }
@@ -4784,6 +4889,9 @@ namespace ReportAutomationLauncher
 
             openPreflightButton.Tag = options.LastPreflightReportPath;
             openPreflightButton.Enabled = File.Exists(options.LastPreflightReportPath);
+
+            createSurveyChartReviewButton.Tag = options.LastReportPackagePath;
+            createSurveyChartReviewButton.Enabled = !reportRunning && File.Exists(options.LastReportPackagePath);
 
             LoadDraftPreview(options.LastDraftTextPath);
         }

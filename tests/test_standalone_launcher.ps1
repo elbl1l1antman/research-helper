@@ -50,6 +50,20 @@ try {
     & $result.python -E -s -X utf8 -c $fixtureCode $fixture
     if ($LASTEXITCODE -ne 0) { throw 'Standalone Excel fixture creation failed.' }
     $fixtureHash = (Get-FileHash -LiteralPath $fixture).Hash
+    $styleTool = Join-Path $engineDirectory 'survey_chart_style.py'
+    $styleStarter = Join-Path $directory 'chart style.pptx'
+    $registeredStyle = Join-Path $directory 'registered style.pptx'
+    & $result.python -E -s -X utf8 $styleTool create --output $styleStarter
+    if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $styleStarter)) { throw 'Bundled chart style creation failed.' }
+    & $result.python -E -s -X utf8 $styleTool register --input $styleStarter --output $registeredStyle
+    if ($LASTEXITCODE -ne 0 -or (Get-FileHash -LiteralPath $styleStarter).Hash -ne (Get-FileHash -LiteralPath $registeredStyle).Hash) { throw 'Bundled chart style registration failed.' }
+    $chartPackage = Join-Path $directory 'chart package.json'
+    $chartFixture = "import json,sys; json.dump({'charts':[dict(table_key='T1',category=k,series_group='\uc804\uccb4',measure='%',value=v,source_cell=c) for k,v,c in [('A',60,'A1'),('B',40,'B1')]]},open(sys.argv[1],'w'))"
+    & $result.python -E -s -X utf8 -c $chartFixture $chartPackage
+    if ($LASTEXITCODE -ne 0) { throw 'Standalone chart fixture creation failed.' }
+    $chartDeck = Join-Path $directory 'chart review.pptx'
+    & $result.python -E -s -X utf8 $styleTool review --input $chartPackage --style $registeredStyle --output $chartDeck
+    if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $chartDeck)) { throw 'Bundled chart review failed.' }
     $failedOutput = Join-Path $directory 'failed run'
     $failedRun = Start-Process -FilePath $copy -ArgumentList @('--workbook', ('"' + $fixture + '"'), '--addin', ('"' + $missingAddin + '"'), '--out', ('"' + $failedOutput + '"')) -WorkingDirectory $directory -WindowStyle Hidden -Wait -PassThru
     if ($failedRun.ExitCode -ne 1 -or -not (Test-Path -LiteralPath ($failedOutput + '.excel_addin.json'))) { throw 'Missing add-in did not block the normal workflow with a diagnostic.' }

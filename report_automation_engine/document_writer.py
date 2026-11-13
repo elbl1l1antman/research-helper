@@ -26,11 +26,24 @@ def write_document(
     document_type: str,
     preflight_path: str | Path | None = None,
     template_path: str | Path | None = None,
+    *,
+    chart_style_path: str | Path | None = None,
 ) -> Path:
     package = load_json(package_path)
     preflight = load_json(preflight_path) if preflight_path else {}
     if preflight.get("status") == "blocked":
         raise ValueError("preflight status is blocked; fix errors before creating PPTX output")
+
+    if chart_style_path is not None:
+        if document_type != "chart_review" or template_path is not None:
+            raise ValueError("--chart-style applies only to chart_review without --template")
+        if Path(output_path).resolve() == Path(package_path).resolve():
+            raise ValueError("Cannot overwrite the input package")
+        if __package__:
+            from .survey_chart_style import write_chart_review
+        else:
+            from survey_chart_style import write_chart_review
+        return write_chart_review(package, output_path, chart_style_path)
 
     prs = new_presentation(template_path)
     if document_type == "chart_review":
@@ -248,10 +261,11 @@ def run_cli(argv: List[str] | None = None) -> int:
     parser.add_argument("--package", required=True)
     parser.add_argument("--preflight")
     parser.add_argument("--template")
+    parser.add_argument("--chart-style")
     parser.add_argument("--type", required=True, choices=["pptx_report", "chart_review"])
     parser.add_argument("--output", required=True)
     args = parser.parse_args(argv)
-    output = write_document(args.package, args.output, args.type, args.preflight, args.template)
+    output = write_document(args.package, args.output, args.type, args.preflight, args.template, chart_style_path=args.chart_style)
     print(str(output))
     return 0
 

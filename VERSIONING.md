@@ -1,6 +1,6 @@
 # Versioning
 
-Current version: `0.0.45`
+Current version: `0.0.46`
 
 ## Policy
 
@@ -16,6 +16,8 @@ Current version: `0.0.45`
   - Major: breaking file format, CLI, template, or workflow change.
 
 ## Current Baseline
+
+`0.0.46` adds launcher registration of a common PPTX chart style and an editable survey chart review export.
 
 `0.0.45` verifies keyboard selection and preservation of the original chart EMF after reopening and saving the HWPX probe in Hancom. No launcher changes.
 
