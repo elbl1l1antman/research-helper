@@ -36,6 +36,7 @@ class StandalonePayloadTests(unittest.TestCase):
                      "report_automation_engine/config/default_hwp_style_config.json",
                      "report_automation_addin/dev/ReportAutomationAddin_dev.xlam",
                      "templates/report_template_basic.hwpx", "templates/report_template_basic.pptx",
+                     "templates/report_template_guardian.hwpx", "templates/report_template_screening.hwpx",
                      "templates/chart_review_template_basic.pptx", "docs/template_authoring_guide.md",
                      "report_automation_launcher/licenses/openpyxl-1.0-LICENCE.rst",
                      "report_automation_launcher/licenses/et_xmlfile-1.0-LICENCE.rst",
@@ -104,7 +105,8 @@ class StandalonePayloadTests(unittest.TestCase):
                          "runtime/Lib/site-packages/pywin32_system32/pywintypes312.dll",
                          "LICENSE", "THIRD_PARTY_NOTICES.md", "licenses/openpyxl-1.0-LICENCE.rst",
                          "licenses/et_xmlfile-1.0-LICENCE.python", "templates/report_template_basic.pptx",
-                         "templates/report_template_basic.hwpx",
+                         "templates/report_template_basic.hwpx", "templates/report_template_guardian.hwpx",
+                         "templates/report_template_screening.hwpx",
                          "report_automation_addin/dev/ReportAutomationAddin_dev.xlam", "docs/template_authoring_guide.md",
                          "report_automation_engine/config/default_hwp_style_config.json"]:
                 self.assertIn(name, names)
@@ -148,21 +150,25 @@ class StandalonePayloadTests(unittest.TestCase):
     def test_hwpx_factory_copies_an_editable_document(self):
         from report_automation_engine.template_factory import create_template
         from report_automation_engine.template_inspector import inspect_template
-        source = SCRIPT.parents[2] / "templates/report_template_basic.hwpx"
-        output = create_template("hwpx_report", self.root / "편집용 양식.hwpx")
-        self.assertEqual(output.read_bytes(), source.read_bytes())
-        report = inspect_template(output)
-        self.assertIn(report["status"], {"ready", "usable_with_warnings"})
-        with zipfile.ZipFile(output) as archive:
-            self.assertEqual(archive.getinfo("mimetype").compress_type, zipfile.ZIP_STORED)
-            for name in ("Contents/header.xml", "Contents/content.hpf"):
-                ElementTree.fromstring(archive.read(name))
-            section = ElementTree.fromstring(archive.read("Contents/section0.xml"))
-            body = [node for node in section if "".join(node.itertext()).strip() == "{{BODY}}"]
-            self.assertEqual(len(body), 1)
-            self.assertTrue(any(node.get("pageBreak") == "1" for node in section))
-        with self.assertRaises(OSError):
-            create_template("hwpx_report", source)
+        for variant, side_margin in (("basic", None), ("guardian", "4252"), ("screening", "5102")):
+            with self.subTest(variant=variant):
+                source = SCRIPT.parents[2] / f"templates/report_template_{variant}.hwpx"
+                output = create_template("hwpx_report", self.root / f"편집용 양식 {variant}.hwpx", variant=variant)
+                self.assertEqual(output.read_bytes(), source.read_bytes())
+                self.assertIn(inspect_template(output)["status"], {"ready", "usable_with_warnings"})
+                with zipfile.ZipFile(output) as archive:
+                    self.assertEqual(archive.getinfo("mimetype").compress_type, zipfile.ZIP_STORED)
+                    for name in ("Contents/header.xml", "Contents/content.hpf"):
+                        ElementTree.fromstring(archive.read(name))
+                    section = ElementTree.fromstring(archive.read("Contents/section0.xml"))
+                    body = [node for node in section if "".join(node.itertext()).strip() == "{{BODY}}"]
+                    self.assertEqual(len(body), 1)
+                    self.assertTrue(any(node.get("pageBreak") == "1" for node in section))
+                    if side_margin:
+                        margin = section.find(".//{*}pagePr/{*}margin")
+                        self.assertEqual((margin.get("left"), margin.get("right")), (side_margin, side_margin))
+                with self.assertRaises(OSError):
+                    create_template("hwpx_report", source, variant=variant)
 
     def test_dependency_record_cannot_escape(self):
         self.dependencies()

@@ -36,9 +36,14 @@ try {
     $inspection = Join-Path $directory 'template inspection.json'
     & $result.python -E -s -X utf8 (Join-Path $engineDirectory 'template_inspector.py') --template $template --output $inspection
     if ($LASTEXITCODE -ne 0 -or (Get-Content -LiteralPath $inspection -Raw -Encoding UTF8 | ConvertFrom-Json).status -notin @('ready', 'usable_with_warnings')) { throw 'Bundled template inspection failed.' }
-    $hwpTemplate = Join-Path $directory 'basic report.hwpx'
-    & $result.python -E -s -X utf8 (Join-Path $engineDirectory 'template_factory.py') --type hwpx_report --output $hwpTemplate
-    if ($LASTEXITCODE -ne 0 -or (Get-FileHash -LiteralPath $hwpTemplate).Hash -ne (Get-FileHash -LiteralPath (Join-Path $result.bundle_root 'templates/report_template_basic.hwpx')).Hash) { throw 'Bundled HWPX template copy failed.' }
+    foreach ($variant in @('basic', 'guardian', 'screening')) {
+        $hwpTemplate = Join-Path $directory "$variant report.hwpx"
+        & $result.python -E -s -X utf8 (Join-Path $engineDirectory 'template_factory.py') --type hwpx_report --variant $variant --output $hwpTemplate
+        $bundledTemplate = Join-Path $result.bundle_root "templates/report_template_$variant.hwpx"
+        if ($LASTEXITCODE -ne 0 -or (Get-FileHash -LiteralPath $hwpTemplate).Hash -ne (Get-FileHash -LiteralPath $bundledTemplate).Hash) { throw "Bundled HWPX template copy failed: $variant" }
+        & $result.python -E -s -X utf8 (Join-Path $engineDirectory 'template_inspector.py') --template $hwpTemplate --output $inspection
+        if ($LASTEXITCODE -ne 0 -or (Get-Content -LiteralPath $inspection -Raw -Encoding UTF8 | ConvertFrom-Json).status -notin @('ready', 'usable_with_warnings')) { throw "Bundled HWPX template inspection failed: $variant" }
+    }
     # A real raw-table CLI run also proves that no optional Tcl/Tk dependency leaks into parsing.
     $fixture = Join-Path $directory 'variant table.xlsx'
     $fixtureCode = "import sys; from openpyxl import Workbook; w=Workbook(); s=w.active; s.append(['\uC774\uC6A9 \uACBD\uD5D8']); s.append(['\uAD6C\uBD84','\uD45C\uBCF8\uC218','\uC788\uC74C','\uC5C6\uC74C']); s.append(['\uC804\uCCB4',100,65,35]); w.save(sys.argv[1]); w.close()"

@@ -1,6 +1,6 @@
 # Versioning
 
-Current version: `0.0.41`
+Current version: `0.0.42`
 
 ## Policy
 
@@ -16,6 +16,9 @@ Current version: `0.0.41`
   - Major: breaking file format, CLI, template, or workflow change.
 
 ## Current Baseline
+
+`0.0.42` adds two editable HWPX survey starters and three role-based body and
+table presets, including a Malgun Gothic option.
 
 `0.0.41` preserves fully covered merge rows and adds native HWP captions,
 table number styles, inline table placement, and numeric display options.

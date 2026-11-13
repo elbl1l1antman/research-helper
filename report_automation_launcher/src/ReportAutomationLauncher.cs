@@ -152,6 +152,10 @@ namespace ReportAutomationLauncher
         internal const string BuiltInName = "기본 보고서";
         internal const string GoldTableName = "기본 표 · 골드 배너";
         internal const string BlueTableName = "기본 표 · 청회색 머리행";
+        internal const string GuardianStyleName = "조사 보고서 · KoPub 청회색";
+        internal const string ScreeningStyleName = "검진 보고서 · KoPub 회색";
+        internal const string CompactStyleName = "실무 보고서 · 맑은 고딕";
+        private static readonly string[] ExtraBuiltInNames = { GoldTableName, BlueTableName, GuardianStyleName, ScreeningStyleName, CompactStyleName };
         internal static readonly string[] StyleNames = { "보고서 본문1", "보고서 본문2", "표보기", "표배너", "표숫자" };
         internal static readonly string[] CaptionStyleNames = { "표제목", "표번호" };
         internal static readonly string[] TableStyleNames = { "표보기", "표배너", "표숫자" };
@@ -193,6 +197,8 @@ namespace ReportAutomationLauncher
             // Preserve existing user presets even if they happen to use a new built-in name.
             if (!users.Any(item => SameName(item, GoldTableName))) result.Add(DefaultTableConfig(true));
             if (!users.Any(item => SameName(item, BlueTableName))) result.Add(DefaultTableConfig(false));
+            foreach (string name in ExtraBuiltInNames.Skip(2))
+                if (!users.Any(item => SameName(item, name))) result.Add(ReferenceReportConfig(name));
             result.AddRange(users);
             return result;
         }
@@ -205,8 +211,7 @@ namespace ReportAutomationLauncher
         internal bool IsBuiltIn(string name)
         {
             return string.Equals(name, BuiltInName, StringComparison.OrdinalIgnoreCase) ||
-                ((string.Equals(name, GoldTableName, StringComparison.OrdinalIgnoreCase) ||
-                  string.Equals(name, BlueTableName, StringComparison.OrdinalIgnoreCase)) &&
+                (ExtraBuiltInNames.Contains(name, StringComparer.OrdinalIgnoreCase) &&
                  !LoadUsers().Any(item => SameName(item, name)));
         }
 
@@ -438,6 +443,46 @@ namespace ReportAutomationLauncher
             return Normalize(config);
         }
 
+        private static Dictionary<string, object> ReferenceReportConfig(string name)
+        {
+            bool screening = name == ScreeningStyleName, compact = name == CompactStyleName;
+            string light = compact ? "맑은 고딕" : "KoPub돋움체 Light";
+            string medium = compact ? light : "KoPub돋움체 Medium";
+            string bold = compact ? light : "KoPub돋움체 Bold";
+            var config = DefaultTableConfig(false);
+            config["preset_name"] = name;
+            var styles = Map(config["paragraph_styles"], "paragraph_styles");
+            styles["보고서 본문1"] = Style(light, compact ? 10 : 11, false, compact ? "" : "|", compact ? 145 : 160, compact ? 2 : 7.1, compact ? 2 : 0, compact ? "justify" : "left");
+            styles["보고서 본문2"] = Style(light, compact ? 10 : 11, false, compact ? "-" : "|", compact ? 145 : 160, compact ? 5 : screening ? 8 : 7.1, compact ? -3 : -2.5, compact ? "justify" : "left");
+            styles["표제목"] = Style(bold, screening ? 9.5 : 10, compact, "", 130, 0, 0, "left");
+            styles["표번호"] = Style(bold, 10, compact, "", 130, 0, 0, "left");
+            var cells = Map(config["table_cell_styles"], "table_cell_styles");
+            foreach (string role in cells.Keys)
+            {
+                bool header = role == "표배너" || role == "표머리행" || role == "표가로배너";
+                bool label = role == "표보기" || role == "표세로배너";
+                styles[role] = Style(header ? bold : role == "표숫자" ? medium : light,
+                    header ? (screening || compact ? 10 : 11) : (screening || compact ? 9 : 9.5),
+                    compact && header, "", header ? (screening ? 140 : 120) : (screening ? 130 : 100), 0, 0,
+                    label ? "left" : compact && role == "표숫자" ? "right" : "center");
+                var cell = Map(cells[role], role);
+                cell["fill_color"] = header ? (screening ? "E7E7E7" : compact ? "EDF3F2" : "F0F4F7") : role == "표BASE" ? "F3F4F5" : "FFFFFF";
+            }
+            var border = Map(config["table_border"], "table_border");
+            var edges = Map(border["edges"], "edges");
+            border["color"] = screening ? "808080" : "666666";
+            border["outer_width_mm"] = screening ? 0.4 : 0.3;
+            edges["outer"] = Edge("solid", (double)border["outer_width_mm"], screening ? "808080" : "000000");
+            edges["header_bottom"] = Edge("solid", screening ? 0.4 : 0.1, screening ? "808080" : "000000");
+            edges["inner_vertical"] = Edge(screening || compact ? "solid" : "dash", screening ? 0.2 : 0.1, screening ? "A6A6A6" : "666666");
+            return Normalize(config);
+        }
+
+        private static Dictionary<string, object> Edge(string type, double width, string color)
+        {
+            return new Dictionary<string, object> { { "type", type }, { "width_mm", width }, { "color", color } };
+        }
+
         internal static void RunSelfCheck()
         {
             string directory = Path.Combine(Path.GetTempPath(), "ResearchHelperPresetCheck_" + Guid.NewGuid().ToString("N"));
@@ -447,7 +492,15 @@ namespace ReportAutomationLauncher
                 string file = Path.Combine(directory, "presets.json");
                 var warnings = new List<string>();
                 var store = new HwpStylePresetStore(file, warnings.Add);
-                Assert(store.LoadAll().Count == 3, "default and two table presets");
+                int builtInCount = 1 + ExtraBuiltInNames.Length;
+                Assert(store.LoadAll().Count == builtInCount, "all built-in presets");
+                foreach (string name in ExtraBuiltInNames.Skip(2))
+                {
+                    var config = store.Get(name);
+                    var body = Map(Map(config["paragraph_styles"], "paragraph_styles")["보고서 본문1"], "보고서 본문1");
+                    Assert(store.IsBuiltIn(name) && (string)body["font_family"] == (name == CompactStyleName ? "맑은 고딕" : "KoPub돋움체 Light"), "reference preset font");
+                    AssertThrows(delegate { store.Save(config, true); }, "reference preset protected");
+                }
                 foreach (string name in new[] { GoldTableName, BlueTableName })
                 {
                     var builtIn = store.Get(name);
@@ -467,14 +520,14 @@ namespace ReportAutomationLauncher
                     preset["preset_name"] = "사용자 " + i;
                     store.Save(preset, false);
                 }
-                Assert(store.LoadAll().Count == 6, "three user presets in addition to defaults");
+                Assert(store.LoadAll().Count == builtInCount + 3, "three user presets in addition to defaults");
                 var checkSerializer = new JavaScriptSerializer();
                 Dictionary<string, object> legacy = checkSerializer.DeserializeObject(File.ReadAllText(file, System.Text.Encoding.UTF8)) as Dictionary<string, object>;
                 foreach (object item in (object[])legacy["presets"])
                     Map(Map(item, "preset")["table_border"], "table_border").Remove("show_side_borders");
                 string legacyJson = checkSerializer.Serialize(legacy);
                 File.WriteAllText(file, legacyJson, System.Text.Encoding.UTF8);
-                Assert(store.LoadAll().Count == 6, "three legacy presets retained");
+                Assert(store.LoadAll().Count == builtInCount + 3, "three legacy presets retained");
                 for (int i = 1; i <= 3; i++)
                     Assert(!(bool)Map(store.Get("사용자 " + i)["table_border"], "table_border")["show_side_borders"], "legacy side borders default off");
                 Assert(warnings.Count == 0 && string.IsNullOrWhiteSpace(store.RecoveryWarning)
@@ -494,7 +547,7 @@ namespace ReportAutomationLauncher
                 store.Save(duplicate, true);
                 Assert(!(bool)Map(store.Get("사용자 1")["table_border"], "table_border")["show_side_borders"], "side borders false roundtrip");
                 store.Delete("사용자 3");
-                Assert(store.LoadAll().Count == 5, "deletion");
+                Assert(store.LoadAll().Count == builtInCount + 2, "deletion");
 
                 Dictionary<string, object> partial = checkSerializer.DeserializeObject(File.ReadAllText(file, System.Text.Encoding.UTF8)) as Dictionary<string, object>;
                 object[] stored = (object[])partial["presets"];
@@ -509,14 +562,14 @@ namespace ReportAutomationLauncher
                 Assert(warnings.Count == 1, "recovered store does not repeat warning");
 
                 File.WriteAllText(file, "{broken", System.Text.Encoding.UTF8);
-                Assert(store.LoadAll().Count == 3, "corrupt recovery");
+                Assert(store.LoadAll().Count == builtInCount, "corrupt recovery");
                 Assert(Directory.GetFiles(directory, "presets.json.corrupt.*.bak").Length == 2, "corrupt backup");
                 string corruptBackup = store.RecoveryBackupPath;
                 Assert(corruptBackup != partialBackup && File.Exists(corruptBackup) && store.RecoveryWarning.Contains(corruptBackup), "corrupt recovery warning contains backup path");
                 Assert(warnings.Count == 2 && warnings[1] == store.RecoveryWarning, "corrupt recovery logged");
                 File.WriteAllText(file, "{broken", System.Text.Encoding.UTF8);
                 var quietStore = new HwpStylePresetStore(file);
-                Assert(quietStore.LoadAll().Count == 3 && !string.IsNullOrWhiteSpace(quietStore.RecoveryWarning), "recovery without interactive logging");
+                Assert(quietStore.LoadAll().Count == builtInCount && !string.IsNullOrWhiteSpace(quietStore.RecoveryWarning), "recovery without interactive logging");
                 AssertThrows(delegate { store.Delete(BuiltInName); }, "immutable default");
 
                 foreach (object invalid in new object[] { "false", 0, null })
@@ -1984,6 +2037,8 @@ namespace ReportAutomationLauncher
         private readonly Button inspectTemplateButton = new Button();
         private readonly Button createHwpTemplateButton = new Button();
         private readonly Button useBasicHwpTemplateButton = new Button();
+        private readonly ComboBox basicHwpVariant = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Width = 180, AccessibleName = "기본 한글 양식" };
+        private static readonly string[] BasicHwpVariantIds = { "basic", "guardian", "screening" };
         private readonly Button createPptTemplateButton = new Button();
         private readonly Button createChartTemplateButton = new Button();
         private readonly Button autoFixTemplateButton = new Button();
@@ -2543,7 +2598,9 @@ namespace ReportAutomationLauncher
             templateButtons.AutoSize = true;
             inspectTemplateButton.Text = "양식 검사";
             inspectTemplateButton.Click += InspectTemplateButton_Click;
-            useBasicHwpTemplateButton.Text = "기본 한글 양식 사용";
+            basicHwpVariant.Items.AddRange(new object[] { "기본 보고서", "조사 보고서 · 청회색", "검진 보고서 · 파란 제목" });
+            basicHwpVariant.SelectedIndex = 0;
+            useBasicHwpTemplateButton.Text = "선택한 기본 양식 적용";
             useBasicHwpTemplateButton.Click += UseBasicHwpTemplateButton_Click;
             createHwpTemplateButton.Text = "편집용 양식 사본 저장…";
             createHwpTemplateButton.Click += CreateHwpTemplateButton_Click;
@@ -2555,6 +2612,7 @@ namespace ReportAutomationLauncher
             autoFixTemplateButton.Click += AutoFixTemplateButton_Click;
             openTemplateGuideButton.Text = "양식 가이드 열기";
             openTemplateGuideButton.Click += OpenTemplateGuideButton_Click;
+            templateButtons.Controls.Add(basicHwpVariant);
             templateButtons.Controls.Add(useBasicHwpTemplateButton);
             templateButtons.Controls.Add(createHwpTemplateButton);
             templateButtons.Controls.Add(inspectTemplateButton);
@@ -2562,7 +2620,7 @@ namespace ReportAutomationLauncher
             templateButtons.Controls.Add(createPptTemplateButton);
             templateButtons.Controls.Add(createChartTemplateButton);
             templateButtons.Controls.Add(openTemplateGuideButton);
-            foreach (Button button in templateButtons.Controls) button.AutoSize = true;
+            foreach (Button button in templateButtons.Controls.OfType<Button>()) button.AutoSize = true;
             AddLabel(grid, 4, "양식 도구");
             grid.Controls.Add(templateButtons, 1, 4);
             grid.SetColumnSpan(templateButtons, 2);
@@ -2667,7 +2725,7 @@ namespace ReportAutomationLauncher
                         (hwp && (row == 1 || row == 3 || row == 6 || row == 8)) ||
                         (ppt && row == 2) || ((hwp || ppt) && (row == 4 || row == 5));
                 }
-                useBasicHwpTemplateButton.Visible = createHwpTemplateButton.Visible = hwp;
+                basicHwpVariant.Visible = useBasicHwpTemplateButton.Visible = createHwpTemplateButton.Visible = hwp;
                 createPptTemplateButton.Visible = ppt;
                 createChartTemplateButton.Visible = ppt;
                 grid.ResumeLayout(true);
@@ -4097,19 +4155,22 @@ namespace ReportAutomationLauncher
 
         private void CreateHwpTemplateButton_Click(object sender, EventArgs e)
         {
-            CreateTemplate("hwpx_report", "report_template_basic.hwpx", "HWPX files (*.hwpx)|*.hwpx", hwpTemplateText);
+            string variant = BasicHwpVariantIds[Math.Max(0, basicHwpVariant.SelectedIndex)];
+            CreateTemplate("hwpx_report", "report_template_" + variant + ".hwpx", "HWPX files (*.hwpx)|*.hwpx", hwpTemplateText, variant);
         }
 
         private void UseBasicHwpTemplateButton_Click(object sender, EventArgs e)
         {
             string engineDirectory = Path.GetDirectoryName(PathResolver.ResolveEngineToolPath("template_factory.py"));
-            string path = Path.GetFullPath(Path.Combine(engineDirectory, "..", "templates", "report_template_basic.hwpx"));
+            int index = Math.Max(0, basicHwpVariant.SelectedIndex);
+            string path = Path.GetFullPath(Path.Combine(engineDirectory, "..", "templates", "report_template_" + BasicHwpVariantIds[index] + ".hwpx"));
             try
             {
                 InspectTemplate(path, "hwpx_report", false);
                 if (!IsTemplateStatusUsable()) throw new InvalidOperationException("기본 한글 양식을 확인할 수 없습니다.");
                 hwpTemplateText.Text = path;
-                templateStatusLabel.Text = "기본 한글 양식을 사용합니다. 본문·표 서식은 아래에서 별도로 선택할 수 있습니다.";
+                if (index > 0) SelectReferenceStyle(index);
+                templateStatusLabel.Text = Convert.ToString(basicHwpVariant.SelectedItem) + " 양식을 사용합니다. 본문·표 서식은 별도로 바꿀 수 있습니다.";
             }
             catch (Exception ex)
             {
@@ -4128,7 +4189,22 @@ namespace ReportAutomationLauncher
             CreateTemplate("chart_review", "chart_review_template_basic.pptx", "PowerPoint files (*.pptx)|*.pptx", pptTemplateText);
         }
 
-        private void CreateTemplate(string templateType, string defaultName, string filter, TextBox targetTextBox)
+        private void SelectReferenceStyle(int index)
+        {
+            string name = index == 1 ? HwpStylePresetStore.GuardianStyleName : HwpStylePresetStore.ScreeningStyleName;
+            if (!hwpStylePresetStore.IsBuiltIn(name)) return;
+            using (var fonts = new System.Drawing.Text.InstalledFontCollection())
+            {
+                bool hasKoPub = new[] { "Light", "Medium", "Bold" }.All(weight => fonts.Families.Any(font =>
+                    font.Name.Equals("KoPub돋움체 " + weight, StringComparison.OrdinalIgnoreCase) ||
+                    font.Name.Equals("KoPubDotum " + weight, StringComparison.OrdinalIgnoreCase) ||
+                    font.Name.Equals("KoPub Dotum " + weight, StringComparison.OrdinalIgnoreCase)));
+                RefreshHwpStylePresetCombo(hasKoPub ? name : HwpStylePresetStore.CompactStyleName);
+                if (!hasKoPub) Log("KoPub돋움체가 없어 맑은 고딕 기본 서식을 선택했습니다.");
+            }
+        }
+
+        private void CreateTemplate(string templateType, string defaultName, string filter, TextBox targetTextBox, string variant = "basic")
         {
             using (var dialog = new SaveFileDialog())
             {
@@ -4144,11 +4220,13 @@ namespace ReportAutomationLauncher
                 try
                 {
                     string outputPath = dialog.FileName;
-                    string arguments = "--type " + QuoteArg(templateType) + " --output " + QuoteArg(outputPath);
+                    string arguments = "--type " + QuoteArg(templateType) + " --output " + QuoteArg(outputPath) + " --variant " + QuoteArg(variant);
                     RunTemplateTool("template_factory.py", arguments, 60000);
                     targetTextBox.Text = outputPath;
                     Log("기본 템플릿 생성: " + outputPath);
                     InspectTemplate(outputPath, templateType, false);
+                    if (templateType == "hwpx_report" && variant != "basic" && IsTemplateStatusUsable())
+                        SelectReferenceStyle(Array.IndexOf(BasicHwpVariantIds, variant));
                     MessageBox.Show(this, "기본 템플릿을 생성했습니다." + Environment.NewLine + outputPath, "템플릿 생성", MessageBoxButtons.OK, MessageBoxIcon.Information);
                 }
                 catch (Exception ex)
@@ -4423,7 +4501,7 @@ namespace ReportAutomationLauncher
             return "보고서 자동화 템플릿 가이드" + Environment.NewLine +
                    Environment.NewLine +
                    "1. 최소 HWPX 템플릿" + Environment.NewLine +
-                   "- [기본 한글 양식 사용]은 내장 양식을 바로 선택합니다. 편집하려면 [편집용 양식 사본 저장]을 누르세요." + Environment.NewLine +
+                   "- 기본 한글 양식을 고르고 [선택한 기본 양식 적용]을 누르세요. 편집하려면 [편집용 양식 사본 저장]을 누르세요." + Environment.NewLine +
                    "- 한글 문서에서 본문이 들어갈 위치에 {{BODY}} 한 줄을 유지합니다." + Environment.NewLine +
                    "- 표지, 글꼴, 여백, 제목 스타일, 로고, 쪽번호는 자유롭게 수정할 수 있습니다." + Environment.NewLine +
                    "- 본문·표 서식은 문서 양식과 별개입니다. 골드 배너 또는 청회색 머리행을 선택할 수 있습니다." + Environment.NewLine +
