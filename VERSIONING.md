@@ -1,6 +1,6 @@
 # Versioning
 
-Current version: `0.0.40`
+Current version: `0.0.41`
 
 ## Policy
 
@@ -16,6 +16,9 @@ Current version: `0.0.40`
   - Major: breaking file format, CLI, template, or workflow change.
 
 ## Current Baseline
+
+`0.0.41` starts an interrupted HWPX job over when its work Excel or QA package
+changed, and reports stale recovery files as a recovery error.
 
 `0.0.40` recovers supported survey measures from explicit Excel cell evidence
 and resumes interrupted HWPX jobs from the last saved section.

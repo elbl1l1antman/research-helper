@@ -776,9 +776,11 @@ class HwpComWriterStyleTests(unittest.TestCase):
                     side_effect=ValueError("invalid style registry"),
                 ),
                 patch("report_automation_engine.hwp_com_writer.create_hwp_object") as create_hwp,
+                patch("report_automation_engine.hwp_com_writer.acquire_writer_lock", return_value=None),
             ):
-                with self.assertRaises(HwpWriterError):
+                with self.assertRaises(HwpWriterError) as raised:
                     write_hwp_document(package, preflight, template, output)
+            self.assertEqual(raised.exception.stage, "style")
 
             self.assertFalse(output.exists())
             create_hwp.assert_not_called()

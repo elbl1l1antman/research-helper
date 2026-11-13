@@ -145,7 +145,10 @@ def write_hwp_document(
             if reserved.intersection({path, *(path.with_name(f"{path.stem}_{slot}.hwpx") for slot in (0, 1))}):
                 raise HwpWriterError("recovery", "verify", "자동 재개 파일 경로가 입력 또는 출력 경로와 같습니다.")
             writer_report.update(stage="recovery", action="verify", recovery_path=str(path))
-            recovery = Recovery(path, sources, max_sections)
+            try:
+                recovery = Recovery(path, sources, max_sections)
+            except (OSError, ValueError) as exc:
+                raise HwpWriterError("recovery", "verify", f"{exc} 처음부터 다시 만들려면 새 산출 폴더를 선택하세요.") from exc
             if recovery.state:
                 saved = recovery.state["report"]
                 count = saved.get("sections_written", 0)
@@ -250,7 +253,10 @@ def write_hwp_document(
 
 
 def acquire_writer_lock():
-    import win32event
+    try:
+        import win32event
+    except ImportError as exc:
+        raise HwpWriterError("environment", "writer_lock", "pywin32(win32event)를 불러오지 못해 한글 작성 잠금을 만들 수 없습니다.") from exc
 
     lock = win32event.CreateMutex(None, False, r"Local\ResearchHelper.HwpClipboard")
     if win32event.WaitForSingleObject(lock, 0) not in (0, 128):  # signaled or abandoned

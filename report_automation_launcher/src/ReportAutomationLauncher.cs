@@ -6435,21 +6435,16 @@ namespace ReportAutomationLauncher
 
         private static void RunWorkflowCore(LauncherOptions options, Action<string> log, string jobPath)
         {
-            bool resume = jobPath != null && File.Exists(jobPath) && File.Exists(jobPath + ".recovery.json");
             string workbookPath;
+            bool resume = TryResumeHwpJob(jobPath, options, log, out workbookPath);
             if (resume)
             {
-                workbookPath = File.ReadAllText(jobPath, System.Text.Encoding.UTF8).Trim();
-                if (!File.Exists(workbookPath) || !string.Equals(Path.GetDirectoryName(Path.GetFullPath(workbookPath)).TrimEnd(Path.DirectorySeparatorChar),
-                    Path.GetFullPath(options.ArtifactDirectory).TrimEnd(Path.DirectorySeparatorChar), StringComparison.OrdinalIgnoreCase))
-                    throw new IOException("자동 재개에 필요한 산출 Excel 작업 파일을 찾을 수 없습니다.");
-                string stem = Path.ChangeExtension(workbookPath, null);
-                options.LastReportPackagePath = stem + "_report_package.json";
-                options.LastPreflightReportPath = stem + "_preflight_report.json";
                 log("자동 재개: 이전 작업의 Excel 산출물과 QA를 사용합니다.");
             }
             else
             {
+                // A fresh run regenerates the Excel and QA, so any saved HWP progress is stale.
+                if (jobPath != null) DiscardHwpJob(jobPath, log);
                 log("1단계: 원본 집계표에서 Excel 산출 시트를 자동 생성합니다.");
                 workbookPath = AutomationRunner.Run(options, log);
             }
@@ -6464,7 +6459,8 @@ namespace ReportAutomationLauncher
                 if (jobPath != null)
                 {
                     RequireHwpPreflight(options);
-                    if (!resume) File.WriteAllText(jobPath, workbookPath, System.Text.Encoding.UTF8);
+                    // Line 2-3 let a rerun detect an edited work Excel or QA package and start over.
+                    if (!resume) File.WriteAllText(jobPath, workbookPath + "\n" + HashFile(workbookPath) + "\n" + HashFile(options.LastReportPackagePath), System.Text.Encoding.UTF8);
                     options.HwpRecoveryPath = jobPath + ".recovery.json";
                     log("3단계: QA를 통과한 산출 데이터로 한글 보고서를 만듭니다.");
                     TryGenerateHwpDocument(options, log);
@@ -6491,6 +6487,51 @@ namespace ReportAutomationLauncher
                 }
                 else if (options.KeepExcelOpen)
                     log("자동 재개용 Excel 작업 파일을 잠그지 않도록 열지 않았습니다.");
+            }
+        }
+
+        private static bool TryResumeHwpJob(string jobPath, LauncherOptions options, Action<string> log, out string workbookPath)
+        {
+            workbookPath = null;
+            if (jobPath == null || !File.Exists(jobPath)) return false;
+            string recoveryPath = jobPath + ".recovery.json";
+            if (!File.Exists(recoveryPath)) return false;
+            string[] job = File.ReadAllText(jobPath, System.Text.Encoding.UTF8).Split(new[] { '\n' }).Select(line => line.Trim()).ToArray();
+            string candidate = job[0];
+            string reason = null;
+            if (candidate.Length == 0 || !File.Exists(candidate) || !string.Equals(Path.GetDirectoryName(Path.GetFullPath(candidate)).TrimEnd(Path.DirectorySeparatorChar),
+                Path.GetFullPath(options.ArtifactDirectory).TrimEnd(Path.DirectorySeparatorChar), StringComparison.OrdinalIgnoreCase))
+                reason = "이전 작업의 산출 Excel 파일을 찾을 수 없습니다";
+            string stem = reason == null ? Path.ChangeExtension(candidate, null) : null;
+            string packagePath = stem + "_report_package.json";
+            string preflightPath = stem + "_preflight_report.json";
+            if (reason == null && (!File.Exists(packagePath) || !File.Exists(preflightPath)))
+                reason = "이전 작업의 QA 결과 파일이 없습니다";
+            // Job files from 0.0.40 hold only the path; the writer still verifies their hashes.
+            if (reason == null && job.Length >= 3 && (job[1] != HashFile(candidate) || job[2] != HashFile(packagePath)))
+                reason = "중단 후 작업 Excel 또는 QA 결과가 바뀌었습니다";
+            if (reason != null)
+            {
+                log("자동 재개하지 않고 처음부터 다시 만듭니다: " + reason + ".");
+                return false;
+            }
+            workbookPath = candidate;
+            options.LastReportPackagePath = packagePath;
+            options.LastPreflightReportPath = preflightPath;
+            return true;
+        }
+
+        private static void DiscardHwpJob(string jobPath, Action<string> log)
+        {
+            string recoveryPath = jobPath + ".recovery.json";
+            string directory = Path.GetDirectoryName(recoveryPath);
+            string stem = Path.GetFileNameWithoutExtension(recoveryPath);
+            // Remove the manifest first so a partly cleaned job can never be resumed.
+            foreach (string path in new[] { recoveryPath, Path.Combine(directory, stem + "_0.hwpx"), Path.Combine(directory, stem + "_1.hwpx"), jobPath })
+            {
+                try { File.Delete(path); }
+                catch (IOException ex) { log("자동 재개 기록 정리 실패: " + ex.Message); }
+                catch (UnauthorizedAccessException ex) { log("자동 재개 기록 정리 실패: " + ex.Message); }
             }
         }
 

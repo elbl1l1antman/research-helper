@@ -23,11 +23,14 @@ class Recovery:
         self.state = None
         if self.path.exists():
             state = json.loads(self.path.read_text(encoding="utf-8"))
+            if not isinstance(state, dict):
+                raise ValueError("자동 재개 기록 형식이 올바르지 않습니다.")
             if state.get("inputs") != self.inputs:
-                raise ValueError("자동 재개 입력 또는 설정이 이전 실행과 다릅니다. 새 작업으로 시작하세요.")
+                raise ValueError("자동 재개 입력 또는 설정이 이전 실행과 다릅니다.")
             if state.get("slot") not in (0, 1) or state.get("sha256") != file_digest(self.snapshot(state["slot"])):
                 raise ValueError("자동 재개용 한글 사본이 손상되었습니다.")
-            if not isinstance(state.get("marker"), str) or not state["marker"].startswith("RARESUME"):
+            if (not isinstance(state.get("marker"), str) or not state["marker"].startswith("RARESUME")
+                    or not isinstance(state.get("report"), dict)):
                 raise ValueError("자동 재개 위치가 올바르지 않습니다.")
             self.state = state
         self.marker = self.state["marker"] if self.state else "RARESUME" + uuid.uuid4().hex.upper()
