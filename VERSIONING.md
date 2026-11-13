@@ -1,6 +1,6 @@
 # Versioning
 
-Current version: `0.0.43`
+Current version: `0.0.44`
 
 ## Policy
 
@@ -16,6 +16,8 @@ Current version: `0.0.43`
   - Major: breaking file format, CLI, template, or workflow change.
 
 ## Current Baseline
+
+`0.0.44` adds the HWPX figure-container probe and records the observed WMF conversion. Automatic chart insertion is not enabled.
 
 `0.0.43` documents the chart review and HWPX EMF integration plans. No executable changes.
 

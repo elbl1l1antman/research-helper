@@ -1,8 +1,8 @@
 # ReportAutomation
 
-Current version: `0.0.43`
+Current version: `0.0.44`
 
-`0.0.43` records the chart development plans; the standalone executable is unchanged from `0.0.42`.
+`0.0.44` records the [Hancom metafile probe](docs/superpowers/plans/2026-11-13-hwp-chart-paste-probe-results.md). The standalone executable is unchanged from `0.0.42`.
 
 For editable HWPX starters and body/table presets, see the [HWPX preset guide](docs/hwp_reference_presets.md).
 
