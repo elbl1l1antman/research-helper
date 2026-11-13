@@ -5,6 +5,7 @@ using System.Drawing;
 using System.IO;
 using System.Linq;
 using System.Runtime.InteropServices;
+using System.Security.Cryptography;
 using System.Threading;
 using System.Web.Script.Serialization;
 using System.Windows.Forms;
@@ -366,7 +367,9 @@ namespace ReportAutomationLauncher
         internal static void WriteConfig(string outputPath, Dictionary<string, object> config)
         {
             var serializer = new JavaScriptSerializer { MaxJsonLength = int.MaxValue };
-            AtomicWrite(outputPath, serializer.Serialize(Normalize(config)));
+            string content = serializer.Serialize(Normalize(config));
+            if (!File.Exists(outputPath) || File.ReadAllText(outputPath, System.Text.Encoding.UTF8) != content)
+                AtomicWrite(outputPath, content);
         }
 
         private static Dictionary<string, object> DefaultTableConfig(bool gold)
@@ -5827,6 +5830,7 @@ namespace ReportAutomationLauncher
         public string LastPreflightReportPath;
         public string LastHwpOutputPath;
         public string LastHwpWriterReportPath;
+        public string HwpRecoveryPath;
 
         public void Validate()
         {
@@ -6407,26 +6411,68 @@ namespace ReportAutomationLauncher
         internal static void RunWorkflow(LauncherOptions options, Action<string> log)
         {
             bool hwp = options.OutputType.IndexOf("HWP", StringComparison.OrdinalIgnoreCase) >= 0;
-            if (hwp)
+            if (!hwp)
             {
-                log("한글 양식의 본문 위치를 확인합니다.");
-                RequireHwpTemplate(options.HwpTemplatePath);
+                RunWorkflowCore(options, log, null);
+                return;
             }
+            // HWP table insertion uses the shared Windows clipboard.
+            using (var mutex = new Mutex(false, @"Local\ResearchHelper.HwpWriter"))
+            {
+                bool acquired;
+                try { acquired = mutex.WaitOne(0); }
+                catch (AbandonedMutexException) { acquired = true; }
+                if (!acquired) throw new InvalidOperationException("다른 한글 보고서를 작성 중입니다. 완료 후 다시 실행하세요.");
+                try
+                {
+                    log("한글 양식의 본문 위치를 확인합니다.");
+                    RequireHwpTemplate(options.HwpTemplatePath);
+                    RunWorkflowCore(options, log, HwpJobPath(options));
+                }
+                finally { mutex.ReleaseMutex(); }
+            }
+        }
 
-            log("1단계: 원본 집계표에서 Excel 산출 시트를 자동 생성합니다.");
-            string workbookPath = AutomationRunner.Run(options, log);
+        private static void RunWorkflowCore(LauncherOptions options, Action<string> log, string jobPath)
+        {
+            bool resume = jobPath != null && File.Exists(jobPath) && File.Exists(jobPath + ".recovery.json");
+            string workbookPath;
+            if (resume)
+            {
+                workbookPath = File.ReadAllText(jobPath, System.Text.Encoding.UTF8).Trim();
+                if (!File.Exists(workbookPath) || !string.Equals(Path.GetDirectoryName(Path.GetFullPath(workbookPath)).TrimEnd(Path.DirectorySeparatorChar),
+                    Path.GetFullPath(options.ArtifactDirectory).TrimEnd(Path.DirectorySeparatorChar), StringComparison.OrdinalIgnoreCase))
+                    throw new IOException("자동 재개에 필요한 산출 Excel 작업 파일을 찾을 수 없습니다.");
+                string stem = Path.ChangeExtension(workbookPath, null);
+                options.LastReportPackagePath = stem + "_report_package.json";
+                options.LastPreflightReportPath = stem + "_preflight_report.json";
+                log("자동 재개: 이전 작업의 Excel 산출물과 QA를 사용합니다.");
+            }
+            else
+            {
+                log("1단계: 원본 집계표에서 Excel 산출 시트를 자동 생성합니다.");
+                workbookPath = AutomationRunner.Run(options, log);
+            }
             options.LastGeneratedWorkbookPath = workbookPath;
             try
             {
-                log("2단계: 생성된 산출 시트에서 분석문·표를 읽어 QA를 검사합니다.");
-                TryGenerateReportPackage(workbookPath, options, log);
-                if (hwp)
+                if (!resume)
+                {
+                    log("2단계: 생성된 산출 시트에서 분석문·표를 읽어 QA를 검사합니다.");
+                    TryGenerateReportPackage(workbookPath, options, log);
+                }
+                if (jobPath != null)
                 {
                     RequireHwpPreflight(options);
+                    if (!resume) File.WriteAllText(jobPath, workbookPath, System.Text.Encoding.UTF8);
+                    options.HwpRecoveryPath = jobPath + ".recovery.json";
                     log("3단계: QA를 통과한 산출 데이터로 한글 보고서를 만듭니다.");
                     TryGenerateHwpDocument(options, log);
                     if (string.IsNullOrWhiteSpace(options.LastHwpOutputPath))
                         throw new InvalidOperationException("한글 보고서를 저장하지 못했습니다. 진행 기록과 한글 생성 기록을 확인하세요.");
+                    try { File.Delete(jobPath); }
+                    catch (IOException ex) { log("자동 재개 기록 정리 실패: " + ex.Message); }
+                    catch (UnauthorizedAccessException ex) { log("자동 재개 기록 정리 실패: " + ex.Message); }
                 }
                 if (options.GenerateDraftText)
                     options.LastDraftTextPath = TryGenerateDraft(workbookPath, log);
@@ -6434,7 +6480,7 @@ namespace ReportAutomationLauncher
             }
             finally
             {
-                if (options.KeepExcelOpen)
+                if (options.KeepExcelOpen && !File.Exists(options.HwpRecoveryPath))
                 {
                     try
                     {
@@ -6443,7 +6489,37 @@ namespace ReportAutomationLauncher
                     }
                     catch (Exception ex) { log("산출 Excel 다시 열기 실패 (저장 파일은 유지): " + ex.Message); }
                 }
+                else if (options.KeepExcelOpen)
+                    log("자동 재개용 Excel 작업 파일을 잠그지 않도록 열지 않았습니다.");
             }
+        }
+
+        private static string HwpJobPath(LauncherOptions options)
+        {
+            var serializer = new JavaScriptSerializer { MaxJsonLength = int.MaxValue };
+            string settings = serializer.Serialize(new object[] {
+                "0.0.40", options.WorkbookPath,
+                options.CopyWorkbook || Path.GetExtension(options.WorkbookPath).Equals(".xls", StringComparison.OrdinalIgnoreCase)
+                    ? HashFile(options.WorkbookPath) : "checked in recovery manifest",
+                HashFile(options.AddinPath),
+                options.HwpTemplatePath, HashFile(options.HwpTemplatePath), HashFile(options.HwpTableStyleProfilePath),
+                options.HwpStyleConfig, HashFile(options.HwpStyleConfigPath), options.HwpPageSetup, options.HwpMaxSections, options.ReportProfile, options.StyleProfile,
+                options.BannerSetting, options.TitlePrefixes, options.DecimalPlaces, options.TableRangeOverrides,
+                options.OutputType, options.CopyWorkbook, options.ChartOutputMode, options.TableInsertMode,
+                options.IncludeAnalysis, options.IncludeCharts, options.IncludeTables, options.IncludeQa,
+                options.UseLlm, options.LlmProvider, options.LlmModel
+            });
+            string token;
+            using (var sha = SHA256.Create()) token = BitConverter.ToString(sha.ComputeHash(System.Text.Encoding.UTF8.GetBytes(settings))).Replace("-", "");
+            return Path.Combine(options.ArtifactDirectory, ".research-helper-hwp-" + token.Substring(0, 24));
+        }
+
+        private static string HashFile(string path)
+        {
+            if (string.IsNullOrWhiteSpace(path)) return "";
+            using (var sha = SHA256.Create())
+            using (var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete))
+                return BitConverter.ToString(sha.ComputeHash(stream));
         }
 
         private static void RequireHwpTemplate(string path)
@@ -6980,6 +7056,8 @@ namespace ReportAutomationLauncher
             object value;
             var progress = report.TryGetValue("progress", out value) ? value as Dictionary<string, object> : null;
             string status = "한글: " + GetString(report, "sections_written") + "/" + GetString(report, "section_count_selected") + "문항 완료";
+            string saved = GetString(report, "recovery_sections");
+            if (saved.Length > 0) status += " · 재개 가능 " + saved + "문항";
             if (progress != null && GetString(report, "action") != "save_as")
             {
                 status += " · " + GetString(progress, "table_key");
@@ -7067,6 +7145,7 @@ namespace ReportAutomationLauncher
                    " --style-config " + Quote(options.HwpStyleConfigPath) +
                    (options.HwpPageSetup == null ? "" : OptionalArgument(" --page-setup ", options.HwpPageSetupPath)) +
                    OptionalArgument(" --table-style-profile ", options.HwpTableStyleProfilePath) +
+                   OptionalArgument(" --recovery ", options.HwpRecoveryPath) +
                    (options.HwpKeepOpenOnError ? " --keep-open-on-error" : "");
         }
 

@@ -1,6 +1,6 @@
 # Versioning
 
-Current version: `0.0.39`
+Current version: `0.0.40`
 
 ## Policy
 
@@ -16,6 +16,9 @@ Current version: `0.0.39`
   - Major: breaking file format, CLI, template, or workflow change.
 
 ## Current Baseline
+
+`0.0.40` recovers supported survey measures from explicit Excel cell evidence
+and resumes interrupted HWPX jobs from the last saved section.
 
 `0.0.39` closes Excel before QA, extends the table preview beyond 5,000 rows,
 and uses HWP progress checkpoints to distinguish slow work from a stall.

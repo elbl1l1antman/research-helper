@@ -28,6 +28,7 @@ try:
     from .report_table_matrix import resolve_table_metadata
     from .hwp_table_layout import plan_table_parts, prepare_report_table, _text_units
     from .hwp_page_setup import normalize_page_setup, apply_page_setup
+    from .hwp_recovery import Recovery
 except ImportError:
     from hwp_style_config import DEFAULT_HWP_STYLE_CONFIG, HWP_LINE_NAMES, REQUIRED_STYLE_NAMES, load_hwp_style_config, margin_units, style_name_for_cell_role
     from hwpx_style_registry import register_named_styles
@@ -35,6 +36,7 @@ except ImportError:
     from report_table_matrix import resolve_table_metadata
     from hwp_table_layout import plan_table_parts, prepare_report_table, _text_units
     from hwp_page_setup import normalize_page_setup, apply_page_setup
+    from hwp_recovery import Recovery
 
 
 BODY_PLACEHOLDER = "{{BODY}}"
@@ -73,6 +75,7 @@ def write_hwp_document(
     dispatch_mode: str = "ensure_dispatch",
     style_config_path: str | Path | None = None,
     page_setup_path: str | Path | None = None,
+    recovery_path: str | Path | None = None,
 ) -> Path:
     """Write a report draft and always write a companion JSON report."""
 
@@ -92,6 +95,8 @@ def write_hwp_document(
     excel = None
     excel_workbook = None
     temporary_root = None
+    recovery = None
+    writer_lock = None
 
     try:
         package = load_json(package_file)
@@ -124,10 +129,29 @@ def write_hwp_document(
             return render_plan_file
 
         validate_files(template_file, output_file)
+        writer_lock = acquire_writer_lock()
 
         output_file.parent.mkdir(parents=True, exist_ok=True)
         if template_file.resolve() == output_file.resolve():
             raise HwpWriterError("validate", "output", "원본 템플릿과 출력 경로가 같습니다. 원본 보호를 위해 중단합니다.")
+
+        if recovery_path:
+            if output_file.suffix.lower() != ".hwpx" or template_file.suffix.lower() != ".hwpx":
+                raise HwpWriterError("recovery", "format", "자동 재개는 HWPX 템플릿과 출력에만 지원합니다.")
+            workbook_path = package.get("meta", {}).get("source_workbook")
+            path = Path(recovery_path).resolve()
+            sources = (package_file, preflight_file, template_file, workbook_path, style_config_path, table_style_profile_path, page_setup_path)
+            reserved = {Path(source).resolve() for source in (*sources, output_file, report_file, render_plan_file) if source}
+            if reserved.intersection({path, *(path.with_name(f"{path.stem}_{slot}.hwpx") for slot in (0, 1))}):
+                raise HwpWriterError("recovery", "verify", "자동 재개 파일 경로가 입력 또는 출력 경로와 같습니다.")
+            writer_report.update(stage="recovery", action="verify", recovery_path=str(path))
+            recovery = Recovery(path, sources, max_sections)
+            if recovery.state:
+                saved = recovery.state["report"]
+                count = saved.get("sections_written", 0)
+                if type(count) is not int or not 0 < count <= render_plan["section_count_selected"]:
+                    raise HwpWriterError("recovery", "verify", "자동 재개 문항 수가 올바르지 않습니다.")
+                writer_report.update(saved, resumed_sections=count, recovery_sections=count)
 
         temporary_root = Path(tempfile.mkdtemp(prefix="research-helper-hwp-"))
         working_template = temporary_root / "styled_template.hwpx"
@@ -148,20 +172,29 @@ def write_hwp_document(
             close_current_document(hwp)
             writer_report["document_saved"] = False
             style_indexes = register_styles_or_raise(converted_template, working_template, style_config, writer_report)
+        recovering = recovery is not None and recovery.state is not None
+        if recovering:
+            # Open an expendable copy, never the snapshot that backs the manifest.
+            shutil.copy2(recovery.snapshot(recovery.state["slot"]), working_template)
+            if page_setup is not None:
+                writer_report["page_setup"]["applied"] = True
         open_document(hwp, working_template, writer_report, report_file)
         writer_report["template_copied"] = True
         write_json(report_file, writer_report)
 
         excel, excel_workbook = open_excel_clipboard_source(package, package_file, writer_report)
 
-        replace_header_placeholders(hwp, package, writer_report, max_sections)
-        if not find_placeholder(hwp, BODY_PLACEHOLDER):
-            raise HwpWriterError("template", "find_body", "{{BODY}} placeholder를 문서 본문에서 찾지 못했습니다.")
-        writer_report["placeholders"]["body_found"] = True
-        run_action(hwp, "Delete", writer_report, "template")
+        if recovering:
+            remove_recovery_marker(hwp, recovery, writer_report)
+        else:
+            replace_header_placeholders(hwp, package, writer_report, max_sections)
+            if not find_placeholder(hwp, BODY_PLACEHOLDER):
+                raise HwpWriterError("template", "find_body", "{{BODY}} placeholder를 문서 본문에서 찾지 못했습니다.")
+            writer_report["placeholders"]["body_found"] = True
+            run_action(hwp, "Delete", writer_report, "template")
         write_json(report_file, writer_report)
 
-        if page_setup is not None:
+        if page_setup is not None and not recovering:
             writer_report["stage"], writer_report["action"] = "page_setup", "PageSetup"
             write_json(report_file, writer_report)
             try:
@@ -179,12 +212,18 @@ def write_hwp_document(
             style_indexes,
             style_config,
             report_file,
+            recovery,
         )
         write_json(report_file, writer_report)
         save_as_hwpx(hwp, output_file, writer_report, report_file)
         writer_report["status"] = "ready"
         writer_report["finished_at"] = now()
         write_json(report_file, writer_report)
+        if recovery:
+            try:
+                recovery.clear()
+            except OSError as exc:
+                writer_report["warnings"].append(f"자동 재개 사본 정리 실패: {exc}")
         return output_file
     except HwpWriterError as exc:
         writer_report["status"] = "failed"
@@ -201,15 +240,32 @@ def write_hwp_document(
         writer_report["finished_at"] = now()
         raise
     finally:
-        close_excel_clipboard_source(excel, excel_workbook, writer_report)
-        finalize_hwp_resources(
-            temporary_root,
-            hwp,
-            writer_report,
-            keep_open_on_error,
-            keep_open_after_save,
-        )
-        write_json(report_file, writer_report)
+        try:
+            close_excel_clipboard_source(excel, excel_workbook, writer_report)
+            finalize_hwp_resources(temporary_root, hwp, writer_report, keep_open_on_error, keep_open_after_save)
+            write_json(report_file, writer_report)
+        finally:
+            if writer_lock is not None:
+                release_writer_lock(writer_lock)
+
+
+def acquire_writer_lock():
+    import win32event
+
+    lock = win32event.CreateMutex(None, False, r"Local\ResearchHelper.HwpClipboard")
+    if win32event.WaitForSingleObject(lock, 0) not in (0, 128):  # signaled or abandoned
+        lock.Close()
+        raise HwpWriterError("environment", "writer_lock", "다른 한글 작성기가 클립보드를 사용 중입니다.")
+    return lock
+
+
+def release_writer_lock(lock):
+    import win32event
+
+    try:
+        win32event.ReleaseMutex(lock)
+    finally:
+        lock.Close()
 
 
 def check_environment(
@@ -242,6 +298,7 @@ def check_environment(
         "errors": [],
     }
     hwp = None
+    writer_lock = None
     try:
         dispatch_mode = normalize_dispatch_mode(dispatch_mode)
         report["com"]["dispatch_mode"] = dispatch_mode
@@ -249,6 +306,7 @@ def check_environment(
             raise HwpWriterError("environment", "platform", "아래한글 COM writer는 Windows에서만 실행할 수 있습니다.")
         checkpoint_file = Path(report_path).resolve() if report_path else None
         write_checkpoint(report, checkpoint_file)
+        writer_lock = acquire_writer_lock()
         hwp = create_hwp_object(report, checkpoint_file, dispatch_mode)
         set_visible(hwp, visible, report, checkpoint_file)
         write_checkpoint(report, checkpoint_file)
@@ -269,10 +327,14 @@ def check_environment(
         report["finished_at"] = now()
         return report
     finally:
-        if hwp is not None:
-            close_hwp(hwp, report)
-        if report_path:
-            write_json(report_path, report)
+        try:
+            if hwp is not None:
+                close_hwp(hwp, report)
+            if report_path:
+                write_json(report_path, report)
+        finally:
+            if writer_lock is not None:
+                release_writer_lock(writer_lock)
 
 
 def validate_preflight(preflight: Dict[str, Any]) -> None:
@@ -534,11 +596,13 @@ def write_body(
     style_indexes: Dict[str, int] | None = None,
     style_config: Dict[str, Any] | None = None,
     checkpoint_path: Path | None = None,
+    recovery: Recovery | None = None,
 ) -> None:
     tables_by_key = {str(table.get("table_key", "")): table for table in package.get("tables", [])}
     charts_by_key = group_charts(package.get("charts", []))
     sections = select_sections(package, max_sections)
-    for index, section in enumerate(sections, start=1):
+    completed = report.get("sections_written", 0)
+    for index, section in enumerate(sections[completed:], start=completed + 1):
         key = str(section.get("table_key", ""))
         progress = report["progress"] = {"table_key": key, "section": index, "part": 0, "part_count": 0}
         report.update(stage="body", action="start_section")
@@ -606,6 +670,12 @@ def write_body(
             insert_text(hwp, f"출처: 원본 집계표 ({table['source_sheet']}!{table['source_range']})", report)
             run_action(hwp, "BreakPara", report, "body")
         report["sections_written"] += 1
+        if recovery:
+            insert_text(hwp, recovery.marker, report)
+            save_as_hwpx(hwp, recovery.next_snapshot(), report, checkpoint_path, recovery_copy=True)
+            recovery.commit(report, write_json)
+            report["recovery_sections"] = index
+            remove_recovery_marker(hwp, recovery, report)
         write_checkpoint(report, checkpoint_path)
 
 
@@ -1783,10 +1853,16 @@ def run_action(hwp, action: str, report: Dict[str, Any], stage: str) -> bool:
             return False
 
 
-def save_as_hwpx(hwp, output_file: Path, report: Dict[str, Any], checkpoint_path: Path | None = None) -> None:
+def remove_recovery_marker(hwp, recovery, report):
+    if not find_placeholder(hwp, recovery.marker) or not run_action(hwp, "Delete", report, "recovery"):
+        raise HwpWriterError("recovery", "find_marker", "저장된 문항 끝 위치를 한글에서 찾거나 제거하지 못했습니다.")
+
+
+def save_as_hwpx(hwp, output_file: Path, report: Dict[str, Any], checkpoint_path: Path | None = None, *, recovery_copy=False) -> None:
     report["stage"] = "document"
-    report["action"] = "save_as"
-    record_com_step(report, "save_as", "started", path=str(output_file))
+    action = "save_recovery" if recovery_copy else "save_as"
+    report["action"] = action
+    record_com_step(report, action, "started", path=str(output_file))
     write_checkpoint(report, checkpoint_path)
     format_name = "HWPX" if output_file.suffix.lower() == ".hwpx" else "HWP"
     temp_output = Path(tempfile.gettempdir()) / f"report_automation_{time.time_ns()}{output_file.suffix}"
@@ -1816,8 +1892,9 @@ def save_as_hwpx(hwp, output_file: Path, report: Dict[str, Any], checkpoint_path
                     os.replace(pending, output_file)
                 finally:
                     pending.unlink(missing_ok=True)
-                report["document_saved"] = True
-                record_com_step(report, "save_as", "ready", path=str(output_file))
+                if not recovery_copy:
+                    report["document_saved"] = True
+                record_com_step(report, action, "ready", path=str(output_file))
                 write_checkpoint(report, checkpoint_path)
                 try:
                     temp_output.unlink()
@@ -1947,7 +2024,15 @@ def write_json(path: str | Path, value: Dict[str, Any]) -> None:
         with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=target.parent, delete=False) as output:
             pending = Path(output.name)
             output.write(data)
-        os.replace(pending, target)
+        # Windows readers or a sync client may briefly hold the previous version without delete sharing.
+        for attempt in range(6):
+            try:
+                os.replace(pending, target)
+                break
+            except PermissionError:
+                if attempt == 5:
+                    raise
+                time.sleep(0.1 * (attempt + 1))
     finally:
         if pending is not None:
             pending.unlink(missing_ok=True)
@@ -1976,6 +2061,7 @@ def run_cli(argv: List[str] | None = None) -> int:
     parser.add_argument("--table-style-profile")
     parser.add_argument("--style-config")
     parser.add_argument("--page-setup", help="Optional mm page settings JSON; applied to the BODY section only.")
+    parser.add_argument("--recovery", help="Persist completed HWPX sections and resume a matching interrupted run.")
     parser.add_argument("--keep-open-after-save", action="store_true")
     parser.add_argument("--dispatch-mode", choices=DISPATCH_MODES, default="ensure_dispatch")
     parser.add_argument("--check-environment", action="store_true")
@@ -2013,6 +2099,7 @@ def run_cli(argv: List[str] | None = None) -> int:
             args.dispatch_mode,
             args.style_config,
             args.page_setup,
+            args.recovery,
         )
         print(str(output))
         return 0

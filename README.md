@@ -1,6 +1,6 @@
 # ReportAutomation
 
-Current version: `0.0.39`
+Current version: `0.0.40`
 
 `ReportAutomation`은 엑셀 집계표를 기반으로 조사 보고서 작성용 산출물을 자동 생성하는 런처 기반 프로젝트입니다.
 
@@ -417,6 +417,8 @@ HWPX writer는 아래한글 COM을 사용하므로 Windows와 아래한글 설�
 writer의 `--style-config`를 생략하면 기본 JSON을 사용합니다. `--table-style-profile`은 기존 템플릿 표 속성 요약/적용 계획용이며 이름 있는 스타일 프리셋을 대신하지 않습니다. HWPX 작업 사본에 스타일을 등록/갱신하고 HWP 템플릿은 임시 HWPX로 변환해 같은 처리를 합니다. 설정 검증 또는 스타일 등록 실패 시 기본 서식으로 조용히 대체하지 않고 생성 실패를 기록합니다.
 
 런처 CLI에서는 `--output-type "HWPX 보고서" --hwp-template "C:\path\report_template.hwpx" --hwp-style-config "C:\path\custom_style.json"`을 기존 Excel 실행 인자에 추가합니다. 입력 JSON은 선택 실행 파일 `hwp_style_config.json`으로 정규화됩니다. `--hwp-style-preset`만으로 저장된 사용자 서식을 불러오지는 않으며 실제 설정 JSON의 `preset_name`이 우선합니다.
+
+한글 작성이 중단되면 같은 원본, 출력 폴더, 양식, 서식과 문항 범위로 다시 실행하세요. 저장 완료된 문항이 있으면 해당 사본에서 이어서 작성하며, 작업 Excel이나 복구 파일이 바뀌면 재개하지 않습니다. 중간에 작성하던 문항은 처음부터 다시 작성합니다. 완료 전에는 산출 폴더의 `.research-helper-hwp-*` 파일을 유지하세요. 작업을 처음부터 다시 하려면 새 산출 폴더를 선택하세요.
 실사용 환경에서 COM 실행이 지연되면 `writer_report.json`의 `stage`, `action`, `com.current_prog_id`, `com.steps`로 멈춘 지점을 확인합니다.
 
 아래한글 COM 환경만 먼저 확인할 수도 있습니다.
