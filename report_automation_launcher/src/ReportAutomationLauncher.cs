@@ -2428,7 +2428,7 @@ namespace ReportAutomationLauncher
             AddPathRow(input, 0, "Excel 집계표", workbookPathText, "Excel 파일 선택…", BrowseWorkbook);
             var checks = new FlowLayoutPanel { Dock = DockStyle.Fill, AutoSize = true };
             copyWorkbookCheck.Text = "작업 복사본에 저장";
-            keepExcelOpenCheck.Text = "산출 후 Excel 열어두기";
+            keepExcelOpenCheck.Text = "산출 완료 후 Excel 다시 열기";
             checks.Controls.Add(copyWorkbookCheck);
             checks.Controls.Add(keepExcelOpenCheck);
             AddLabel(input, 1, "산출 파일");
@@ -6199,7 +6199,6 @@ namespace ReportAutomationLauncher
             }
             string workbookToOpen = options.WorkbookPath;
             bool legacyFormat = Path.GetExtension(workbookToOpen).Equals(".xls", StringComparison.OrdinalIgnoreCase);
-            bool originalEnableEvents = true;
             log("추가기능: " + options.AddinPath);
 
             object excel = null;
@@ -6227,7 +6226,6 @@ namespace ReportAutomationLauncher
                 {
                     // The cell export can exceed the 65,536 rows of an Excel 97–2003 sheet.
                     int previousSecurity = xl.AutomationSecurity;
-                    originalEnableEvents = xl.EnableEvents;
                     xl.EnableEvents = false;
                     try
                     {
@@ -6278,36 +6276,10 @@ namespace ReportAutomationLauncher
                 WriteLauncherConfig(workbookToOpen, options);
                 log("저장 완료");
 
-                if (options.KeepExcelOpen)
-                {
-                    try
-                    {
-                        dynamic addinBook = addin;
-                        addinBook.Close(false);
-                        addin = null;
-                    }
-                    catch
-                    {
-                    }
-                    xl.DisplayAlerts = true;
-                    xl.Visible = true;
-                    wb.Activate();
-                    if (legacyFormat) xl.EnableEvents = originalEnableEvents;
-                    log("Excel 창을 열어둡니다.");
-                    workbook = null;
-                    excel = null;
-                }
-                else
-                {
-                    dynamic addinBook = addin;
-                    addinBook.Close(false);
-                    addin = null;
-                    wb.Close(true);
-                    workbook = null;
-                    xl.Quit();
-                    excel = null;
-                    log("Excel을 종료했습니다.");
-                }
+                // QA and the HWP writer need to read the saved work file without an Excel write lock.
+                wb.Close(false);
+                ReleaseComForLauncher(workbook);
+                workbook = null;
             }
             finally
             {
@@ -6320,6 +6292,7 @@ namespace ReportAutomationLauncher
                 ReleaseComForLauncher(excel);
             }
 
+            log("산출 Excel 작업 파일을 닫았습니다.");
             return workbookToOpen;
         }
 
@@ -6443,19 +6416,34 @@ namespace ReportAutomationLauncher
             log("1단계: 원본 집계표에서 Excel 산출 시트를 자동 생성합니다.");
             string workbookPath = AutomationRunner.Run(options, log);
             options.LastGeneratedWorkbookPath = workbookPath;
-            log("2단계: 생성된 산출 시트에서 분석문·표를 읽어 QA를 검사합니다.");
-            TryGenerateReportPackage(workbookPath, options, log);
-            if (hwp)
+            try
             {
-                RequireHwpPreflight(options);
-                log("3단계: QA를 통과한 산출 데이터로 한글 보고서를 만듭니다.");
-                TryGenerateHwpDocument(options, log);
-                if (string.IsNullOrWhiteSpace(options.LastHwpOutputPath))
-                    throw new InvalidOperationException("한글 보고서를 저장하지 못했습니다. 진행 기록과 한글 생성 기록을 확인하세요.");
+                log("2단계: 생성된 산출 시트에서 분석문·표를 읽어 QA를 검사합니다.");
+                TryGenerateReportPackage(workbookPath, options, log);
+                if (hwp)
+                {
+                    RequireHwpPreflight(options);
+                    log("3단계: QA를 통과한 산출 데이터로 한글 보고서를 만듭니다.");
+                    TryGenerateHwpDocument(options, log);
+                    if (string.IsNullOrWhiteSpace(options.LastHwpOutputPath))
+                        throw new InvalidOperationException("한글 보고서를 저장하지 못했습니다. 진행 기록과 한글 생성 기록을 확인하세요.");
+                }
+                if (options.GenerateDraftText)
+                    options.LastDraftTextPath = TryGenerateDraft(workbookPath, log);
+                AutomationRunner.WriteLauncherConfig(workbookPath, options);
             }
-            if (options.GenerateDraftText)
-                options.LastDraftTextPath = TryGenerateDraft(workbookPath, log);
-            AutomationRunner.WriteLauncherConfig(workbookPath, options);
+            finally
+            {
+                if (options.KeepExcelOpen)
+                {
+                    try
+                    {
+                        Process.Start(new ProcessStartInfo(workbookPath) { UseShellExecute = true });
+                        log("산출 작업을 마친 뒤 저장된 Excel 파일을 다시 열었습니다.");
+                    }
+                    catch (Exception ex) { log("산출 Excel 다시 열기 실패 (저장 파일은 유지): " + ex.Message); }
+                }
+            }
         }
 
         private static void RequireHwpTemplate(string path)
@@ -6496,7 +6484,10 @@ namespace ReportAutomationLauncher
         private static Dictionary<string, object> ReadWorkflowReport(string path)
         {
             var serializer = new JavaScriptSerializer { MaxJsonLength = int.MaxValue };
-            var report = serializer.DeserializeObject(File.ReadAllText(path, System.Text.Encoding.UTF8)) as Dictionary<string, object>;
+            Dictionary<string, object> report;
+            using (var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete))
+            using (var reader = new StreamReader(stream, System.Text.Encoding.UTF8))
+                report = serializer.DeserializeObject(reader.ReadToEnd()) as Dictionary<string, object>;
             if (report == null) throw new InvalidOperationException("검사 결과가 비어 있습니다: " + path);
             return report;
         }
@@ -6945,11 +6936,8 @@ namespace ReportAutomationLauncher
                 {
                     var stdoutTask = process.StandardOutput.ReadToEndAsync();
                     var stderrTask = process.StandardError.ReadToEndAsync();
-                    int timeout = options.HwpMaxSections == 0 ? 1800000 : Math.Max(1, Math.Min(options.HwpMaxSections, 10)) * 180000;
-                    if (!process.WaitForExit(timeout))
+                    if (!WaitForHwpWriter(process, reportPath, log))
                     {
-                        try { process.Kill(); } catch { }
-                        log("HWPX 생성 시간이 길어져 이번 실행에서는 중단했습니다.");
                         options.LastHwpWriterReportPath = File.Exists(reportPath) ? reportPath : "";
                         return;
                     }
@@ -6963,8 +6951,11 @@ namespace ReportAutomationLauncher
                     }
                 }
 
-                options.LastHwpOutputPath = File.Exists(outputPath) ? outputPath : "";
                 options.LastHwpWriterReportPath = File.Exists(reportPath) ? reportPath : "";
+                var result = ReadWorkflowReport(reportPath);
+                object saved;
+                options.LastHwpOutputPath = GetString(result, "status") == "ready" && result.TryGetValue("document_saved", out saved) &&
+                    object.Equals(saved, true) && File.Exists(outputPath) ? outputPath : "";
                 if (!string.IsNullOrWhiteSpace(options.LastHwpOutputPath))
                 {
                     log("HWPX 초본 저장: " + options.LastHwpOutputPath);
@@ -6982,6 +6973,67 @@ namespace ReportAutomationLauncher
             {
                 log("HWPX 생성 실패: " + ex.Message);
             }
+        }
+
+        internal static string HwpProgressText(Dictionary<string, object> report)
+        {
+            object value;
+            var progress = report.TryGetValue("progress", out value) ? value as Dictionary<string, object> : null;
+            string status = "한글: " + GetString(report, "sections_written") + "/" + GetString(report, "section_count_selected") + "문항 완료";
+            if (progress != null && GetString(report, "action") != "save_as")
+            {
+                status += " · " + GetString(progress, "table_key");
+                if (GetString(progress, "part") != "0") status += " · 분할 " + GetString(progress, "part") + "/" + GetString(progress, "part_count");
+                if (GetString(progress, "cell_count") != "0" && GetString(progress, "cells_done").Length > 0)
+                    status += " · 셀 " + GetString(progress, "cells_done") + "/" + GetString(progress, "cell_count");
+            }
+            return status + " · " + GetString(report, "stage") + "/" + GetString(report, "action");
+        }
+
+        internal static bool WaitForHwpWriter(Process process, string reportPath, Action<string> log, int idleSeconds = 600, int pollMs = 1000)
+        {
+            var idle = Stopwatch.StartNew();
+            var lastLog = Stopwatch.StartNew();
+            DateTime stamp = DateTime.UtcNow;
+            Dictionary<string, object> last = null;
+            while (!process.WaitForExit(pollMs))
+            {
+                DateTime updated = File.GetLastWriteTimeUtc(reportPath);
+                if (updated > stamp)
+                {
+                    try
+                    {
+                        last = ReadWorkflowReport(reportPath);
+                        stamp = updated;
+                        idle.Restart();
+                        if (lastLog.Elapsed.TotalSeconds >= 15)
+                        {
+                            log(HwpProgressText(last));
+                            lastLog.Restart();
+                        }
+                    }
+                    catch (IOException) { } // A checkpoint can be replaced between stat and open.
+                }
+                if (idle.Elapsed.TotalSeconds < idleSeconds) continue;
+                try { process.Kill(); }
+                catch (InvalidOperationException) { if (process.HasExited) return true; throw; }
+                if (!process.WaitForExit(5000)) throw new IOException("중단된 한글 작성 프로세스의 종료를 확인하지 못했습니다.");
+
+                if (last == null && File.Exists(reportPath)) last = ReadWorkflowReport(reportPath);
+                last = last ?? new Dictionary<string, object>();
+                string message = "한글 작성 진행이 " + idleSeconds + "초 동안 갱신되지 않아 중단했습니다. " + HwpProgressText(last);
+                last["status"] = "timed_out";
+                last["finished_at"] = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss");
+                last["document_saved"] = false;
+                object errors;
+                var previous = last.TryGetValue("errors", out errors) ? errors as object[] : null;
+                last["errors"] = (previous ?? new object[0]).Concat(new[] { message }).ToArray();
+                var serializer = new JavaScriptSerializer { MaxJsonLength = int.MaxValue };
+                File.WriteAllText(reportPath, serializer.Serialize(last), System.Text.Encoding.UTF8);
+                log(message);
+                return false;
+            }
+            return true;
         }
 
         private static void PrepareHwpStyleConfig(LauncherOptions options)
@@ -7353,8 +7405,8 @@ namespace ReportAutomationLauncher
 
     internal static class BannerInspector
     {
-        private const int MaxPreviewRows = 5000;
-        private const int MaxPreviewColumns = 300;
+        private const int PreviewChunkCells = 200000;
+        private const long MaxPreviewCells = 8000000;
 
         public static List<string> ReadBanners(string workbookPath)
         {
@@ -7561,6 +7613,22 @@ namespace ReportAutomationLauncher
             check(blocks.Count == 1 && blocks[0].BodyRow == 3, "numeric year labels before case-count column");
             var index = snapshot(new[] { new object[] { "INDEX" }, new object[] { "[표 1] 서비스", "GO" }, new object[] { "사례수에 관한 안내" } });
             check(DetectBlocks(index).Count == 0, "contents and narrative mentions are not tables");
+            var large = ReadSnapshot(4998, 301, 7521, 303, (first, last) =>
+            {
+                var values = Array.CreateInstance(typeof(object), new[] { last - first + 1, 3 }, new[] { 1, 1 });
+                for (int row = first; row <= last; row++)
+                {
+                    int offset = (row - 4998) % 5, local = row - first + 1;
+                    if (offset == 0) values.SetValue("표 " + ((row - 4998) / 5 + 1) + " 이용", local, 1);
+                    if (offset == 1) { values.SetValue("구분", local, 1); values.SetValue("N", local, 2); values.SetValue("%", local, 3); }
+                    if (offset == 2 || offset == 3) { values.SetValue("이용", local, 1); values.SetValue(10, local, 2); values.SetValue(60, local, 3); }
+                }
+                return values;
+            }, 4);
+            var largePreviews = new List<TablePreview>();
+            foreach (TableBlock block in DetectBlocks(large)) AddTablePreview(largePreviews, "Large", block);
+            check(largePreviews.Count == 505 && largePreviews[0].RowCount == 3 && largePreviews[504].ColCount == 3 && largePreviews[504].Row == 7518,
+                "large preview retains table boundaries across chunks, row 5000, column 300 and table 500");
         }
 
         private static bool IsNumericCell(string text)
@@ -7698,11 +7766,6 @@ namespace ReportAutomationLauncher
 
         private static void AddTablePreview(List<TablePreview> tables, string sheetName, TableBlock block)
         {
-            if (tables.Count >= 500)
-            {
-                return;
-            }
-
             var preview = new TablePreview();
             preview.TableKey = "T" + (tables.Count + 1).ToString("0000");
             preview.SheetName = sheetName;
@@ -7731,28 +7794,12 @@ namespace ReportAutomationLauncher
                     return ws;
                 }
             }
-            try
-            {
-                dynamic active = workbook.ActiveSheet;
-                if (active != null && HasTableTitles(active))
-                {
-                    return active;
-                }
-            }
-            catch
-            {
-            }
-            try
-            {
-                dynamic sheet1 = workbook.Worksheets["Sheet1"];
-                if (HasTableTitles(sheet1))
-                {
-                    return sheet1;
-                }
-            }
-            catch
-            {
-            }
+            dynamic active = workbook.ActiveSheet;
+            if (active != null && HasTableTitles(active)) return active;
+            dynamic sheet1 = null;
+            try { sheet1 = workbook.Worksheets["Sheet1"]; }
+            catch (COMException) { }
+            if (sheet1 != null && HasTableTitles(sheet1)) return sheet1;
             foreach (dynamic ws in workbook.Worksheets)
             {
                 if (!IsGeneratedSheet(Convert.ToString(ws.Name)) && HasTableTitles(ws))
@@ -7765,16 +7812,10 @@ namespace ReportAutomationLauncher
 
         private static bool HasTableTitles(dynamic worksheet)
         {
-            try
-            {
-                if (IsGeneratedSheet(Convert.ToString(worksheet.Name)) || string.Equals(Convert.ToString(worksheet.Name), "INDEX", StringComparison.OrdinalIgnoreCase) || Convert.ToString(worksheet.Name) == "목차") return false;
-                SheetSnapshot sheet;
-                return TryReadSheetSnapshot(worksheet, out sheet) && DetectBlocks(sheet).Count > 0;
-            }
-            catch
-            {
-            }
-            return false;
+            if (IsGeneratedSheet(Convert.ToString(worksheet.Name)) || string.Equals(Convert.ToString(worksheet.Name), "INDEX", StringComparison.OrdinalIgnoreCase) || Convert.ToString(worksheet.Name) == "목차") return false;
+            if (Convert.ToInt32(worksheet.Type) != -4167) return false; // Skip chart or other non-worksheet tabs.
+            SheetSnapshot sheet;
+            return TryReadSheetSnapshot(worksheet, out sheet) && DetectBlocks(sheet).Count > 0;
         }
 
         private static string ExcelColumnName(int column)
@@ -7821,37 +7862,31 @@ namespace ReportAutomationLauncher
         private static bool TryReadSheetSnapshot(dynamic ws, out SheetSnapshot sheet)
         {
             sheet = null;
-            try
-            {
-                dynamic used = ws.UsedRange;
-                int firstRow = Convert.ToInt32(used.Row);
-                int firstCol = Convert.ToInt32(used.Column);
-                int lastRow = firstRow + Convert.ToInt32(used.Rows.Count) - 1;
-                int lastCol = firstCol + Convert.ToInt32(used.Columns.Count) - 1;
-                if (lastRow > MaxPreviewRows)
-                {
-                    lastRow = MaxPreviewRows;
-                }
-                if (lastCol > MaxPreviewColumns)
-                {
-                    lastCol = MaxPreviewColumns;
-                }
-                if (lastRow < firstRow || lastCol < 1)
-                {
-                    return false;
-                }
+            dynamic used = ws.UsedRange;
+            int firstRow = Convert.ToInt32(used.Row);
+            int firstCol = Convert.ToInt32(used.Column);
+            dynamic firstCell = ws.Cells[firstRow, firstCol];
+            // Find cells with values or formulas rather than counting a formatted-but-empty tail.
+            dynamic lastValueRow = used.Find("*", firstCell, -4123, 2, 1, 2, false, false, false);
+            if (lastValueRow == null) return false;
+            dynamic lastValueCol = used.Find("*", firstCell, -4123, 2, 2, 2, false, false, false);
+            int lastRow = Convert.ToInt32(lastValueRow.Row);
+            int lastCol = Convert.ToInt32(lastValueCol.Column);
+            int columns = lastCol - firstCol + 1;
+            if ((long)(lastRow - firstRow + 1) * columns > MaxPreviewCells)
+                throw new InvalidOperationException(Convert.ToString(ws.Name) + ": 미리보기 범위가 너무 큽니다. 표가 있는 범위를 별도 시트에 모아 다시 시도하세요.");
+            sheet = ReadSnapshot(firstRow, firstCol, lastRow, lastCol,
+                (start, end) => (object)ws.Range[ws.Cells[start, firstCol], ws.Cells[end, lastCol]].Value2,
+                Math.Max(1, PreviewChunkCells / columns));
+            return true;
+        }
 
-                int rowCount = lastRow - firstRow + 1;
-                int colCount = lastCol - firstCol + 1;
-                dynamic limitedRange = ws.Range[ws.Cells[firstRow, firstCol], ws.Cells[lastRow, lastCol]];
-                object values = limitedRange.Value2;
-                sheet = new SheetSnapshot(firstRow, firstCol, rowCount, colCount, values);
-                return true;
-            }
-            catch
-            {
-                return false;
-            }
+        private static SheetSnapshot ReadSnapshot(int firstRow, int firstCol, int lastRow, int lastCol, Func<int, int, object> readRows, int chunkRows)
+        {
+            var chunks = new List<object>();
+            for (int start = firstRow; start <= lastRow; start += chunkRows)
+                chunks.Add(readRows(start, Math.Min(lastRow, start + chunkRows - 1)));
+            return new SheetSnapshot(firstRow, firstCol, lastRow - firstRow + 1, lastCol - firstCol + 1, chunks.ToArray(), chunkRows);
         }
 
         private static int FindTotalRow(SheetSnapshot sheet, int startRow, int endRow)
@@ -8095,15 +8130,20 @@ namespace ReportAutomationLauncher
             private readonly int firstCol;
             private readonly int rowCount;
             private readonly int colCount;
-            private readonly object values;
+            private readonly object[] chunks;
+            private readonly int chunkRows;
 
             public SheetSnapshot(int firstRow, int firstCol, int rowCount, int colCount, object values)
+                : this(firstRow, firstCol, rowCount, colCount, new[] { values }, rowCount) { }
+
+            public SheetSnapshot(int firstRow, int firstCol, int rowCount, int colCount, object[] chunks, int chunkRows)
             {
                 this.firstRow = firstRow;
                 this.firstCol = firstCol;
                 this.rowCount = rowCount;
                 this.colCount = colCount;
-                this.values = values;
+                this.chunks = chunks;
+                this.chunkRows = chunkRows;
             }
 
             public int FirstRow { get { return firstRow; } }
@@ -8120,15 +8160,12 @@ namespace ReportAutomationLauncher
                     return "";
                 }
 
-                object value = null;
+                object values = chunks[(r - 1) / chunkRows];
+                object value = values;
                 Array array = values as Array;
                 if (array != null && array.Rank == 2)
                 {
-                    value = array.GetValue(r, c);
-                }
-                else if (rowCount == 1 && colCount == 1)
-                {
-                    value = values;
+                    value = array.GetValue((r - 1) % chunkRows + 1, c);
                 }
                 return Convert.ToString(value ?? "").Trim();
             }

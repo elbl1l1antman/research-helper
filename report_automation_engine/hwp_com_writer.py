@@ -10,12 +10,14 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import os
 import platform
 import shutil
 import sys
 import tempfile
 import time
 from datetime import datetime
+from itertools import groupby
 from pathlib import Path
 from typing import Any, Dict, List
 
@@ -537,9 +539,12 @@ def write_body(
     charts_by_key = group_charts(package.get("charts", []))
     sections = select_sections(package, max_sections)
     for index, section in enumerate(sections, start=1):
+        key = str(section.get("table_key", ""))
+        progress = report["progress"] = {"table_key": key, "section": index, "part": 0, "part_count": 0}
+        report.update(stage="body", action="start_section")
+        write_checkpoint(report, checkpoint_path)
         if index > 1:
             run_action(hwp, "BreakPage", report, "body")
-        key = str(section.get("table_key", ""))
         title = str(section.get("title") or key or f"문항 {index}")
         if style_indexes is not None:
             apply_named_style(hwp, require_style_index(style_indexes, "보고서 본문1"), report, "보고서 본문1")
@@ -583,7 +588,11 @@ def write_body(
             if len(parts) > 1:
                 report["warnings"].append(f"{key}: 본문 폭에 맞춰 {len(parts)}개 표로 가로 분할했습니다. 보기/BASE 열은 반복됩니다.")
             for part in parts:
-                write_table_part(hwp, part, title, report, table_style_profile, excel_workbook, style_indexes, style_config, index)
+                progress.update(part=part.get("part_index", 1), part_count=len(parts), row=0, col=0, cells_done=0, cell_count=0, phase="")
+                report.update(stage="table", action="start_part")
+                write_checkpoint(report, checkpoint_path)
+                write_table_part(hwp, part, title, report, table_style_profile, excel_workbook, style_indexes, style_config, index, checkpoint_path)
+                write_checkpoint(report, checkpoint_path)
             report["source_tables_written"] = report.get("source_tables_written", 0) + 1
         else:
             report["warnings"].append(f"삽입표 데이터 없음: {key}")
@@ -600,7 +609,7 @@ def write_body(
         write_checkpoint(report, checkpoint_path)
 
 
-def write_table_part(hwp, table, title, report, profile, workbook, style_indexes, style_config, index):
+def write_table_part(hwp, table, title, report, profile, workbook, style_indexes, style_config, index, checkpoint_path=None):
     if int(table.get("part_index") or 1) > 1:
         run_action(hwp, "BreakPage", report, "body")
     if style_indexes is not None:
@@ -610,10 +619,10 @@ def write_table_part(hwp, table, title, report, profile, workbook, style_indexes
         caption += f" [{table['part_index']}/{table['part_count']}]"
     insert_text(hwp, caption, report)
     run_action(hwp, "BreakPara", report, "body")
-    inserted = insert_clipboard_table(hwp, workbook, table, report, profile, style_indexes, style_config)
+    inserted = insert_clipboard_table(hwp, workbook, table, report, profile, style_indexes, style_config, checkpoint_path)
     if not inserted:
         inserted = insert_hwp_table(hwp, table_rows_for_hwp(table), report, profile,
-                                    table.get("merged_ranges", []), table, style_indexes, style_config)
+                                    table.get("merged_ranges", []), table, style_indexes, style_config, checkpoint_path)
         report["table_results"].append(table_result(table, "contract_fallback", "tbl" if inserted else "",
             "applied" if inserted else "failed", report.pop("clipboard_failure", "")))
     if not inserted:
@@ -731,6 +740,7 @@ def insert_hwp_table(
     table: Dict[str, Any] | None = None,
     style_indexes: Dict[str, int] | None = None,
     style_config: Dict[str, Any] | None = None,
+    checkpoint_path: Path | None = None,
 ) -> bool:
     """Try to create a real HWP table. Fall back to text table when COM differs."""
 
@@ -766,8 +776,11 @@ def insert_hwp_table(
             return False
         control = hwp.ParentCtrl
         final_cell_styles = bool(table and "header_row_count" in table and style_config and style_indexes)
+        next_checkpoint = time.monotonic()
         for row_idx, row in enumerate(rows):
             for col_idx, value in enumerate(row):
+                next_checkpoint = record_cell_progress(report, checkpoint_path, next_checkpoint,
+                    row_idx, col_idx, row_idx * len(row) + col_idx, len(rows) * len(row), "fill")
                 role = table_cell_role(table or {}, row_idx, col_idx)
                 style_name = style_name_for_cell_role(role, style_config)
                 if style_indexes is not None and not final_cell_styles:
@@ -790,7 +803,7 @@ def insert_hwp_table(
         verify_table_width(control, table or {})
         if final_cell_styles:
             # Merging can discard cell header flags; style the surviving anchors once.
-            apply_table_matrix_styles(hwp, table, style_indexes, style_config, report)
+            apply_table_matrix_styles(hwp, table, style_indexes, style_config, report, checkpoint_path)
         leave_hwp_table(hwp, control, report)
         report["tables_written"] += 1
         return True
@@ -1381,6 +1394,7 @@ def insert_clipboard_table(
     profile: Dict[str, Any] | None,
     style_indexes: Dict[str, int] | None = None,
     style_config: Dict[str, Any] | None = None,
+    checkpoint_path: Path | None = None,
 ) -> bool:
     if workbook is None or not table.get("cell_contract"):
         report["clipboard_failure"] = "Excel source unavailable" if table.get("cell_contract") else "legacy table contract"
@@ -1388,6 +1402,8 @@ def insert_clipboard_table(
     editing_started = False
     scratch = None
     try:
+        report.update(stage="table", action="prepare_clipboard")
+        write_checkpoint(report, checkpoint_path)
         if table.get("layout_prepared"):
             scratch = workbook.Application.Workbooks.Add()
             source_range = prepare_layout_range(scratch, table, style_config)
@@ -1408,6 +1424,8 @@ def insert_clipboard_table(
 
         before = snapshot_hwp_controls(hwp)
         disable_picture_paste(hwp, report)
+        report.update(stage="table", action="Paste")
+        write_checkpoint(report, checkpoint_path)
         paste_result = run_action(hwp, "Paste", report, "table")
         time.sleep(0.5)
         after = snapshot_hwp_controls(hwp)
@@ -1450,7 +1468,7 @@ def insert_clipboard_table(
 
         editing_started = True
         if style_indexes is not None and style_config is not None:
-            apply_table_matrix_styles(hwp, table, style_indexes, style_config, report)
+            apply_table_matrix_styles(hwp, table, style_indexes, style_config, report, checkpoint_path)
         else:
             apply_table_style_after_paste(hwp, profile, report)
         leave_hwp_table(hwp, control, report)
@@ -1486,23 +1504,29 @@ def prepare_layout_range(workbook, table, style_config):
     area.Font.Size = body_style["font_size_pt"]
     area.WrapText = True
     widths = table["column_widths_hwpunit"]
+    measured_widths = {}
     for index, width in enumerate(widths, 1):
         column = sheet.Columns.Item(index)
-        low, high = 0.1, 255
-        # Excel column units depend on the Normal font. Measure actual points instead.
-        for _ in range(12):
-            middle = (low + high) / 2
-            column.ColumnWidth = middle
-            if column.Width <= width / 100:
-                low = middle
-            else:
-                high = middle
-        column.ColumnWidth = low
+        if width not in measured_widths:
+            low, high = 0.1, 255
+            # The same workbook Normal font gives equal measured widths for equal target widths.
+            for _ in range(12):
+                middle = (low + high) / 2
+                column.ColumnWidth = middle
+                if column.Width <= width / 100:
+                    low = middle
+                else:
+                    high = middle
+            measured_widths[width] = low
+        column.ColumnWidth = measured_widths[width]
     for merged in table.get("merged_ranges", []):
         row, col = merged["row"], merged["col"]
         sheet.Range(sheet.Cells(row, col), sheet.Cells(row + merged["rowspan"] - 1, col + merged["colspan"] - 1)).Merge()
-    for index, height in enumerate(compact_row_heights(table, style_config), 1):
-        sheet.Rows.Item(index).RowHeight = height
+    start = 1
+    for height, group in groupby(compact_row_heights(table, style_config)):
+        end = start + sum(1 for _ in group) - 1
+        sheet.Range(sheet.Cells(start, 1), sheet.Cells(end, 1)).EntireRow.RowHeight = height
+        start = end + 1
     return area
 
 
@@ -1636,6 +1660,7 @@ def apply_table_matrix_styles(
     style_indexes: Dict[str, int],
     style_config: Dict[str, Any],
     report: Dict[str, Any],
+    checkpoint_path: Path | None = None,
 ) -> None:
     rows = table_rows_for_hwp(table)
     if not rows:
@@ -1657,7 +1682,10 @@ def apply_table_matrix_styles(
             cells.append((row_index, col_index, value, len(row), int(cell.get("rowspan") or 1), int(cell.get("colspan") or 1)))
     visited_lists = set()
     visual_header = table.get("visual_header_row")
+    next_checkpoint = time.monotonic()
     for position, (row_index, col_index, value, col_count, rowspan, colspan) in enumerate(cells):
+        next_checkpoint = record_cell_progress(report, checkpoint_path, next_checkpoint,
+            row_index, col_index, position, len(cells), "style")
         visited_lists.add(int(hwp.GetPos()[0]))
         style_name = style_name_for_cell_role(table_cell_role(table, row_index, col_index), style_config)
         # Select the cell's text list, not the cell block (Delete on a block is not text deletion).
@@ -1698,6 +1726,16 @@ def apply_table_matrix_styles(
                     break
             else:
                 raise HwpWriterError("style", "TableRightCell", "병합 셀 이동이 반복되어 표 서식 적용을 중단합니다.")
+
+
+def record_cell_progress(report, path, due, row, col, position, total, phase):
+    progress = report.setdefault("progress", {})
+    progress.update(row=row + 1, col=col + 1, cells_done=position, cell_count=total, phase=phase)
+    if path and (current := time.monotonic()) >= due:
+        report.update(stage="style" if phase == "style" else "table", action="write_cells")
+        write_checkpoint(report, path)
+        return current + 5
+    return due
 
 
 def table_result(table: Dict[str, Any], insert_mode: str, ctrl_id: str, style_status: str, fallback_reason: str) -> Dict[str, Any]:
@@ -1771,7 +1809,13 @@ def save_as_hwpx(hwp, output_file: Path, report: Dict[str, Any], checkpoint_path
                 continue
             if temp_output.exists():
                 output_file.parent.mkdir(parents=True, exist_ok=True)
-                shutil.copy2(temp_output, output_file)
+                # The launcher may terminate a stalled writer; never expose a half-copied final file.
+                pending = output_file.with_name(f".{output_file.name}.{time.time_ns()}.tmp")
+                try:
+                    shutil.copy2(temp_output, pending)
+                    os.replace(pending, output_file)
+                finally:
+                    pending.unlink(missing_ok=True)
                 report["document_saved"] = True
                 record_com_step(report, "save_as", "ready", path=str(output_file))
                 write_checkpoint(report, checkpoint_path)
@@ -1895,8 +1939,18 @@ def load_json(path: str | Path) -> Dict[str, Any]:
 
 
 def write_json(path: str | Path, value: Dict[str, Any]) -> None:
-    Path(path).parent.mkdir(parents=True, exist_ok=True)
-    Path(path).write_text(json.dumps(value, ensure_ascii=False, indent=2), encoding="utf-8")
+    target = Path(path)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    data = json.dumps(value, ensure_ascii=False, indent=2)
+    pending = None
+    try:
+        with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=target.parent, delete=False) as output:
+            pending = Path(output.name)
+            output.write(data)
+        os.replace(pending, target)
+    finally:
+        if pending is not None:
+            pending.unlink(missing_ok=True)
 
 
 def now() -> str:
