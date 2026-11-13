@@ -1,6 +1,6 @@
 # Versioning
 
-Current version: `0.0.42`
+Current version: `0.0.43`
 
 ## Policy
 
@@ -16,6 +16,8 @@ Current version: `0.0.42`
   - Major: breaking file format, CLI, template, or workflow change.
 
 ## Current Baseline
+
+`0.0.43` documents the chart review and HWPX EMF integration plans. No executable changes.
 
 `0.0.42` adds two editable HWPX survey starters and three role-based body and
 table presets, including a Malgun Gothic option.

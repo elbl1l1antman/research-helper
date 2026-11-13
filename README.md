@@ -1,6 +1,8 @@
 # ReportAutomation
 
-Current version: `0.0.42`
+Current version: `0.0.43`
+
+`0.0.43` records the chart development plans; the standalone executable is unchanged from `0.0.42`.
 
 For editable HWPX starters and body/table presets, see the [HWPX preset guide](docs/hwp_reference_presets.md).
 
