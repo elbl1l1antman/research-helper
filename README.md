@@ -1,8 +1,8 @@
 # ReportAutomation
 
-Current version: `0.0.47`
+Current version: `0.0.48`
 
-`0.0.47` adds [HWPX survey chart insertion with verified EMF storage](docs/survey_chart_style.md).
+`0.0.48` stabilizes [HWPX survey chart and split-table output](docs/survey_chart_style.md).
 
 For editable HWPX starters and body/table presets, see the [HWPX preset guide](docs/hwp_reference_presets.md).
 

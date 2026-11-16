@@ -267,7 +267,8 @@ def survey_chart_plan(package):
     for key in dict.fromkeys((*sections, *tables, *candidates)):
         section, table = sections.get(key, {}), tables.get(key, {})
         title = section.get('title') or table.get('title') or key or '차트'
-        if any(_key(t) in PROFILE_TITLES for t in (title, table.get('title'), table.get('table_type'))):
+        if any(_key(re.split(r'[（(]', str(t or ''), maxsplit=1)[0]) in PROFILE_TITLES
+               for t in (title, table.get('title'), table.get('table_type'))):
             continue
         entry, reason = _representative(candidates[key], table)
         if not entry:

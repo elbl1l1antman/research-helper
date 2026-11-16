@@ -32,6 +32,47 @@ def test_figure_is_written_after_narrative_and_before_table(monkeypatch):
     assert events == ['narrative', ('figure', 'A'), 'table']
 
 
+@pytest.mark.parametrize('has_emf,parts,expect_break', [(True, 2, True), (True, 1, False), (False, 2, False)])
+def test_page_break_before_split_table_only_with_inserted_emf(monkeypatch, has_emf, parts, expect_break):
+    events = []
+    monkeypatch.setattr(writer, 'insert_text', lambda *_: None)
+    monkeypatch.setattr(writer, 'run_action', lambda _, action, *__: events.append(action) or True)
+    monkeypatch.setattr(writer, 'insert_narrative_blocks', lambda *_: None)
+    monkeypatch.setattr(writer, 'current_body_width', lambda *_: 40000)
+    monkeypatch.setattr(writer, 'resolve_table_metadata', lambda *_: {'unit': '%', 'base_label': '전체'})
+    monkeypatch.setattr(writer, 'format_table_display', lambda table, _: table)
+    monkeypatch.setattr(writer, 'plan_table_parts', lambda *_: [dict(part_index=i) for i in range(1, parts + 1)])
+    monkeypatch.setattr(writer, 'prepare_report_table', lambda part: dict(part, header_repeat_warning=''))
+    monkeypatch.setattr(writer, 'write_table_part', lambda *args: events.append('table'))
+    package = {'sections': [{'table_key': 'A'}], 'tables': [{'table_key': 'A', 'matrix': [[{}]]}]}
+
+    def write_figure(*_):
+        events.append('figure')
+        return has_emf
+
+    writer.write_body(None, package, {'sections_written': 0, 'warnings': []}, write_figure=write_figure)
+    assert ('BreakPage' in events[events.index('figure') + 1:events.index('table')]) == expect_break
+
+
+def test_source_text_does_not_reapply_named_style_after_paginated_table(monkeypatch):
+    events = []
+    monkeypatch.setattr(writer, 'insert_text', lambda _, text, __: events.append(text))
+    monkeypatch.setattr(writer, 'run_action', lambda *_: True)
+    monkeypatch.setattr(writer, 'insert_narrative_blocks', lambda *_: None)
+    monkeypatch.setattr(writer, 'current_body_width', lambda *_: 40000)
+    monkeypatch.setattr(writer, 'apply_named_style', lambda *_: events.append('style'))
+    monkeypatch.setattr(writer, 'write_table_part', lambda *_: events.append('table'))
+    package = {'sections': [{'table_key': 'A', 'title': '문항'}],
+               'tables': [{'table_key': 'A', 'source_sheet': 'Sheet1', 'source_range': 'A1:C30'}]}
+    writer.write_body(None, package, {'sections_written': 0}, style_indexes={'보고서 본문1': 1})
+    assert events == ['style', '문항', 'table', '출처: 원본 집계표 (Sheet1!A1:C30)']
+
+
+def test_profile_cross_tab_is_not_a_chart_candidate():
+    package = {'sections': [{'table_key': 'A', 'title': '응답자 특성(배너 교차 검토)'}]}
+    assert survey_chart_plan(package) == []
+
+
 @pytest.mark.parametrize('prefix', ['', '3-2', ' 3', '1000'])
 def test_invalid_figure_prefix(prefix):
     with pytest.raises(ValueError, match='앞자리'):

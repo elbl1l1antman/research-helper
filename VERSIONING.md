@@ -1,6 +1,6 @@
 # Versioning
 
-Current version: `0.0.47`
+Current version: `0.0.48`
 
 ## Policy
 
@@ -16,6 +16,8 @@ Current version: `0.0.47`
   - Major: breaking file format, CLI, template, or workflow change.
 
 ## Current Baseline
+
+`0.0.48` avoids a Hancom style call after paginated tables, starts split tables on a fresh page after an EMF chart, and excludes respondent-profile cross-tabs from chart output.
 
 `0.0.47` inserts survey charts into HWPX as verified original EMFs, preserving caption slots and chart state across recovery.
 

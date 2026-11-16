@@ -659,6 +659,7 @@ def prepare_hwp_charts(package, max_sections, directory, prefix, style_path, rep
                             reason=reason, sha256=sha256(emf.read_bytes()).hexdigest() if emf else None))
         if reason:
             report['warnings'].append(f'<그림 {number}> {title}: {reason}')
+        return emf is not None
 
     def verify(path):
         if results:
@@ -701,8 +702,7 @@ def write_body(
         insert_narrative_blocks(hwp, section, report, style_indexes, style_config)
         run_action(hwp, "BreakPara", report, "body")
 
-        if write_figure is not None:
-            write_figure(hwp, key)
+        figure_inserted = write_figure is not None and write_figure(hwp, key)
 
         table = tables_by_key.get(key)
         if table:
@@ -739,6 +739,12 @@ def write_body(
                 "parts": [{name: part.get(name) for name in ("part_index", "part_count", "source_columns", "repeated_columns", "column_widths_hwpunit")} for part in parts]})
             if len(parts) > 1:
                 report["warnings"].append(f"{key}: 본문 폭에 맞춰 {len(parts)}개 표로 가로 분할했습니다. 보기/BASE 열은 반복됩니다.")
+                # Starting a wide floating table on the EMF page can crash Hancom during cell styling.
+                if figure_inserted:
+                    report.update(stage="layout", action="chart_table_page_break")
+                    write_checkpoint(report, checkpoint_path)
+                    if not run_action(hwp, "BreakPage", report, "layout"):
+                        raise HwpWriterError("layout", "BreakPage", f"{key}: 차트 다음 쪽에 분할표를 배치하지 못했습니다.")
             for part in parts:
                 progress.update(part=part.get("part_index", 1), part_count=len(parts), row=0, col=0, cells_done=0, cell_count=0, phase="")
                 report.update(stage="table", action="start_part")
@@ -753,8 +759,9 @@ def write_body(
             report["charts_deferred"] += 1
 
         if table and table.get("source_sheet") and table.get("source_range"):
-            if style_indexes is not None:
-                apply_named_style(hwp, require_style_index(style_indexes, "보고서 본문1"), report, "보고서 본문1")
+            # Reapplying a named style next to a paginated floating table can stall Hancom's layout.
+            report.update(stage="body", action="insert_source")
+            write_checkpoint(report, checkpoint_path)
             insert_text(hwp, f"출처: 원본 집계표 ({table['source_sheet']}!{table['source_range']})", report)
             run_action(hwp, "BreakPara", report, "body")
         report["sections_written"] += 1
