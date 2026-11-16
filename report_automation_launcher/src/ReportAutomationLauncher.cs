@@ -2662,6 +2662,8 @@ namespace ReportAutomationLauncher
             hwpDispatchModeCombo.Items.Add("ensure_dispatch");
             hwpDispatchModeCombo.Items.Add("dispatch");
             hwpDispatchModeCombo.Items.Add("dispatch_ex");
+            hwpDispatchModeCombo.Items.Add("pyhwpx");
+            actionTips.SetToolTip(hwpDispatchModeCombo, "기본: 등록된 한글 보안 모듈 사용. pyhwpx: 별도 Python 환경에서 필요 시 모듈 자동 등록.");
             hwpEnvironmentCheckButton.Text = "한글 연결 확인";
             hwpEnvironmentCheckButton.Click += HwpEnvironmentCheckButton_Click;
             var hwpStyleLabel = new Label();
@@ -2714,6 +2716,18 @@ namespace ReportAutomationLauncher
             connection.Controls.Add(hwpDispatchLabel);
             connection.Controls.Add(hwpDispatchModeCombo);
             connection.Controls.Add(hwpEnvironmentCheckButton);
+            var hwpSecurityHelpButton = new Button { Text = "보안 모듈 도움말", AutoSize = true };
+            hwpSecurityHelpButton.Click += delegate
+            {
+                MessageBox.Show(this,
+                    "한글이 파일 접근 승인을 요청할 수 있습니다. 한글 창을 표시하고, 직접 선택한 신뢰할 수 있는 파일일 때만 승인하세요.\n\n" +
+                    "기본(ensure_dispatch): 한컴 공식 보안 모듈을 현재 Windows 사용자로 설정한 뒤 [한글 연결 확인]을 누르세요.\n\n" +
+                    "pyhwpx: Python 가상환경에서 python -m pip install pyhwpx를 실행하세요(차트 포함 시 python-pptx도 설치). 가상환경의 python.exe 전체 경로를 " +
+                    "REPORT_AUTOMATION_PYHWPX_PYTHON 환경 변수에 설정하고 런처를 다시 열어 pyhwpx를 선택하세요. " +
+                    "필요하면 pyhwpx가 모듈 DLL을 내려받아 현재 사용자의 레지스트리에 등록합니다.",
+                    "한글 파일 접근 승인", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            };
+            connection.Controls.Add(hwpSecurityHelpButton);
             connection.Controls.Add(hwpVisibleCheck);
             connection.Controls.Add(hwpKeepOpenOnErrorCheck);
             var figurePrefixLabel = new Label { Text = "그림 번호 앞자리", AutoSize = true, Margin = new Padding(8, 7, 0, 0) };
@@ -6302,7 +6316,7 @@ namespace ReportAutomationLauncher
         private static string NormalizeHwpDispatchMode(string value)
         {
             string mode = string.IsNullOrWhiteSpace(value) ? "ensure_dispatch" : value.Trim().ToLowerInvariant().Replace("-", "_");
-            if (mode == "ensure_dispatch" || mode == "dispatch" || mode == "dispatch_ex")
+            if (mode == "ensure_dispatch" || mode == "dispatch" || mode == "dispatch_ex" || mode == "pyhwpx")
             {
                 return mode;
             }
@@ -7271,7 +7285,7 @@ namespace ReportAutomationLauncher
         {
             try
             {
-                string pythonPath = PathResolver.ResolvePythonPath();
+                string pythonPath = ResolveHwpPythonPath(options.HwpDispatchMode);
                 string toolPath = PathResolver.ResolveEngineToolPath("hwp_com_writer.py");
                 if (string.IsNullOrWhiteSpace(pythonPath) || !File.Exists(pythonPath) || string.IsNullOrWhiteSpace(toolPath) || !File.Exists(toolPath))
                 {
@@ -7322,7 +7336,7 @@ namespace ReportAutomationLauncher
                 startInfo.StandardErrorEncoding = System.Text.Encoding.UTF8;
 
                 log("아래한글 COM으로 HWPX 초본을 생성합니다.");
-                StandaloneBundle.ConfigurePythonProcess(startInfo);
+                ConfigureHwpPythonProcess(startInfo, options.HwpDispatchMode);
                 using (Process process = Process.Start(startInfo))
                 {
                     var stdoutTask = process.StandardOutput.ReadToEndAsync();
@@ -7478,7 +7492,7 @@ namespace ReportAutomationLauncher
 
         public static string TryRunHwpEnvironmentDiagnostics(LauncherOptions options, string outputReportPath, Action<string> log)
         {
-            string pythonPath = PathResolver.ResolvePythonPath();
+            string pythonPath = ResolveHwpPythonPath(options.HwpDispatchMode);
             string toolPath = PathResolver.ResolveEngineToolPath("hwp_com_writer.py");
             if (string.IsNullOrWhiteSpace(pythonPath) || !File.Exists(pythonPath) || string.IsNullOrWhiteSpace(toolPath) || !File.Exists(toolPath))
             {
@@ -7532,6 +7546,7 @@ namespace ReportAutomationLauncher
         {
             var modes = new List<string>();
             string normalized = string.IsNullOrWhiteSpace(preferred) ? "ensure_dispatch" : preferred.Trim().ToLowerInvariant().Replace("-", "_");
+            if (normalized == "pyhwpx") return new List<string> { "pyhwpx" };
             AddModeOnce(modes, normalized);
             AddModeOnce(modes, "ensure_dispatch");
             AddModeOnce(modes, "dispatch");
@@ -7545,6 +7560,24 @@ namespace ReportAutomationLauncher
             {
                 modes.Add(mode);
             }
+        }
+
+        private static string ResolveHwpPythonPath(string mode)
+        {
+            if (mode != "pyhwpx") return PathResolver.ResolvePythonPath();
+            string path = Environment.GetEnvironmentVariable("REPORT_AUTOMATION_PYHWPX_PYTHON");
+            if (string.IsNullOrWhiteSpace(path) || !Path.IsPathRooted(path) || !File.Exists(path))
+                throw new InvalidOperationException("pyhwpx를 설치한 가상환경의 python.exe 전체 경로를 REPORT_AUTOMATION_PYHWPX_PYTHON에 설정하세요. [보안 모듈 도움말]을 참고하세요.");
+            return Path.GetFullPath(path);
+        }
+
+        private static void ConfigureHwpPythonProcess(ProcessStartInfo info, string mode)
+        {
+            StandaloneBundle.ConfigurePythonProcess(info);
+            if (mode != "pyhwpx") return;
+            // pyhwpx looks up its installed DLL via pip on PATH.
+            info.WorkingDirectory = Path.GetDirectoryName(info.FileName);
+            info.EnvironmentVariables["PATH"] = info.WorkingDirectory + Path.PathSeparator + info.EnvironmentVariables["PATH"];
         }
 
         private static Dictionary<string, object> RunHwpEnvironmentMode(string pythonPath, string toolPath, string reportPath, bool visible, string mode)
@@ -7569,9 +7602,11 @@ namespace ReportAutomationLauncher
             startInfo.StandardErrorEncoding = System.Text.Encoding.UTF8;
             HashSet<int> hwpBefore = SnapshotProcessIds("Hwp");
 
-            StandaloneBundle.ConfigurePythonProcess(startInfo);
+            ConfigureHwpPythonProcess(startInfo, mode);
             using (Process process = Process.Start(startInfo))
             {
+                var stdoutTask = process.StandardOutput.ReadToEndAsync();
+                var stderrTask = process.StandardError.ReadToEndAsync();
                 if (!process.WaitForExit(15000))
                 {
                     try { process.Kill(); } catch { }
@@ -7581,8 +7616,8 @@ namespace ReportAutomationLauncher
                     MergeHwpEnvironmentModeSummary(result, reportPath);
                     return result;
                 }
-                string stdout = process.StandardOutput.ReadToEnd();
-                string stderr = process.StandardError.ReadToEnd();
+                string stdout = stdoutTask.Result;
+                string stderr = stderrTask.Result;
                 result["exit_code"] = process.ExitCode;
                 result["stdout"] = stdout.Trim();
                 result["stderr"] = stderr.Trim();
@@ -7655,11 +7690,13 @@ namespace ReportAutomationLauncher
                 result["writer_status"] = GetString(report, "status");
                 result["stage"] = GetString(report, "stage");
                 result["action"] = GetString(report, "action");
+                result["message"] = FirstHwpIssue(report);
                 Dictionary<string, object> com = GetObject(report, "com");
                 if (com != null)
                 {
                     result["current_prog_id"] = GetString(com, "current_prog_id");
                     result["prog_id"] = GetString(com, "prog_id");
+                    result["file_path_checker"] = GetString(com, "file_path_checker");
                     result["last_step"] = LastEnvironmentStepSummary(com);
                     if (GetString(result, "status") == "started" && GetString(report, "status") == "ready")
                     {
@@ -7705,6 +7742,17 @@ namespace ReportAutomationLauncher
             return values.TryGetValue(key, out value) && value != null ? Convert.ToString(value) : "";
         }
 
+        private static string FirstHwpIssue(Dictionary<string, object> report)
+        {
+            foreach (string key in new[] { "errors", "warnings" })
+            {
+                object value;
+                if (report.TryGetValue(key, out value) && value is object[] && ((object[])value).Length > 0)
+                    return Convert.ToString(((object[])value)[0]);
+            }
+            return "";
+        }
+
         private static string BuildHwpEnvironmentDiagnosticsSummary(string outputReportPath, List<Dictionary<string, object>> results)
         {
             var lines = new List<string>();
@@ -7718,7 +7766,10 @@ namespace ReportAutomationLauncher
                           " / stage=" + GetString(result, "stage") +
                           " / action=" + GetString(result, "action") +
                           " / progId=" + GetString(result, "current_prog_id") +
-                          " / lastStep=" + GetString(result, "last_step"));
+                          " / lastStep=" + GetString(result, "last_step") +
+                          " / 보안 모듈=" + (string.IsNullOrEmpty(GetString(result, "file_path_checker")) ? "미등록" : GetString(result, "file_path_checker")));
+                string message = GetString(result, "message");
+                if (!string.IsNullOrWhiteSpace(message)) lines.Add(message);
             }
             return string.Join(Environment.NewLine, lines.ToArray());
         }
@@ -7740,7 +7791,7 @@ namespace ReportAutomationLauncher
             startInfo.StandardErrorEncoding = System.Text.Encoding.UTF8;
 
             log("아래한글 COM 환경을 확인합니다.");
-            StandaloneBundle.ConfigurePythonProcess(startInfo);
+            ConfigureHwpPythonProcess(startInfo, options.HwpDispatchMode);
             using (Process process = Process.Start(startInfo))
             {
                 var stdoutTask = process.StandardOutput.ReadToEndAsync();
@@ -7753,11 +7804,24 @@ namespace ReportAutomationLauncher
                 }
                 string stdout = stdoutTask.Result;
                 string stderr = stderrTask.Result;
+                var report = ReadWorkflowReport(reportPath);
+                string issue = FirstHwpIssue(report);
                 if (process.ExitCode != 0)
                 {
-                    log("아래한글 COM 환경 확인 실패: " + (string.IsNullOrWhiteSpace(stderr) ? stdout : stderr).Trim());
+                    log("아래한글 COM 환경 확인 실패: " + (string.IsNullOrWhiteSpace(issue) ? (string.IsNullOrWhiteSpace(stderr) ? stdout : stderr).Trim() : issue));
                     return false;
                 }
+                var com = GetObject(report, "com");
+                if (com == null || string.IsNullOrWhiteSpace(GetString(com, "file_path_checker")))
+                {
+                    log(string.IsNullOrWhiteSpace(issue) ? "한글 파일 접근 보안 모듈 상태를 확인하지 못했습니다." : issue);
+                    if (!options.HwpVisible)
+                    {
+                        log("승인 창이 숨겨진 상태로 멈추지 않도록 중단했습니다. [보안 모듈 도움말]을 참고하세요.");
+                        return false;
+                    }
+                }
+                else log("한글 파일 접근 보안 모듈: " + GetString(com, "file_path_checker"));
             }
             log("아래한글 COM 환경 확인 완료");
             return true;

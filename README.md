@@ -1,6 +1,6 @@
 # ReportAutomation
 
-Current version: `0.0.49`
+Current version: `0.0.50`
 
 `0.0.48` stabilizes [HWPX survey chart and split-table output](docs/survey_chart_style.md).
 
@@ -418,6 +418,22 @@ python -m report_automation_engine.hwp_com_writer `
 ```
 
 HWPX writer는 아래한글 COM을 사용하므로 Windows와 아래한글 설치가 필요합니다. 실패 시 출력 파일 옆 또는 `--report-output` 경로에 `hwp_writer_report.json`을 남깁니다.
+
+**한글 파일 접근 승인 창**
+
+런처의 **한글 실행 옵션 → 한글 연결 확인**에서 보안 모듈 등록 결과를 확인할 수 있습니다.
+
+- **기본 (`ensure_dispatch`)**: 별도 Python 설치가 필요 없습니다. [한컴 공식 보안 모듈](https://developer.hancom.com/hwpautomation)을 현재 Windows 사용자에게 등록하면, 문서를 열기 전에 런처가 `RegisterModule`로 불러옵니다. 기본 모드는 DLL을 내려받거나 레지스트리를 변경하지 않습니다.
+- **선택 (`pyhwpx`)**: 아래처럼 별도 Python 가상환경에 설치하고 그 환경으로 런처를 시작한 뒤 **한글 연결 방식 → pyhwpx**를 선택합니다. 사용 가능한 모듈이 이미 있으면 그대로 씁니다. 없으면 [pyhwpx](https://pypi.org/project/pyhwpx/)가 필요에 따라 DLL을 내려받아 현재 Windows 사용자의 레지스트리에 등록할 수 있습니다. 회사 PC라면 먼저 설치·실행 정책을 확인하세요.
+
+```powershell
+py -m venv .venv-hwp
+.\.venv-hwp\Scripts\python.exe -m pip install pyhwpx==1.7.2 python-pptx
+$env:REPORT_AUTOMATION_PYHWPX_PYTHON = (Resolve-Path .\.venv-hwp\Scripts\python.exe).Path
+& ".\report_automation_launcher\bin\ReportAutomationLauncher.exe"
+```
+
+`python-pptx`는 HWPX에 차트까지 넣는 경우에 필요합니다. CLI에서는 이 가상환경으로 writer를 실행하고 `--dispatch-mode pyhwpx`를 추가합니다. 모듈이 등록되지 않으면 창을 숨긴 상태에서는 문서를 열지 않습니다. 직접 진행하려면 **아래한글 창 표시**를 켜고, 자신이 선택한 신뢰할 수 있는 파일에 대해서만 승인하세요.
 writer의 `--style-config`를 생략하면 기본 JSON을 사용합니다. `--table-style-profile`은 기존 템플릿 표 속성 요약/적용 계획용이며 이름 있는 스타일 프리셋을 대신하지 않습니다. HWPX 작업 사본에 스타일을 등록/갱신하고 HWP 템플릿은 임시 HWPX로 변환해 같은 처리를 합니다. 설정 검증 또는 스타일 등록 실패 시 기본 서식으로 조용히 대체하지 않고 생성 실패를 기록합니다.
 
 런처 CLI에서는 `--output-type "HWPX 보고서" --hwp-template "C:\path\report_template.hwpx" --hwp-style-config "C:\path\custom_style.json"`을 기존 Excel 실행 인자에 추가합니다. 입력 JSON은 선택 실행 파일 `hwp_style_config.json`으로 정규화됩니다. `--hwp-style-preset`만으로 저장된 사용자 서식을 불러오지는 않으며 실제 설정 JSON의 `preset_name`이 우선합니다.

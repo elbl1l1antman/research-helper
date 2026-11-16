@@ -1,6 +1,6 @@
 # Versioning
 
-Current version: `0.0.49`
+Current version: `0.0.50`
 
 ## Policy
 
@@ -16,6 +16,8 @@ Current version: `0.0.49`
   - Major: breaking file format, CLI, template, or workflow change.
 
 ## Current Baseline
+
+`0.0.50` adds optional pyhwpx file-access module setup and warns or stops before hidden HWP automation when registration fails.
 
 `0.0.49` loads Hancom's locally registered `FilePathCheckerModuleExample` before file operations and records the actual registration result.
 

@@ -51,7 +51,11 @@ REPORT_PLACEHOLDERS = {
     "{{QA_SUMMARY}}": "qa_summary",
 }
 TABLE_COLUMNS = ["항목", "비율", "가중 N", "원 N"]
-DISPATCH_MODES = ("ensure_dispatch", "dispatch", "dispatch_ex")
+DISPATCH_MODES = ("ensure_dispatch", "dispatch", "dispatch_ex", "pyhwpx")
+FILE_PATH_CHECKER_WARNING = (
+    "한글 파일 접근 보안 모듈을 등록하지 못했습니다. 한글 연결 확인에서 등록 상태를 확인하세요. "
+    "모듈을 설치하거나 한글 창을 표시한 뒤, 신뢰하는 파일에 대해서만 접근 승인 창에 응답하세요."
+)
 
 
 class HwpWriterError(RuntimeError):
@@ -183,7 +187,9 @@ def write_hwp_document(
         writer_report["stage"] = "com"
         writer_report["action"] = "create_hwp_object"
         write_json(report_file, writer_report)
-        hwp = create_hwp_object(writer_report, report_file, dispatch_mode)
+        hwp, pyhwpx_session = connect_hwp(writer_report, report_file, dispatch_mode)
+        if not visible and not writer_report["com"]["file_path_checker"]:
+            raise HwpWriterError("com", "file_path_checker", FILE_PATH_CHECKER_WARNING)
         set_visible(hwp, visible, writer_report, report_file)
         write_json(report_file, writer_report)
         if template_file.suffix.lower() == ".hwp":
@@ -330,7 +336,7 @@ def check_environment(
         checkpoint_file = Path(report_path).resolve() if report_path else None
         write_checkpoint(report, checkpoint_file)
         writer_lock = acquire_writer_lock()
-        hwp = create_hwp_object(report, checkpoint_file, dispatch_mode)
+        hwp, pyhwpx_session = connect_hwp(report, checkpoint_file, dispatch_mode)
         set_visible(hwp, visible, report, checkpoint_file)
         write_checkpoint(report, checkpoint_file)
         report["status"] = "ready"
@@ -416,6 +422,29 @@ def close_current_document(hwp) -> None:
         raise HwpWriterError("document", "close_template", f"변환한 HWP 템플릿을 닫지 못했습니다: {exc}") from exc
 
 
+def connect_hwp(report, checkpoint_path, dispatch_mode):
+    if dispatch_mode != "pyhwpx":
+        return create_hwp_object(report, checkpoint_path, dispatch_mode), None
+
+    report["stage"] = "com"
+    report["action"] = "pyhwpx"
+    record_com_step(report, "pyhwpx", "started")
+    write_checkpoint(report, checkpoint_path)
+    try:
+        from pyhwpx import Hwp
+    except ImportError as exc:
+        raise HwpWriterError("com", "import_pyhwpx", f"선택한 Python에서 pyhwpx를 불러오지 못했습니다. 해당 환경에서 python -m pip install pyhwpx를 실행하세요. ({exc})") from exc
+    try:
+        session = Hwp(new=True, visible=False, register_module=False)
+        hwp = session.Application
+    except Exception as exc:
+        raise HwpWriterError("com", "pyhwpx", f"pyhwpx로 아래한글을 시작하지 못했습니다: {exc}") from exc
+    record_com_step(report, "pyhwpx", "ready")
+    register_file_path_checker(hwp, report, checkpoint_path, setup_module=session.register_module)
+    # Keep the wrapper alive through all COM calls, including Quit.
+    return hwp, session
+
+
 def create_hwp_object(
     report: Dict[str, Any],
     checkpoint_path: Path | None = None,
@@ -472,7 +501,7 @@ def normalize_dispatch_mode(value: str | None) -> str:
     return mode
 
 
-def register_file_path_checker(hwp, report: Dict[str, Any], checkpoint_path: Path | None = None) -> None:
+def register_file_path_checker(hwp, report: Dict[str, Any], checkpoint_path: Path | None = None, *, setup_module=None) -> None:
     # Use the Hancom sample's registry value first, then support existing installations.
     report["com"]["file_path_checker"] = ""
     for module in ("FilePathCheckerModuleExample", "FilePathCheckerModule", "FilePathCheckDLL"):
@@ -491,7 +520,20 @@ def register_file_path_checker(hwp, report: Dict[str, Any], checkpoint_path: Pat
             record_com_step(report, "register_file_path_checker", "failed", str(exc), module=module)
             write_checkpoint(report, checkpoint_path)
             continue
-    report["warnings"].append("한글 파일 접근 보안 모듈이 등록되지 않아 승인 창이 나타날 수 있습니다. 설치한 DLL과 등록 이름을 확인하세요.")
+    if setup_module is not None:
+        report["action"] = "pyhwpx_register_module"
+        record_com_step(report, "pyhwpx_register_module", "started")
+        write_checkpoint(report, checkpoint_path)
+        try:
+            if not setup_module():
+                raise RuntimeError("pyhwpx register_module returned False")
+            report["com"]["file_path_checker"] = "FilePathCheckerModule"
+            record_com_step(report, "pyhwpx_register_module", "ready")
+            write_checkpoint(report, checkpoint_path)
+            return
+        except Exception as exc:
+            record_com_step(report, "pyhwpx_register_module", "failed", str(exc))
+    report["warnings"].append(FILE_PATH_CHECKER_WARNING)
     write_checkpoint(report, checkpoint_path)
 
 
