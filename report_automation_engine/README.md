@@ -226,6 +226,7 @@ python -m report_automation_engine.hwp_table_mapping `
 주요 동작:
 
 - `--check-environment`로 pywin32와 아래한글 COM 객체 생성 가능 여부를 먼저 확인할 수 있습니다.
+- 파일을 열거나 저장하기 전에 [한컴 개발 가이드](https://developer.hancom.com/hwpautomation)의 `FilePathCheckerModuleExample` 등록을 먼저 시도합니다. `com.file_path_checker`는 실제 등록이 성공한 이름만 표시합니다. DLL 설치 및 레지스트리 등록은 런처에서 수행하지 않으며, 등록에 실패하면 한글의 파일 승인 창이 나타날 수 있습니다.
 - `preflight.status == blocked`이면 아래한글을 열기 전에 중단합니다.
 - `--dry-run`을 사용하면 아래한글을 열지 않고 `hwp_render_plan.json`과 writer report만 생성합니다.
 - `--max-sections 1` 또는 `--max-sections 3`으로 알파 검증용 짧은 초본을 생성할 수 있습니다.

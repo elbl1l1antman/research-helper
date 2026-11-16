@@ -473,14 +473,16 @@ def normalize_dispatch_mode(value: str | None) -> str:
 
 
 def register_file_path_checker(hwp, report: Dict[str, Any], checkpoint_path: Path | None = None) -> None:
-    # 보안 모듈 등록은 설치 환경별로 실패할 수 있다. 실패해도 Open 단계에서 다시 명확한 오류가 난다.
-    for module in ("FilePathCheckerModule", "FilePathCheckDLL"):
+    # Use the Hancom sample's registry value first, then support existing installations.
+    report["com"]["file_path_checker"] = ""
+    for module in ("FilePathCheckerModuleExample", "FilePathCheckerModule", "FilePathCheckDLL"):
         try:
             report["stage"] = "com"
             report["action"] = "register_file_path_checker"
             record_com_step(report, "register_file_path_checker", "started", module=module)
             write_checkpoint(report, checkpoint_path)
-            hwp.RegisterModule("FilePathCheckDLL", module)
+            if not hwp.RegisterModule("FilePathCheckDLL", module):
+                raise RuntimeError("RegisterModule returned False")
             report["com"]["file_path_checker"] = module
             record_com_step(report, "register_file_path_checker", "ready", module=module)
             write_checkpoint(report, checkpoint_path)
@@ -489,7 +491,7 @@ def register_file_path_checker(hwp, report: Dict[str, Any], checkpoint_path: Pat
             record_com_step(report, "register_file_path_checker", "failed", str(exc), module=module)
             write_checkpoint(report, checkpoint_path)
             continue
-    report["warnings"].append("아래한글 FilePathCheck 보안 모듈 등록을 확인하지 못했습니다.")
+    report["warnings"].append("한글 파일 접근 보안 모듈이 등록되지 않아 승인 창이 나타날 수 있습니다. 설치한 DLL과 등록 이름을 확인하세요.")
     write_checkpoint(report, checkpoint_path)
 
 
