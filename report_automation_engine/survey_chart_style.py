@@ -175,10 +175,10 @@ def _clone_chart(slide, prototype, labels, values, measure, name):
             point = deepcopy(style)
             point.find(qn('c:idx')).set('val', str(index))
             series._element.insert_element_before(point, 'c:dLbls', 'c:trendline', 'c:errBars', 'c:cat', 'c:val', 'c:extLst')
-        else:
+        elif value == maximum:
             fill = series.points[index].format.fill
             fill.solid()
-            fill.fore_color.rgb = RGBColor.from_string('C65B39' if value == maximum else '357B99')
+            fill.fore_color.rgb = RGBColor.from_string('C65B39')
     for label in root.iter(qn('c:dLbl')):
         # A sample label's text is data, but its position and formatting are style.
         text = label.find(qn('c:tx'))

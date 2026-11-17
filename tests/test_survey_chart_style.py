@@ -10,6 +10,7 @@ import openpyxl
 from pptx import Presentation
 from pptx.dml.color import RGBColor
 from pptx.enum.chart import XL_CHART_TYPE
+from pptx.oxml.ns import qn
 import pytest
 
 from report_automation_engine.document_writer import write_document
@@ -105,6 +106,23 @@ def test_review_reports_missing_charts_instead_of_guessing(tmp_path):
     text = '\n'.join(shape.text for slide in Presentation(out).slides for shape in slide.shapes if shape.has_text_frame)
     assert all(reason in text for reason in ('전체 값 확인 필요', '비교 항목 없음', '누락'))
     assert '응답자 구성표' not in text
+
+
+def test_review_preserves_original_series_color_without_point_overrides(tmp_path):
+    style = create_chart_style(tmp_path / 'imported.pptx')
+    prs = Presentation(style)
+    series = prs.slides[0].shapes[1].chart.series[0]
+    for override in series._element.findall(qn('c:dPt')):
+        series._element.remove(override)
+    series.format.fill.solid()
+    series.format.fill.fore_color.rgb = RGBColor.from_string('108A63')
+    prs.save(style)
+    deck = write_chart_review({'charts': [
+        point('T0001', '보기 A', 33, 'B3'), point('T0001', '보기 B', 67, 'C3')
+    ]}, tmp_path / 'review.pptx', style)
+    series = shapes(deck)[0].chart.series[0]
+    assert series.format.fill.fore_color.rgb == RGBColor.from_string('108A63')
+    assert [el.find(qn('c:idx')).get('val') for el in series._element.findall(qn('c:dPt'))] == ['1']
 
 
 def test_export_only_matching_reviewed_chart_objects(tmp_path, monkeypatch):

@@ -1,6 +1,6 @@
 # Versioning
 
-Current version: `0.0.51`
+Current version: `0.0.52`
 
 ## Policy
 
@@ -16,6 +16,8 @@ Current version: `0.0.51`
   - Major: breaking file format, CLI, template, or workflow change.
 
 ## Current Baseline
+
+`0.0.52` extracts native CRTX styles from existing PowerPoint decks, inventories their properties, and converts compatible templates to editable report starters.
 
 `0.0.51` exports edited survey chart objects as EMF after checking their values and category order against the report package. Existing HWPX reports are not changed.
 

@@ -2865,17 +2865,20 @@ namespace ReportAutomationLauncher
         {
             var layout = new FlowLayoutPanel { Dock = DockStyle.Top, AutoSize = true, FlowDirection = FlowDirection.TopDown, WrapContents = false, Padding = new Padding(12) };
             var commands = new FlowLayoutPanel { AutoSize = true };
+            var libraryCommands = new FlowLayoutPanel { AutoSize = true };
             var save = new Button { Text = "편집용 기본 PPTX 저장…", AutoSize = true };
             var register = new Button { Text = "편집한 PPTX 등록…", AutoSize = true };
             var reset = new Button { Text = "기본 서식으로 되돌리기", AutoSize = true };
             var guide = new Button { Text = "서식 편집 안내", AutoSize = true };
+            var extract = new Button { Text = "그래프틀에서 CRTX 추출…", AutoSize = true };
+            var fromTemplate = new Button { Text = "CRTX로 기본 PPTX 만들기…", AutoSize = true };
             save.Click += async delegate
             {
                 using (var dialog = new SaveFileDialog { Filter = "PowerPoint (*.pptx)|*.pptx", FileName = "기본 차트 서식.pptx", DefaultExt = "pptx" })
                 {
                     if (dialog.ShowDialog(this) != DialogResult.OK) return;
                     if (IsRegisteredChartStyle(dialog.FileName)) { MessageBox.Show(this, "등록된 서식이 아닌 다른 경로에 저장하세요.", "차트 서식"); return; }
-                    await RunSurveyChartCommand(commands, "create --output " + QuoteArg(dialog.FileName), "편집용 기본 PPTX를 저장했습니다.");
+                    await RunSurveyChartCommand(layout, "create --output " + QuoteArg(dialog.FileName), "편집용 기본 PPTX를 저장했습니다.");
                 }
             };
             register.Click += async delegate
@@ -2884,7 +2887,7 @@ namespace ReportAutomationLauncher
                 {
                     if (dialog.ShowDialog(this) != DialogResult.OK) return;
                     if (File.Exists(SurveyChartStylePath) && MessageBox.Show(this, "현재 공통 차트 서식을 교체할까요?", "차트 서식 등록", MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes) return;
-                    await RunSurveyChartCommand(commands, "register --input " + QuoteArg(dialog.FileName) + " --output " + QuoteArg(SurveyChartStylePath), "모든 프로젝트에 사용할 공통 서식을 등록했습니다.");
+                    await RunSurveyChartCommand(layout, "register --input " + QuoteArg(dialog.FileName) + " --output " + QuoteArg(SurveyChartStylePath), "모든 프로젝트에 사용할 공통 서식을 등록했습니다.");
                     RefreshSurveyChartStyle();
                 }
             };
@@ -2900,11 +2903,37 @@ namespace ReportAutomationLauncher
             {
                 MessageBox.Show(this, "기본 PPTX를 PowerPoint에서 열고 차트의 글꼴, 색, 막대 간격, 축, 범례, 레이블을 조정한 뒤 등록하세요." + Environment.NewLine +
                     "첫 번째 보기 또는 조각은 기본색, 두 번째는 최대값 강조색입니다. 예제 데이터는 보고서 값으로 교체됩니다." + Environment.NewLine +
-                    "차트 종류와 개체 이름(RA_CHART_COLUMN, RA_CHART_DOUGHNUT)은 유지하세요. 기존 업무용 PPTX는 직접 등록할 수 없습니다.", "차트 서식 편집 안내");
+                    "차트 종류와 개체 이름(RA_CHART_COLUMN, RA_CHART_DOUGHNUT)은 유지하세요." + Environment.NewLine +
+                    "기존 그래프틀은 먼저 CRTX를 추출하세요. 목록에서 기본 서식 후보를 골라 PPTX를 만든 뒤 등록할 수 있습니다.", "차트 서식 편집 안내");
+            };
+            extract.Click += async delegate
+            {
+                using (var deck = new OpenFileDialog { Title = "기존 그래프틀 선택", Filter = "PowerPoint (*.pptx)|*.pptx", CheckFileExists = true })
+                using (var folder = new FolderBrowserDialog { Description = "차트 서식과 비교 목록을 저장할 폴더를 선택하세요." })
+                {
+                    if (deck.ShowDialog(this) != DialogResult.OK || folder.ShowDialog(this) != DialogResult.OK) return;
+                    await RunSurveyChartCommand(layout, "extract --input " + QuoteArg(deck.FileName) +
+                        " --output " + QuoteArg(folder.SelectedPath), "차트 서식 추출을 마쳤습니다.", "chart_style_library.py");
+                }
+            };
+            fromTemplate.Click += async delegate
+            {
+                using (var template = new OpenFileDialog { Title = "단일 계열 세로 막대 또는 도넛 서식 선택", Filter = "차트 서식 (*.crtx)|*.crtx", CheckFileExists = true })
+                using (var output = new SaveFileDialog { Filter = "PowerPoint (*.pptx)|*.pptx", FileName = "추출한 기본 차트 서식.pptx", DefaultExt = "pptx" })
+                {
+                    if (template.ShowDialog(this) != DialogResult.OK || output.ShowDialog(this) != DialogResult.OK) return;
+                    if (IsRegisteredChartStyle(output.FileName)) { MessageBox.Show(this, "등록된 서식이 아닌 새 파일에 저장하세요.", "차트 서식"); return; }
+                    string existing = File.Exists(SurveyChartStylePath) ? " --style " + QuoteArg(SurveyChartStylePath) : "";
+                    await RunSurveyChartCommand(layout, "make-default --input " + QuoteArg(template.FileName) +
+                        " --output " + QuoteArg(output.FileName) + existing, "기본 PPTX를 저장했습니다. 사용하려면 [편집한 PPTX 등록]에서 선택하세요.", "chart_style_library.py");
+                }
             };
             foreach (var button in new[] { save, register, reset, guide }) commands.Controls.Add(button);
+            libraryCommands.Controls.Add(extract);
+            libraryCommands.Controls.Add(fromTemplate);
             layout.Controls.Add(surveyChartStyleStatus);
             layout.Controls.Add(commands);
+            layout.Controls.Add(libraryCommands);
             RefreshSurveyChartStyle();
             return layout;
         }
@@ -2914,23 +2943,45 @@ namespace ReportAutomationLauncher
             return string.Equals(Path.GetFullPath(path), SurveyChartStylePath, StringComparison.OrdinalIgnoreCase);
         }
 
-        private async System.Threading.Tasks.Task RunSurveyChartCommand(Control controls, string arguments, string success)
+        private async System.Threading.Tasks.Task RunSurveyChartCommand(Control controls, string arguments, string success, string tool = "survey_chart_style.py")
         {
+            if (reportRunning || surveyChartExportRunning) return;
+            surveyChartExportRunning = true;
             controls.Enabled = false;
+            UpdateWorkflowStatus();
             try
             {
-                await System.Threading.Tasks.Task.Run(() => RunTemplateTool("survey_chart_style.py", arguments, 120000));
+                string path = await System.Threading.Tasks.Task.Run(() => RunTemplateTool(tool, arguments, 600000));
+                MessageBoxIcon icon = MessageBoxIcon.Information;
+                if (tool == "chart_style_library.py")
+                {
+                    if (Path.GetExtension(path) == ".json")
+                    {
+                        var data = new JavaScriptSerializer { MaxJsonLength = int.MaxValue }
+                            .Deserialize<Dictionary<string, object>>(File.ReadAllText(path, System.Text.Encoding.UTF8));
+                        success += Environment.NewLine + "CRTX " + data["exported_count"] + "개 · 외부 연결 " +
+                            data["skipped_count"] + "개 · 실패 " + data["failed_count"] + "개";
+                        if (Convert.ToInt32(data["failed_count"]) > 0) icon = MessageBoxIcon.Warning;
+                        path = Path.Combine(Path.GetDirectoryName(path), "chart_style_inventory.csv");
+                    }
+                    success += Environment.NewLine + path;
+                }
                 Log(success);
-                MessageBox.Show(this, success, "PPTX 차트", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                MessageBox.Show(this, success, "PPTX 차트", MessageBoxButtons.OK, icon);
             }
             catch (Exception ex) { MessageBox.Show(this, ex.Message, "PPTX 차트", MessageBoxButtons.OK, MessageBoxIcon.Warning); }
-            finally { controls.Enabled = true; }
+            finally
+            {
+                controls.Enabled = true;
+                surveyChartExportRunning = false;
+                UpdateWorkflowStatus();
+            }
         }
 
         private async void CreateSurveyChartReview(object sender, EventArgs e)
         {
             string packagePath = createSurveyChartReviewButton.Tag as string;
-            if (reportRunning || !File.Exists(packagePath)) return;
+            if (reportRunning || surveyChartExportRunning || !File.Exists(packagePath)) return;
             using (var dialog = new SaveFileDialog { Filter = "PowerPoint (*.pptx)|*.pptx", FileName = "차트 검토.pptx", DefaultExt = "pptx", InitialDirectory = Path.GetDirectoryName(packagePath) })
             {
                 if (dialog.ShowDialog(this) != DialogResult.OK) return;

@@ -9,6 +9,16 @@
 
 공통 서식은 슬라이드 전체나 기존 업무용 PPTX를 복제하는 기능이 아닙니다. 예제 데이터·특정 보기에 직접 입력한 레이블 문구는 가져오지 않습니다. 지정한 축 범위가 새 값을 잘라내면 해당 경계를 자동으로 바꿉니다. 글꼴은 해당 PC에 설치되어야 합니다.
 
+## 기존 그래프틀에서 추출
+
+1. **보고서 설정 → PPTX 차트 서식 → 그래프틀에서 CRTX 추출**에서 기존 PPTX와 출력 폴더를 고릅니다.
+2. 새 하위 폴더의 `chart_style_inventory.csv`에서 슬라이드·개체 번호, 차트 종류, 계열 수, 글꼴과 크기, 막대 간격·겹침, 축과 범례 설정, 결과 파일을 비교합니다. `chart_style_inventory.json`에는 색상 참조, 숫자 서식, 테마 재정의 여부도 기록됩니다. `slide_002_shape_003.crtx`는 2쪽의 개체 ID 3입니다.
+3. `prototype`이 `RA_CHART_COLUMN` 또는 `RA_CHART_DOUGHNUT`이고 추출 상태가 `exported`인 서식을 **CRTX로 기본 PPTX 만들기**에서 고릅니다. 결과 파일을 확인한 뒤 **편집한 PPTX 등록**을 누릅니다. 새 PPTX를 만들기만 하면 현재 등록 서식은 그대로입니다.
+
+PowerPoint의 CRTX에는 차트 내부의 축·간격·색·글꼴·범례·레이블 서식을 보존합니다. 원본 값, 직접 입력한 차트 제목·레이블 문구, 차트 밖의 개별 도형과 슬라이드 배치는 가져오지 않습니다. 그룹에 포함된 편집 가능한 차트는 읽지만, 그림과 외부 연결 차트는 추출하지 않습니다. 추출과 CRTX 적용에는 Windows와 PowerPoint가 필요합니다.
+
+누적·가로 막대·꺾은선·복합·다계열도 Office에서 재사용할 CRTX로 추출할 수 있습니다. 현재 자동 보고서의 기본 슬롯은 단일 계열 세로 막대와 도넛만 지원합니다. 한 유형만 가져오면 다른 유형은 현재 등록 서식 또는 내장 기본형을 유지합니다. 원본에서 숨긴 세로 막대의 항목 축은 기본 PPTX에서 다시 표시하며, 항목명이 들어갈 자리는 자동 배치합니다. 글꼴은 사용 PC에 설치되어 있어야 합니다.
+
 ## 검토한 차트를 EMF로 저장
 
 1. **차트 검토 PPTX 만들기**로 생성한 파일을 PowerPoint에서 편집하고 저장합니다. 줄바꿈, 글꼴, 색, 막대 간격 등을 바꿀 수 있습니다. `RA_SURVEY_`로 시작하는 차트 개체 이름과 데이터 계열 1개는 유지합니다. 필요 없는 차트의 슬라이드는 삭제해도 됩니다.
@@ -32,4 +42,6 @@
 .venv/Scripts/python.exe -m report_automation_engine.survey_chart_style register --input 'edited chart style.pptx' --output 'registered style.pptx'
 .venv/Scripts/python.exe -m report_automation_engine.survey_chart_style review --input 'report_package.json' --style 'registered style.pptx' --output 'chart review.pptx'
 .venv/Scripts/python.exe -m report_automation_engine.survey_chart_style export-reviewed --input 'edited review.pptx' --package 'report_package.json' --output 'outputs'
+.venv/Scripts/python.exe -m report_automation_engine.chart_style_library extract --input 'existing charts.pptx' --output 'outputs'
+.venv/Scripts/python.exe -m report_automation_engine.chart_style_library make-default --input 'slide_002_shape_003.crtx' --output 'imported chart style.pptx'
 ```
