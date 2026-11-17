@@ -1,6 +1,6 @@
 # ReportAutomation
 
-Current version: `0.0.53`
+Current version: `0.0.54`
 
 `0.0.48` stabilizes [HWPX survey chart and split-table output](docs/survey_chart_style.md).
 

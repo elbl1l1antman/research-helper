@@ -1,6 +1,6 @@
 # Versioning
 
-Current version: `0.0.53`
+Current version: `0.0.54`
 
 ## Policy
 
@@ -16,6 +16,8 @@ Current version: `0.0.53`
   - Major: breaking file format, CLI, template, or workflow change.
 
 ## Current Baseline
+
+`0.0.54` records the launcher UX audit and implementation plan. No executable changes.
 
 `0.0.53` includes two neutral color-based chart themes, remembers the GUI choice, and removes Office document identity from generated chart styles.
 
