@@ -1,6 +1,6 @@
 # ReportAutomation
 
-Current version: `0.0.50`
+Current version: `0.0.51`
 
 `0.0.48` stabilizes [HWPX survey chart and split-table output](docs/survey_chart_style.md).
 
@@ -241,7 +241,7 @@ BASE 행과 상단 다단 헤더는 다음 쪽에서도 반복합니다. 본문�
 다음 기능은 계획과 기반 작업은 있으나, 현재 알파에서 완성 기능으로 열지 않습니다.
 
 - 런처에서 PPTX 보고서 직접 생성
-- 런처에서 차트 검토 PPTX 직접 생성
+- 런처에서 차트 검토 PPTX를 만들고, 수정한 차트를 집계값 대조 후 EMF로 저장 ([차트 작업 안내](docs/survey_chart_style.md))
 - HWP 바이너리 직접 편집
 - HWPX 템플릿의 반복 결과 블록을 복제해 실제 보고서 표 서식을 보존한 삽입
 - HWPX 템플릿에 차트를 EMF/한글 차트 객체로 자동 삽입

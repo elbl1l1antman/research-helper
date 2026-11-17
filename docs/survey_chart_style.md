@@ -9,6 +9,15 @@
 
 공통 서식은 슬라이드 전체나 기존 업무용 PPTX를 복제하는 기능이 아닙니다. 예제 데이터·특정 보기에 직접 입력한 레이블 문구는 가져오지 않습니다. 지정한 축 범위가 새 값을 잘라내면 해당 경계를 자동으로 바꿉니다. 글꼴은 해당 PC에 설치되어야 합니다.
 
+## 검토한 차트를 EMF로 저장
+
+1. **차트 검토 PPTX 만들기**로 생성한 파일을 PowerPoint에서 편집하고 저장합니다. 줄바꿈, 글꼴, 색, 막대 간격 등을 바꿀 수 있습니다. `RA_SURVEY_`로 시작하는 차트 개체 이름과 데이터 계열 1개는 유지합니다. 필요 없는 차트의 슬라이드는 삭제해도 됩니다.
+2. 런처 **산출 결과 → 편집한 차트 EMF 저장**에서 편집본과 저장 폴더를 선택합니다. 런처를 다시 열었다면 해당 PPTX를 만든 실행의 `report_package.json`도 지정합니다. 이전 버전의 공통 이름만 있는 검토 PPTX는 자동 매칭하지 않습니다.
+3. 현재 집계표의 수치·보기명·순서와 대조합니다. 줄바꿈과 공백만 무시합니다. 수치 변경, 이름 중복, 링크된 차트는 제외합니다. 선택 폴더 안 새 하위 폴더에 문항별 EMF와 `emf_export_report.json`을 저장합니다. 슬라이드 제목이나 별도 도형은 내보내지 않습니다.
+4. 한글의 해당 1×1 그림 자리에서 **그림 넣기**로 EMF를 삽입합니다. 기존 차트가 있으면 그 그림만 교체하고 위쪽 캡션은 유지합니다. 새 그림의 번호 종류는 **없음**으로 설정합니다.
+
+원본 PPTX와 HWPX는 건드리지 않습니다. EMF 내보내기에는 Windows와 PowerPoint가 필요합니다. 직접 입력한 데이터 레이블의 텍스트, 단위 표시, 글꼴 대체, 보기 겹침은 EMF를 눈으로 확인하세요.
+
 ## 한글 차트 삽입
 
 - 한글 출력에서 **한글에 차트 삽입**은 기본으로 켜져 있습니다. **그림 번호 앞자리**는 사용자가 지정합니다. 예: `3` → `<그림 3-1>`. 차트 데이터 체크를 끄면 자동 삽입도 꺼집니다.
@@ -22,4 +31,5 @@
 .venv/Scripts/python.exe -m report_automation_engine.survey_chart_style create --output 'basic chart style.pptx'
 .venv/Scripts/python.exe -m report_automation_engine.survey_chart_style register --input 'edited chart style.pptx' --output 'registered style.pptx'
 .venv/Scripts/python.exe -m report_automation_engine.survey_chart_style review --input 'report_package.json' --style 'registered style.pptx' --output 'chart review.pptx'
+.venv/Scripts/python.exe -m report_automation_engine.survey_chart_style export-reviewed --input 'edited review.pptx' --package 'report_package.json' --output 'outputs'
 ```

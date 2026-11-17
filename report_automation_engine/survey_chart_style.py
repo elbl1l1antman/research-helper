@@ -25,6 +25,7 @@ from pptx.util import Inches, Pt
 
 
 STYLE_NAMES = {'RA_CHART_COLUMN': XL_CHART_TYPE.COLUMN_CLUSTERED, 'RA_CHART_DOUGHNUT': XL_CHART_TYPE.DOUGHNUT}
+REVIEW_CHART_PREFIX = 'RA_SURVEY_'
 PROFILE_TITLES = {'응답자특성', '응답자특성표', '응답자구성', '응답자구성표', '표본특성표', '표본구성표'}
 FONT = '맑은 고딕'
 
@@ -103,10 +104,14 @@ def create_chart_style(path):
     return _save(path, _starter().save)
 
 
-def _prototypes(prs):
-    if any('vbaProject' in str(part.partname) or any(rel.is_external for rel in part.rels.values())
+def validate_local_deck(prs):
+    if any('vbaproject' in str(part.partname).lower() or any(rel.is_external for rel in part.rels.values())
            for part in prs.part.package.iter_parts()):
-        raise ValueError('외부 링크나 매크로가 없는 편집용 기본 PPTX를 사용하세요.')
+        raise ValueError('외부 링크나 매크로가 없는 PPTX를 사용하세요.')
+
+
+def _prototypes(prs):
+    validate_local_deck(prs)
     found = {}
     for slide in prs.slides:
         for shape in slide.shapes:
@@ -140,7 +145,7 @@ def register_chart_style(source, target):
     return _save(target, lambda path: path.write_bytes(payload))
 
 
-def _clone_chart(slide, prototype, labels, values, measure):
+def _clone_chart(slide, prototype, labels, values, measure, name):
     source = prototype.chart.part
     package = slide.part.package
     part = ChartPart.load(package.next_partname(ChartPart.partname_template), source.content_type, package, source.blob)
@@ -154,7 +159,7 @@ def _clone_chart(slide, prototype, labels, values, measure):
             part.rels._rels[rid] = relation
     rid = slide.part.relate_to(part, RT.CHART)
     frame = slide.shapes._add_chart_graphicFrame(rid, prototype.left, prototype.top, prototype.width, prototype.height)
-    frame.nvGraphicFramePr.cNvPr.name = prototype.name
+    frame.nvGraphicFramePr.cNvPr.name = name
     chart = part.chart
     fmt = '#,##0.0"%"' if measure == '%' else '#,##0.0'
     chart.replace_data(_data(labels, values, fmt))
@@ -303,7 +308,7 @@ def write_chart_review(package, output, style_path=None, *, plan=None):
             continue
         slide = prs.slides.add_slide(prs.slide_layouts[6])
         _text(slide, title, 0.65, 0.3, prs.slide_width.inches - 1.3, 0.78, 22)
-        _clone_chart(slide, prototypes[item['kind']], item['labels'], item['values'], item['measure'])
+        _clone_chart(slide, prototypes[item['kind']], item['labels'], item['values'], item['measure'], REVIEW_CHART_PREFIX + str(key))
         footer = ' · '.join(str(s) for s in (key, '전체', f"단위: {item['measure']}" if item['measure'] else '', item['source']) if s)
         _text(slide, footer, 0.66, prs.slide_height.inches - 0.48, prs.slide_width.inches - 1.32, 0.33, 11)
     if not skips and len(prs.slides) == len(sample_slides):
@@ -320,18 +325,27 @@ def write_chart_review(package, output, style_path=None, *, plan=None):
 
 def run_cli():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('action', choices=('create', 'register', 'review'))
+    parser.add_argument('action', choices=('create', 'register', 'review', 'export-reviewed'))
     parser.add_argument('--input', type=Path)
     parser.add_argument('--style', type=Path)
+    parser.add_argument('--package', type=Path, help='Report package for export-reviewed.')
     parser.add_argument('--output', type=Path, required=True)
     args = parser.parse_args()
     if args.action != 'create' and args.input is None:
         parser.error('--input is required')
+    if args.action == 'export-reviewed' and args.package is None:
+        parser.error('--package is required for export-reviewed')
     try:
         if args.action == 'create':
             result = create_chart_style(args.output)
         elif args.action == 'register':
             result = register_chart_style(args.input, args.output)
+        elif args.action == 'export-reviewed':
+            if __package__:
+                from .hwp_survey_charts import export_reviewed_charts
+            else:
+                from hwp_survey_charts import export_reviewed_charts
+            result = export_reviewed_charts(json.loads(args.package.read_text(encoding='utf-8-sig')), args.input, args.output)
         else:
             if args.input.resolve() == args.output.resolve():
                 raise ValueError('입력 패키지를 결과 파일로 덮어쓸 수 없습니다.')

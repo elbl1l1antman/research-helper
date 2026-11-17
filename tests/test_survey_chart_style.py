@@ -1,5 +1,9 @@
+from contextlib import nullcontext
+from copy import deepcopy
 from io import BytesIO
 import json
+from pathlib import Path
+from types import SimpleNamespace
 from zipfile import ZipFile
 
 import openpyxl
@@ -9,6 +13,7 @@ from pptx.enum.chart import XL_CHART_TYPE
 import pytest
 
 from report_automation_engine.document_writer import write_document
+from report_automation_engine import hwp_survey_charts
 from report_automation_engine.survey_chart_style import create_chart_style, register_chart_style, write_chart_review
 
 
@@ -100,3 +105,64 @@ def test_review_reports_missing_charts_instead_of_guessing(tmp_path):
     text = '\n'.join(shape.text for slide in Presentation(out).slides for shape in slide.shapes if shape.has_text_frame)
     assert all(reason in text for reason in ('전체 값 확인 필요', '비교 항목 없음', '누락'))
     assert '응답자 구성표' not in text
+
+
+def test_export_only_matching_reviewed_chart_objects(tmp_path, monkeypatch):
+    keys = ('A', 'B', 'C', 'D')
+    package = {'charts': [p for k in keys for p in
+               (point(k, '첫 번째', 60, 'B3'), point(k, '두 번째', 40, 'C3'))]}
+    deck = write_chart_review(package, tmp_path / 'edited.pptx')
+    names = [shape.name for shape in shapes(deck)]
+    assert names == ['RA_SURVEY_' + key for key in keys]
+    before = deck.read_bytes()
+    exports = []
+
+    class Series:
+        Count = 1
+
+        def __init__(self, key):
+            self.key = key
+
+        def __call__(self, _):
+            labels = ('첫\n번째', '두 번째') if self.key != 'C' else ('두 번째', '첫 번째')
+            return SimpleNamespace(Values=(61, 39) if self.key == 'B' else (60, 40), XValues=labels)
+
+    def slides(index):
+        key = keys[index - 1]
+
+        def shape(name):
+            assert name == 'RA_SURVEY_' + key
+
+            def export(path, fmt):
+                assert fmt == 5
+                exports.append(key)
+                Path(path).write_bytes(b'\x01\0\0\0' + bytes(36) + b' EMF' + bytes(44))
+
+            series = Series(key)
+            return SimpleNamespace(HasChart=-1, Export=export, Chart=SimpleNamespace(
+                SeriesCollection=lambda index=None: series if index is None else series(index),
+                ChartData=SimpleNamespace(IsLinked=key == 'D')))
+
+        return SimpleNamespace(Shapes=shape)
+
+    monkeypatch.setattr(hwp_survey_charts, '_powerpoint_deck', lambda path: nullcontext(SimpleNamespace(Slides=slides)))
+    report = hwp_survey_charts.export_reviewed_charts(package, deck, tmp_path)
+    data = json.loads(report.read_text(encoding='utf-8'))
+    assert (data['exported_count'], data['rejected_count']) == (1, 3)
+    assert [item['table_key'] for item in data['charts'] if item['status'] == 'exported'] == ['A']
+    assert [p.name for p in report.parent.glob('*.emf')] == ['chart_001_A.emf']
+    assert exports == ['A'] and deck.read_bytes() == before
+
+
+def test_reviewed_export_rejects_duplicate_identity_without_opening_powerpoint(tmp_path, monkeypatch):
+    package = {'charts': [point('A', '보기 1', 60, 'B3'), point('A', '보기 2', 40, 'C3')]}
+    deck = write_chart_review(package, tmp_path / 'deck.pptx')
+    prs = Presentation(deck)
+    frame = next(shape for shape in prs.slides[0].shapes if shape.has_chart)
+    prs.slides[0].shapes._spTree.insert_element_before(deepcopy(frame._element), 'p:extLst')
+    prs.save(deck)
+    monkeypatch.setattr(hwp_survey_charts, '_powerpoint_deck', lambda _: pytest.fail('ambiguous deck opened'))
+    report = hwp_survey_charts.export_reviewed_charts(package, deck, tmp_path)
+    data = json.loads(report.read_text(encoding='utf-8'))
+    assert (data['exported_count'], data['rejected_count']) == (0, 2)
+    assert all('중복' in item['reason'] for item in data['charts'])

@@ -1,6 +1,6 @@
 # Versioning
 
-Current version: `0.0.50`
+Current version: `0.0.51`
 
 ## Policy
 
@@ -16,6 +16,8 @@ Current version: `0.0.50`
   - Major: breaking file format, CLI, template, or workflow change.
 
 ## Current Baseline
+
+`0.0.51` exports edited survey chart objects as EMF after checking their values and category order against the report package. Existing HWPX reports are not changed.
 
 `0.0.50` adds optional pyhwpx file-access module setup and warns or stops before hidden HWP automation when registration fails.
 

@@ -1,13 +1,50 @@
 """Render editable survey charts with PowerPoint and place only EMFs in Hancom."""
 
+from collections import Counter
+from contextlib import contextmanager
 from hashlib import sha256
+from io import BytesIO
+import json
+from pathlib import Path
+import re
+from tempfile import mkdtemp, TemporaryDirectory
+
+from pptx import Presentation
 
 try:
     from .hwp_chart_probe import _is_emf, verify_chart_document
-    from .survey_chart_style import write_chart_review
+    from .survey_chart_style import REVIEW_CHART_PREFIX, survey_chart_plan, validate_local_deck, write_chart_review
 except ImportError:
     from hwp_chart_probe import _is_emf, verify_chart_document
-    from survey_chart_style import write_chart_review
+    from survey_chart_style import REVIEW_CHART_PREFIX, survey_chart_plan, validate_local_deck, write_chart_review
+
+
+@contextmanager
+def _powerpoint_deck(deck):
+    from win32com.client import DispatchEx
+
+    app = DispatchEx('PowerPoint.Application')
+    presentation = app.Presentations.Open(str(deck), -1, 0, 0)
+    try:
+        yield presentation
+    finally:
+        try:
+            presentation.Close()
+        except Exception:
+            pass
+        # PowerPoint can return the user's existing application even with DispatchEx.
+
+
+def _export_emf(shape, path):
+    try:
+        shape.Export(str(path), 5)  # ppShapeFormatEMF
+        data = path.read_bytes()
+        if not _is_emf(data):
+            raise RuntimeError('PowerPoint에서 EMF를 내보내지 못했습니다.')
+        return sha256(data).hexdigest()
+    except Exception:
+        path.unlink(missing_ok=True)
+        raise
 
 
 def export_chart_emfs(plan, directory, style_path):
@@ -17,39 +54,99 @@ def export_chart_emfs(plan, directory, style_path):
     if not ready:
         return paths, errors
     deck = write_chart_review({}, directory / 'survey_charts.pptx', style_path, plan=ready)
-    app = presentation = None
     try:
-        from win32com.client import DispatchEx
-
-        app = DispatchEx('PowerPoint.Application')
-        presentation = app.Presentations.Open(str(deck), -1, 0, 0)
-        if presentation.Slides.Count != len(ready):
-            raise RuntimeError('차트 검토 슬라이드 수가 계획과 다릅니다.')
-        for index, item in enumerate(ready, 1):
-            key = item['key']
-            try:
-                shapes = [shape for shape in presentation.Slides(index).Shapes if shape.HasChart]
-                if len(shapes) != 1:
-                    raise RuntimeError('슬라이드에 차트 객체가 하나여야 합니다.')
-                path = directory / f'survey_chart_{index}.emf'
-                shapes[0].Export(str(path), 5)  # ppShapeFormatEMF
-                if not _is_emf(path.read_bytes()):
-                    raise RuntimeError('PowerPoint에서 EMF를 내보내지 못했습니다.')
-                paths[key] = path
-            except Exception as exc:
-                errors[key] = str(exc)
+        with _powerpoint_deck(deck) as presentation:
+            if presentation.Slides.Count != len(ready):
+                raise RuntimeError('차트 검토 슬라이드 수가 계획과 다릅니다.')
+            for index, item in enumerate(ready, 1):
+                key = item['key']
+                try:
+                    shapes = [shape for shape in presentation.Slides(index).Shapes if shape.HasChart]
+                    if len(shapes) != 1:
+                        raise RuntimeError('슬라이드에 차트 객체가 하나여야 합니다.')
+                    path = directory / f'survey_chart_{index}.emf'
+                    _export_emf(shapes[0], path)
+                    paths[key] = path
+                except Exception as exc:
+                    errors[key] = str(exc)
     except Exception as exc:
         for item in ready:
             if item['key'] not in paths:
                 errors[item['key']] = f'PowerPoint 차트 준비 실패: {exc}'
-    finally:
-        if presentation is not None:
-            try:
-                presentation.Close()
-            except Exception:
-                pass
-        # PowerPoint can return the user's existing application even with DispatchEx.
     return paths, errors
+
+
+def _verify_reviewed_series(chart, item):
+    if chart.ChartData.IsLinked or chart.SeriesCollection().Count != 1:
+        raise ValueError('외부 링크 없는 데이터 계열 한 개를 유지하세요.')
+    series = chart.SeriesCollection(1)
+    values = tuple(series.Values)
+    labels = lambda items: tuple(''.join(str(label).split()) for label in items)
+    if (any(isinstance(value, bool) or not isinstance(value, (int, float)) for value in values)
+            or values != tuple(item['values'])):
+        raise ValueError('차트 수치 또는 순서가 집계표와 다릅니다.')
+    if labels(series.XValues) != labels(item['labels']):
+        raise ValueError('차트 보기명 또는 순서가 집계표와 다릅니다. 줄바꿈과 공백만 바꿀 수 있습니다.')
+
+
+def export_reviewed_charts(package, deck, output_dir):
+    deck = Path(deck).resolve()
+    if deck.suffix.lower() != '.pptx':
+        raise ValueError('편집한 차트 검토 PPTX(.pptx)를 선택하세요.')
+    payload = deck.read_bytes()
+    pptx = Presentation(BytesIO(payload))
+    validate_local_deck(pptx)
+    plan = {item['key']: item for item in survey_chart_plan(package) if item['status'] in {'ready', 'review'}}
+    entries = [(index, shape.name) for index, slide in enumerate(pptx.slides, 1)
+               for shape in slide.shapes if shape.has_chart or shape.name.startswith(REVIEW_CHART_PREFIX)]
+    if not any(name.startswith(REVIEW_CHART_PREFIX) for _, name in entries):
+        raise ValueError('문항 식별자가 없습니다. 런처에서 차트 검토 PPTX를 새로 만들고 개체 이름을 유지하세요.')
+    repeats = Counter(name for _, name in entries)
+    slides = Counter(index for index, _ in entries)
+    directory = Path(mkdtemp(prefix='survey_chart_emf_', dir=Path(output_dir).resolve()))
+    results, pending = [], []
+    for index, name in entries:
+        key = name[len(REVIEW_CHART_PREFIX):] if name.startswith(REVIEW_CHART_PREFIX) else ''
+        item = plan.get(key)
+        result = dict(slide=index, table_key=key, title=item['title'] if item else '', status='rejected')
+        results.append(result)
+        if repeats[name] > 1:
+            result['reason'] = '문항 식별자가 중복되었습니다.'
+        elif slides[index] != 1:
+            result['reason'] = '검토 슬라이드에 차트 객체가 하나여야 합니다.'
+        elif not item or not re.fullmatch(r'[A-Za-z0-9_-]+', key):
+            result['reason'] = '이 집계표의 유효한 차트 문항 식별자가 아닙니다.'
+        else:
+            pending.append((index, name, item, result))
+
+    if pending:
+        try:
+            # Open the exact bytes inspected above, even when the source deck is open in PowerPoint.
+            with TemporaryDirectory() as work:
+                snapshot = Path(work) / 'reviewed.pptx'
+                snapshot.write_bytes(payload)
+                with _powerpoint_deck(snapshot) as presentation:
+                    for index, name, item, result in pending:
+                        try:
+                            shape = presentation.Slides(index).Shapes(name)
+                            if not shape.HasChart:
+                                raise ValueError('편집 가능한 차트 객체가 아닙니다.')
+                            _verify_reviewed_series(shape.Chart, item)
+                            path = directory / f'chart_{index:03d}_{item["key"]}.emf'
+                            result.update(status='exported', emf=path.name, sha256=_export_emf(shape, path))
+                        except Exception as exc:
+                            result['reason'] = str(exc)
+        except Exception as exc:
+            for _, _, _, result in pending:
+                if result['status'] == 'rejected' and 'reason' not in result:
+                    result['reason'] = f'PowerPoint 차트 준비 실패: {exc}'
+
+    report = directory / 'emf_export_report.json'
+    exported = sum(item['status'] == 'exported' for item in results)
+    report.write_text(json.dumps(dict(presentation=str(deck), exported_count=exported,
+                                      rejected_count=len(results) - exported, charts=results),
+                                 ensure_ascii=False, indent=2), encoding='utf-8')
+    return report
 
 
 def verify_saved_figures(path, prefix, results):

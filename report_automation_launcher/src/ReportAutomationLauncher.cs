@@ -2087,6 +2087,7 @@ namespace ReportAutomationLauncher
         private readonly ComboBox decimalPlacesCombo = new ComboBox();
         private readonly ComboBox chartOutputCombo = new ComboBox();
         private readonly Button createSurveyChartReviewButton = new Button();
+        private readonly Button exportReviewedChartsButton = new Button();
         private readonly Label surveyChartStyleStatus = new Label { AutoSize = true };
         private readonly ComboBox tableInsertModeCombo = new ComboBox();
         private readonly CheckBox llmEnabledCheck = new CheckBox();
@@ -2098,6 +2099,7 @@ namespace ReportAutomationLauncher
         private readonly CheckBox keepExcelOpenCheck = new CheckBox();
         private readonly Button runButton = new Button();
         private bool reportRunning;
+        private bool surveyChartExportRunning;
         private readonly Button openWorkbookButton = new Button();
         private readonly Button openDraftButton = new Button();
         private readonly Button openHwpOutputButton = new Button();
@@ -2210,7 +2212,7 @@ namespace ReportAutomationLauncher
             root.Controls.Add(footer, 0, 2);
             FormClosing += delegate(object sender, FormClosingEventArgs args)
             {
-                if (reportRunning && args.CloseReason == CloseReason.UserClosing) args.Cancel = true;
+                if ((reportRunning || surveyChartExportRunning) && args.CloseReason == CloseReason.UserClosing) args.Cancel = true;
             };
             Disposed += delegate { actionTips.Dispose(); };
 
@@ -2399,7 +2401,8 @@ namespace ReportAutomationLauncher
             runButton.Visible = !dashboard;
             runButton.Text = reportRunning ? "보고서 산출 중…" : hwp ? "한글 보고서 만들기" : "Excel 산출 시트 만들기";
             runButton.AccessibleName = runButton.Text;
-            runButton.Enabled = !reportRunning && hasWorkbook && !needsTemplate;
+            runButton.Enabled = !reportRunning && !surveyChartExportRunning && hasWorkbook && !needsTemplate;
+            exportReviewedChartsButton.Enabled = !reportRunning && !surveyChartExportRunning;
             workspaceStatus.Text = dashboard ? "기관 대시보드 · PowerPoint" :
                 reportRunning ? "산출 중 · 진행 기록은 산출 결과에서 확인" :
                 !hasWorkbook ? "원본 Excel 미선택" :
@@ -2939,6 +2942,56 @@ namespace ReportAutomationLauncher
             }
         }
 
+        private async void ExportReviewedCharts(object sender, EventArgs e)
+        {
+            if (reportRunning || surveyChartExportRunning) return;
+            string packagePath = createSurveyChartReviewButton.Tag as string;
+            if (!File.Exists(packagePath))
+            {
+                using (var packageDialog = new OpenFileDialog
+                {
+                    Title = "차트를 만든 실행의 report_package.json 선택", Filter = "보고서 데이터 (*.json)|*.json", CheckFileExists = true
+                })
+                {
+                    if (packageDialog.ShowDialog(this) != DialogResult.OK) return;
+                    packagePath = packageDialog.FileName;
+                }
+            }
+            using (var deck = new OpenFileDialog
+            {
+                Title = "편집을 끝낸 차트 검토 PPTX 선택", Filter = "PowerPoint (*.pptx)|*.pptx",
+                CheckFileExists = true, InitialDirectory = Path.GetDirectoryName(packagePath)
+            })
+            using (var folder = new FolderBrowserDialog { Description = "EMF와 내보내기 기록을 저장할 폴더를 선택하세요." })
+            {
+                if (deck.ShowDialog(this) != DialogResult.OK || folder.ShowDialog(this) != DialogResult.OK) return;
+                surveyChartExportRunning = true;
+                UpdateWorkflowStatus();
+                Log("편집한 차트의 수치를 확인하고 EMF로 저장합니다.");
+                try
+                {
+                    string arguments = "export-reviewed --input " + QuoteArg(deck.FileName) +
+                                       " --package " + QuoteArg(packagePath) + " --output " + QuoteArg(folder.SelectedPath);
+                    string path = await System.Threading.Tasks.Task.Run(() => RunTemplateTool("survey_chart_style.py", arguments, 600000));
+                    var result = new JavaScriptSerializer { MaxJsonLength = int.MaxValue }
+                        .Deserialize<Dictionary<string, object>>(File.ReadAllText(path, System.Text.Encoding.UTF8));
+                    int exported = Convert.ToInt32(result["exported_count"]);
+                    int rejected = Convert.ToInt32(result["rejected_count"]);
+                    string message = "EMF " + exported + "개 저장 · 제외 " + rejected + "개" + Environment.NewLine +
+                        "기록: " + path + Environment.NewLine +
+                        "한글 그림 자리에서 [그림 넣기]로 EMF를 넣고, 그림 번호 종류는 [없음]으로 설정하세요.";
+                    Log(message);
+                    MessageBox.Show(this, message, "차트 EMF", MessageBoxButtons.OK, rejected > 0 ? MessageBoxIcon.Warning : MessageBoxIcon.Information);
+                }
+                catch (Exception ex) { MessageBox.Show(this, ex.Message, "차트 EMF", MessageBoxButtons.OK, MessageBoxIcon.Warning); }
+                finally
+                {
+                    surveyChartExportRunning = false;
+                    UpdateWorkflowStatus();
+                }
+            }
+        }
+
         private Control BuildAdvancedOptionsGroup()
         {
             var group = new GroupBox();
@@ -3083,7 +3136,9 @@ namespace ReportAutomationLauncher
             createSurveyChartReviewButton.Text = "차트 검토 PPTX 만들기…";
             createSurveyChartReviewButton.Enabled = false;
             createSurveyChartReviewButton.Click += CreateSurveyChartReview;
-            foreach (var button in new[] { openHwpOutputButton, openWorkbookButton, openDraftButton, openPreflightButton, openHwpReportButton, createSurveyChartReviewButton })
+            exportReviewedChartsButton.Text = "편집한 차트 EMF 저장…";
+            exportReviewedChartsButton.Click += ExportReviewedCharts;
+            foreach (var button in new[] { openHwpOutputButton, openWorkbookButton, openDraftButton, openPreflightButton, openHwpReportButton, createSurveyChartReviewButton, exportReviewedChartsButton })
             {
                 button.AutoSize = true;
                 resultButtons.Controls.Add(button);
@@ -4506,7 +4561,7 @@ namespace ReportAutomationLauncher
             }
         }
 
-        internal static void RunTemplateTool(string scriptName, string arguments, int timeoutMs)
+        internal static string RunTemplateTool(string scriptName, string arguments, int timeoutMs)
         {
             string pythonPath = PathResolver.ResolvePythonPath();
             string scriptPath = PathResolver.ResolveEngineToolPath(scriptName);
@@ -4545,6 +4600,7 @@ namespace ReportAutomationLauncher
                 {
                     throw new InvalidOperationException(string.IsNullOrWhiteSpace(stderr) ? stdout.Trim() : stderr.Trim());
                 }
+                return stdout.Trim();
             }
         }
 
@@ -4655,6 +4711,7 @@ namespace ReportAutomationLauncher
 
         private void RunButton_Click(object sender, EventArgs e)
         {
+            if (surveyChartExportRunning) return;
             LauncherOptions options;
             try
             {
