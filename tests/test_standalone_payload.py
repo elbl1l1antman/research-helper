@@ -37,7 +37,8 @@ class StandalonePayloadTests(unittest.TestCase):
                      "report_automation_addin/dev/ReportAutomationAddin_dev.xlam",
                      "templates/report_template_basic.hwpx", "templates/report_template_basic.pptx",
                      "templates/report_template_guardian.hwpx", "templates/report_template_screening.hwpx",
-                     "templates/chart_review_template_basic.pptx", "docs/template_authoring_guide.md",
+                     "templates/chart_review_template_basic.pptx", "templates/chart_style_deep_blue.pptx",
+                     "templates/chart_style_sky_blue.pptx", "docs/template_authoring_guide.md",
                      "report_automation_launcher/licenses/openpyxl-1.0-LICENCE.rst",
                      "report_automation_launcher/licenses/et_xmlfile-1.0-LICENCE.rst",
                      "report_automation_launcher/licenses/et_xmlfile-1.0-LICENCE.python"]:
@@ -106,7 +107,8 @@ class StandalonePayloadTests(unittest.TestCase):
                          "LICENSE", "THIRD_PARTY_NOTICES.md", "licenses/openpyxl-1.0-LICENCE.rst",
                          "licenses/et_xmlfile-1.0-LICENCE.python", "templates/report_template_basic.pptx",
                          "templates/report_template_basic.hwpx", "templates/report_template_guardian.hwpx",
-                         "templates/report_template_screening.hwpx",
+                         "templates/report_template_screening.hwpx", "templates/chart_style_deep_blue.pptx",
+                         "templates/chart_style_sky_blue.pptx",
                          "report_automation_addin/dev/ReportAutomationAddin_dev.xlam", "docs/template_authoring_guide.md",
                          "report_automation_engine/config/default_hwp_style_config.json"]:
                 self.assertIn(name, names)

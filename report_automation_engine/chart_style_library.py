@@ -7,9 +7,10 @@ from io import BytesIO
 import json
 from pathlib import Path
 from tempfile import TemporaryDirectory, mkdtemp
-from zipfile import BadZipFile, ZipFile
+from zipfile import BadZipFile, ZIP_DEFLATED, ZipFile
 
 from lxml import etree
+from PIL import Image, ImageDraw
 from pptx import Presentation
 from pptx.enum.chart import XL_TICK_LABEL_POSITION
 from pptx.enum.shapes import MSO_SHAPE_TYPE
@@ -45,6 +46,56 @@ def _local_name(el):
     return el.tag.rsplit('}', 1)[-1]
 
 
+def clean_style_package(payload, chart_xml=None):
+    """Remove Office document identity while keeping theme colors and fonts."""
+    cleaned = BytesIO()
+    with ZipFile(BytesIO(payload)) as source, ZipFile(cleaned, 'w', ZIP_DEFLATED) as target:
+        previews = set()
+        if chart_xml is not None and '_rels/.rels' in source.namelist():
+            previews = {rel.get('Target', '').lstrip('/') for rel in etree.fromstring(source.read('_rels/.rels'))
+                        if rel.get('Type', '').endswith('/image')}
+        for name in source.namelist():
+            lower = name.lower()
+            if lower.startswith('docprops/thumbnail.'):
+                continue
+            data = source.read(name)
+            if lower.endswith('.xlsx'):
+                data = clean_style_package(data)
+            elif name == 'chart/chart.xml' and chart_xml is not None:
+                data = chart_xml
+            elif name in previews:
+                # The gallery preview can reveal the old series even without its workbook.
+                picture = Image.new('RGB', (48, 48), 'white')
+                draw = ImageDraw.Draw(picture)
+                for x, y in ((7, 27), (19, 17), (31, 22)):
+                    draw.rectangle((x, y, x + 8, 40), fill='#3979A6')
+                preview = BytesIO()
+                picture.save(preview, format=Image.registered_extensions().get(Path(name).suffix.lower(), 'BMP'))
+                data = preview.getvalue()
+            elif lower.startswith('docprops/') and lower.endswith('.xml'):
+                root = etree.fromstring(data)
+                root.attrib.clear()
+                for node in list(root):
+                    if lower != 'docprops/app.xml' or _local_name(node) not in ('Application', 'AppVersion'):
+                        root.remove(node)
+                data = etree.tostring(root, encoding='UTF-8')
+            elif name in ('_rels/.rels', '[Content_Types].xml'):
+                root = etree.fromstring(data)
+                for node in list(root):
+                    part = (node.get('Target') or node.get('PartName') or '').lstrip('/').lower()
+                    if part.startswith('docprops/thumbnail.'):
+                        root.remove(node)
+                data = etree.tostring(root, encoding='UTF-8')
+            elif '/theme' in lower and lower.endswith('.xml'):
+                root = etree.fromstring(data)
+                for node in root.iter():
+                    if _local_name(node) in ('theme', 'themeOverride', 'clrScheme', 'fontScheme', 'fmtScheme') and 'name' in node.attrib:
+                        node.set('name', 'Chart Theme')
+                data = etree.tostring(root, encoding='UTF-8')
+            target.writestr(name, data)
+    return cleaned.getvalue()
+
+
 def _role(chart):
     if len(chart.plots) == len(chart.series) == 1:
         return next((name for name, chart_type in STYLE_NAMES.items() if chart.chart_type == chart_type), '')
@@ -70,7 +121,7 @@ def _describe_chart(slide_index, shape):
                     for el in root.iter(qn('a:' + tag)) if el.get('typeface')})
     sizes = sorted({int(el.get('sz')) / 100 for tag in ('defRPr', 'rPr', 'endParaRPr')
                     for el in root.iter(qn('a:' + tag)) if (el.get('sz') or '').isdigit()})
-    return dict(slide=slide_index, shape_id=shape.shape_id, shape_name=shape.name, chart_type=kind,
+    return dict(slide=slide_index, shape_id=shape.shape_id, shape_name=f'차트 {shape.shape_id}', chart_type=kind,
                 plot_types=plots, series_count=len(chart.series), prototype=role, fonts=fonts, font_sizes_pt=sizes,
                 number_formats=sorted({el.get('formatCode') for el in root.iter(qn('c:numFmt')) if el.get('formatCode')}),
                 colors=sorted({el.get('val') for tag in ('srgbClr', 'schemeClr')
@@ -100,11 +151,7 @@ def _clean_crtx(payload):
             raise ValueError('CRTX에 원본 차트 데이터가 남아 있습니다.')
         for el in root.iter(qn('a:t')):
             el.text = ''
-        cleaned = BytesIO()
-        with ZipFile(cleaned, 'w') as target:
-            for part in source.infolist():
-                target.writestr(part, etree.tostring(root, encoding='UTF-8') if part.filename == chart_name else source.read(part))
-    return cleaned.getvalue(), root
+        return clean_style_package(payload, etree.tostring(root, encoding='UTF-8')), root
 
 
 def _remove_linked_chart(slide, shape):
@@ -159,7 +206,7 @@ def extract_chart_styles(source, output_dir):
                     row.update(status='failed', reason=f'PowerPoint 준비 실패: {exc}')
     counts = Counter(row['status'] for row in charts)
     report = directory / 'chart_style_inventory.json'
-    report.write_text(json.dumps(dict(source=source.name, chart_count=len(charts),
+    report.write_text(json.dumps(dict(chart_count=len(charts),
                                       exported_count=counts['exported'], skipped_count=counts['skipped'],
                                       failed_count=counts['failed'], charts=charts),
                                  ensure_ascii=False, indent=2), encoding='utf-8')
@@ -246,6 +293,7 @@ def make_report_chart_style(source, output, style_path=None):
             deck = Presentation(result)
             if _ensure_category_labels(_prototypes(deck)[role].chart):
                 deck.save(result)
+        result.write_bytes(clean_style_package(result.read_bytes()))
         return register_chart_style(result, output)
 
 

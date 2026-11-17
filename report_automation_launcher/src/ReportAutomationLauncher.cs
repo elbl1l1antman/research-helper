@@ -2088,7 +2088,8 @@ namespace ReportAutomationLauncher
         private readonly ComboBox chartOutputCombo = new ComboBox();
         private readonly Button createSurveyChartReviewButton = new Button();
         private readonly Button exportReviewedChartsButton = new Button();
-        private readonly Label surveyChartStyleStatus = new Label { AutoSize = true };
+        private readonly ComboBox surveyChartStyleCombo = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Width = 180 };
+        private static readonly string[] SurveyChartStyleKeys = { "deep_blue", "sky_blue", "standard", "custom" };
         private readonly ComboBox tableInsertModeCombo = new ComboBox();
         private readonly CheckBox llmEnabledCheck = new CheckBox();
         private readonly ComboBox llmProviderCombo = new ComboBox();
@@ -2273,6 +2274,16 @@ namespace ReportAutomationLauncher
             hwpTemplateText.Text = bundledAddin;
             if (!runButton.Enabled)
                 throw new InvalidOperationException("입력이 준비된 한글 보고서의 실행 버튼이 비활성 상태입니다.");
+            int previousChartStyle = surveyChartStyleCombo.SelectedIndex;
+            chartCheck.Checked = true;
+            for (int i = 0; i < 2; i++)
+            {
+                surveyChartStyleCombo.SelectedIndex = i;
+                string theme = StandaloneBundle.Find("templates/chart_style_" + SurveyChartStyleKeys[i] + ".pptx");
+                if (!File.Exists(theme) || ReadOptions().HwpChartStylePath != theme || !IsProtectedChartStyle(theme))
+                    throw new InvalidOperationException("한글 차트에 선택한 기본 서식이 연결되지 않았습니다.");
+            }
+            surveyChartStyleCombo.SelectedIndex = previousChartStyle;
             var expectedScope = new[] { 1, 3, 0 };
             for (int i = 0; i < expectedScope.Length; i++)
             {
@@ -2855,10 +2866,60 @@ namespace ReportAutomationLauncher
             get { return Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "ResearchHelper", "survey_chart_style.pptx"); }
         }
 
-        private void RefreshSurveyChartStyle()
+        private static string SurveyChartStylePreferencePath
         {
-            bool registered = File.Exists(SurveyChartStylePath);
-            surveyChartStyleStatus.Text = registered ? "현재 서식: 내 공통 서식" : "현재 서식: 기본 세로 막대 · 도넛";
+            get { return Path.Combine(Path.GetDirectoryName(SurveyChartStylePath), "survey_chart_theme.txt"); }
+        }
+
+        private static string BuiltInChartStyle(int index)
+        {
+            if (index < 0 || index > 1) return null;
+            string name = "chart_style_" + SurveyChartStyleKeys[index] + ".pptx";
+            string path = StandaloneBundle.Find("templates/" + name) ??
+                Path.Combine(Path.GetDirectoryName(PathResolver.ResolveExcelEnginePath()), "..", "templates", name);
+            return File.Exists(path) ? Path.GetFullPath(path) : null;
+        }
+
+        private string ActiveSurveyChartStyle()
+        {
+            int index = surveyChartStyleCombo.SelectedIndex;
+            return index == 3 && File.Exists(SurveyChartStylePath) ? SurveyChartStylePath : BuiltInChartStyle(index);
+        }
+
+        private int LoadSurveyChartStyleChoice()
+        {
+            try
+            {
+                if (File.Exists(SurveyChartStylePreferencePath))
+                {
+                    int index = Array.IndexOf(SurveyChartStyleKeys, File.ReadAllText(SurveyChartStylePreferencePath).Trim());
+                    if (index >= 0 && (index != 3 || File.Exists(SurveyChartStylePath))) return index;
+                }
+            }
+            catch (IOException ex) { Log("차트 서식 선택을 읽지 못했습니다: " + ex.Message); }
+            catch (UnauthorizedAccessException ex) { Log("차트 서식 선택을 읽지 못했습니다: " + ex.Message); }
+            return File.Exists(SurveyChartStylePath) ? 3 : 0;
+        }
+
+        private void SaveSurveyChartStyleChoice()
+        {
+            int index = surveyChartStyleCombo.SelectedIndex;
+            if (index < 0) return;
+            try
+            {
+                Directory.CreateDirectory(Path.GetDirectoryName(SurveyChartStylePreferencePath));
+                File.WriteAllText(SurveyChartStylePreferencePath, SurveyChartStyleKeys[index]);
+            }
+            catch (IOException ex) { Log("차트 서식 선택을 저장하지 못했습니다: " + ex.Message); }
+            catch (UnauthorizedAccessException ex) { Log("차트 서식 선택을 저장하지 못했습니다: " + ex.Message); }
+        }
+
+        private void RefreshSurveyChartStyle(int index)
+        {
+            bool custom = File.Exists(SurveyChartStylePath);
+            if (custom && surveyChartStyleCombo.Items.Count == 3) surveyChartStyleCombo.Items.Add("내 공통 서식");
+            if (!custom && surveyChartStyleCombo.Items.Count == 4) surveyChartStyleCombo.Items.RemoveAt(3);
+            surveyChartStyleCombo.SelectedIndex = index == 3 && !custom ? 0 : index;
         }
 
         private Control BuildSurveyChartStyleGroup()
@@ -2866,9 +2927,9 @@ namespace ReportAutomationLauncher
             var layout = new FlowLayoutPanel { Dock = DockStyle.Top, AutoSize = true, FlowDirection = FlowDirection.TopDown, WrapContents = false, Padding = new Padding(12) };
             var commands = new FlowLayoutPanel { AutoSize = true };
             var libraryCommands = new FlowLayoutPanel { AutoSize = true };
-            var save = new Button { Text = "편집용 기본 PPTX 저장…", AutoSize = true };
+            var save = new Button { Text = "선택한 서식의 PPTX 사본 저장…", AutoSize = true };
             var register = new Button { Text = "편집한 PPTX 등록…", AutoSize = true };
-            var reset = new Button { Text = "기본 서식으로 되돌리기", AutoSize = true };
+            var reset = new Button { Text = "내 공통 서식 삭제…", AutoSize = true };
             var guide = new Button { Text = "서식 편집 안내", AutoSize = true };
             var extract = new Button { Text = "그래프틀에서 CRTX 추출…", AutoSize = true };
             var fromTemplate = new Button { Text = "CRTX로 기본 PPTX 만들기…", AutoSize = true };
@@ -2877,8 +2938,10 @@ namespace ReportAutomationLauncher
                 using (var dialog = new SaveFileDialog { Filter = "PowerPoint (*.pptx)|*.pptx", FileName = "기본 차트 서식.pptx", DefaultExt = "pptx" })
                 {
                     if (dialog.ShowDialog(this) != DialogResult.OK) return;
-                    if (IsRegisteredChartStyle(dialog.FileName)) { MessageBox.Show(this, "등록된 서식이 아닌 다른 경로에 저장하세요.", "차트 서식"); return; }
-                    await RunSurveyChartCommand(layout, "create --output " + QuoteArg(dialog.FileName), "편집용 기본 PPTX를 저장했습니다.");
+                    if (IsProtectedChartStyle(dialog.FileName)) { MessageBox.Show(this, "원본 서식이 아닌 다른 경로에 저장하세요.", "차트 서식"); return; }
+                    string selected = ActiveSurveyChartStyle();
+                    string command = selected == null ? "create" : "register --input " + QuoteArg(selected);
+                    await RunSurveyChartCommand(layout, command + " --output " + QuoteArg(dialog.FileName), "편집용 PPTX 사본을 저장했습니다.");
                 }
             };
             register.Click += async delegate
@@ -2887,15 +2950,24 @@ namespace ReportAutomationLauncher
                 {
                     if (dialog.ShowDialog(this) != DialogResult.OK) return;
                     if (File.Exists(SurveyChartStylePath) && MessageBox.Show(this, "현재 공통 차트 서식을 교체할까요?", "차트 서식 등록", MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes) return;
-                    await RunSurveyChartCommand(layout, "register --input " + QuoteArg(dialog.FileName) + " --output " + QuoteArg(SurveyChartStylePath), "모든 프로젝트에 사용할 공통 서식을 등록했습니다.");
-                    RefreshSurveyChartStyle();
+                    if (await RunSurveyChartCommand(layout, "register --input " + QuoteArg(dialog.FileName) + " --output " + QuoteArg(SurveyChartStylePath), "모든 프로젝트에 사용할 공통 서식을 등록했습니다."))
+                    {
+                        RefreshSurveyChartStyle(3);
+                        SaveSurveyChartStyleChoice();
+                    }
                 }
             };
             reset.Click += delegate
             {
                 if (!File.Exists(SurveyChartStylePath)) return;
-                if (MessageBox.Show(this, "등록한 서식 사본만 제거하고 기본 서식으로 돌아갈까요?", "차트 서식", MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes) return;
-                try { File.Delete(SurveyChartStylePath); RefreshSurveyChartStyle(); }
+                if (MessageBox.Show(this, "등록한 내 공통 서식 사본을 삭제할까요?", "차트 서식", MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes) return;
+                try
+                {
+                    int index = surveyChartStyleCombo.SelectedIndex;
+                    File.Delete(SurveyChartStylePath);
+                    RefreshSurveyChartStyle(index);
+                    SaveSurveyChartStyleChoice();
+                }
                 catch (IOException ex) { MessageBox.Show(this, ex.Message, "차트 서식", MessageBoxButtons.OK, MessageBoxIcon.Warning); }
                 catch (UnauthorizedAccessException ex) { MessageBox.Show(this, ex.Message, "차트 서식", MessageBoxButtons.OK, MessageBoxIcon.Warning); }
             };
@@ -2922,30 +2994,39 @@ namespace ReportAutomationLauncher
                 using (var output = new SaveFileDialog { Filter = "PowerPoint (*.pptx)|*.pptx", FileName = "추출한 기본 차트 서식.pptx", DefaultExt = "pptx" })
                 {
                     if (template.ShowDialog(this) != DialogResult.OK || output.ShowDialog(this) != DialogResult.OK) return;
-                    if (IsRegisteredChartStyle(output.FileName)) { MessageBox.Show(this, "등록된 서식이 아닌 새 파일에 저장하세요.", "차트 서식"); return; }
-                    string existing = File.Exists(SurveyChartStylePath) ? " --style " + QuoteArg(SurveyChartStylePath) : "";
+                    if (IsProtectedChartStyle(output.FileName)) { MessageBox.Show(this, "원본 서식이 아닌 새 파일에 저장하세요.", "차트 서식"); return; }
+                    string existing = ActiveSurveyChartStyle();
                     await RunSurveyChartCommand(layout, "make-default --input " + QuoteArg(template.FileName) +
-                        " --output " + QuoteArg(output.FileName) + existing, "기본 PPTX를 저장했습니다. 사용하려면 [편집한 PPTX 등록]에서 선택하세요.", "chart_style_library.py");
+                        " --output " + QuoteArg(output.FileName) + (existing == null ? "" : " --style " + QuoteArg(existing)),
+                        "기본 PPTX를 저장했습니다. 사용하려면 [편집한 PPTX 등록]에서 선택하세요.", "chart_style_library.py");
                 }
             };
             foreach (var button in new[] { save, register, reset, guide }) commands.Controls.Add(button);
             libraryCommands.Controls.Add(extract);
             libraryCommands.Controls.Add(fromTemplate);
-            layout.Controls.Add(surveyChartStyleStatus);
+            var selection = new FlowLayoutPanel { AutoSize = true };
+            selection.Controls.Add(new Label { Text = "사용할 차트 서식", AutoSize = true, Margin = new Padding(3, 6, 8, 0) });
+            surveyChartStyleCombo.AccessibleName = "사용할 차트 서식";
+            surveyChartStyleCombo.Items.AddRange(new object[] { "딥 블루", "스카이 블루", "표준 세로 막대 · 도넛" });
+            RefreshSurveyChartStyle(LoadSurveyChartStyleChoice());
+            surveyChartStyleCombo.SelectionChangeCommitted += delegate { SaveSurveyChartStyleChoice(); };
+            selection.Controls.Add(surveyChartStyleCombo);
+            layout.Controls.Add(selection);
             layout.Controls.Add(commands);
             layout.Controls.Add(libraryCommands);
-            RefreshSurveyChartStyle();
             return layout;
         }
 
-        private static bool IsRegisteredChartStyle(string path)
+        private static bool IsProtectedChartStyle(string path)
         {
-            return string.Equals(Path.GetFullPath(path), SurveyChartStylePath, StringComparison.OrdinalIgnoreCase);
+            string full = Path.GetFullPath(path);
+            return new[] { SurveyChartStylePath, BuiltInChartStyle(0), BuiltInChartStyle(1) }
+                .Any(style => string.Equals(full, style, StringComparison.OrdinalIgnoreCase));
         }
 
-        private async System.Threading.Tasks.Task RunSurveyChartCommand(Control controls, string arguments, string success, string tool = "survey_chart_style.py")
+        private async System.Threading.Tasks.Task<bool> RunSurveyChartCommand(Control controls, string arguments, string success, string tool = "survey_chart_style.py")
         {
-            if (reportRunning || surveyChartExportRunning) return;
+            if (reportRunning || surveyChartExportRunning) return false;
             surveyChartExportRunning = true;
             controls.Enabled = false;
             UpdateWorkflowStatus();
@@ -2968,8 +3049,13 @@ namespace ReportAutomationLauncher
                 }
                 Log(success);
                 MessageBox.Show(this, success, "PPTX 차트", MessageBoxButtons.OK, icon);
+                return true;
             }
-            catch (Exception ex) { MessageBox.Show(this, ex.Message, "PPTX 차트", MessageBoxButtons.OK, MessageBoxIcon.Warning); }
+            catch (Exception ex)
+            {
+                MessageBox.Show(this, ex.Message, "PPTX 차트", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return false;
+            }
             finally
             {
                 controls.Enabled = true;
@@ -2985,8 +3071,9 @@ namespace ReportAutomationLauncher
             using (var dialog = new SaveFileDialog { Filter = "PowerPoint (*.pptx)|*.pptx", FileName = "차트 검토.pptx", DefaultExt = "pptx", InitialDirectory = Path.GetDirectoryName(packagePath) })
             {
                 if (dialog.ShowDialog(this) != DialogResult.OK) return;
-                if (IsRegisteredChartStyle(dialog.FileName)) { MessageBox.Show(this, "등록된 서식이 아닌 다른 경로에 저장하세요.", "차트 서식"); return; }
-                string style = File.Exists(SurveyChartStylePath) ? " --style " + QuoteArg(SurveyChartStylePath) : "";
+                if (IsProtectedChartStyle(dialog.FileName)) { MessageBox.Show(this, "원본 서식이 아닌 다른 경로에 저장하세요.", "차트 서식"); return; }
+                string active = ActiveSurveyChartStyle();
+                string style = active == null ? "" : " --style " + QuoteArg(active);
                 await RunSurveyChartCommand(createSurveyChartReviewButton, "review --input " + QuoteArg(packagePath) +
                     " --output " + QuoteArg(dialog.FileName) + style, "차트 검토 PPTX: " + dialog.FileName);
                 createSurveyChartReviewButton.Enabled = !reportRunning && File.Exists(createSurveyChartReviewButton.Tag as string);
@@ -6078,7 +6165,7 @@ namespace ReportAutomationLauncher
             if (outputTypeCombo.SelectedIndex == 1 && chartCheck.Checked && hwpIncludeFiguresCheck.Checked)
             {
                 options.HwpFigurePrefix = Decimal.ToInt32(hwpFigurePrefix.Value).ToString(System.Globalization.CultureInfo.InvariantCulture);
-                options.HwpChartStylePath = File.Exists(SurveyChartStylePath) ? SurveyChartStylePath : null;
+                options.HwpChartStylePath = ActiveSurveyChartStyle();
             }
             options.HwpKeepOpenOnError = hwpKeepOpenOnErrorCheck.Checked;
             options.HwpMaxSections = SelectedHwpMaxSections();

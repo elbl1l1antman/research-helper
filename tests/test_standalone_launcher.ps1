@@ -64,6 +64,12 @@ try {
     $chartDeck = Join-Path $directory 'chart review.pptx'
     & $result.python -E -s -X utf8 $styleTool review --input $chartPackage --style $registeredStyle --output $chartDeck
     if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $chartDeck)) { throw 'Bundled chart review failed.' }
+    foreach ($theme in @('deep_blue','sky_blue')) {
+        $builtIn = Join-Path $result.bundle_root "templates/chart_style_$theme.pptx"
+        $themeDeck = Join-Path $directory "$theme review.pptx"
+        & $result.python -E -s -X utf8 $styleTool review --input $chartPackage --style $builtIn --output $themeDeck
+        if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $themeDeck)) { throw "Bundled chart theme failed: $theme" }
+    }
     $failedOutput = Join-Path $directory 'failed run'
     $failedRun = Start-Process -FilePath $copy -ArgumentList @('--workbook', ('"' + $fixture + '"'), '--addin', ('"' + $missingAddin + '"'), '--out', ('"' + $failedOutput + '"')) -WorkingDirectory $directory -WindowStyle Hidden -Wait -PassThru
     if ($failedRun.ExitCode -ne 1 -or -not (Test-Path -LiteralPath ($failedOutput + '.excel_addin.json'))) { throw 'Missing add-in did not block the normal workflow with a diagnostic.' }

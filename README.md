@@ -1,6 +1,6 @@
 # ReportAutomation
 
-Current version: `0.0.52`
+Current version: `0.0.53`
 
 `0.0.48` stabilizes [HWPX survey chart and split-table output](docs/survey_chart_style.md).
 
@@ -243,6 +243,7 @@ BASE 행과 상단 다단 헤더는 다음 쪽에서도 반복합니다. 본문�
 - 런처에서 PPTX 보고서 직접 생성
 - 런처에서 차트 검토 PPTX를 만들고, 수정한 차트를 집계값 대조 후 EMF로 저장 ([차트 작업 안내](docs/survey_chart_style.md))
 - 기존 그래프틀에서 Office 차트 서식 `.crtx`와 속성 비교표를 추출하고, 선택한 서식을 기본 PPTX로 변환
+- 기본 차트 서식은 **딥 블루**, **스카이 블루**, **표준 세로 막대·도넛**을 제공하며 선택을 기억
 - HWP 바이너리 직접 편집
 - HWPX 템플릿의 반복 결과 블록을 복제해 실제 보고서 표 서식을 보존한 삽입
 - HWPX 템플릿에 차트를 EMF/한글 차트 객체로 자동 삽입

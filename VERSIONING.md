@@ -1,6 +1,6 @@
 # Versioning
 
-Current version: `0.0.52`
+Current version: `0.0.53`
 
 ## Policy
 
@@ -16,6 +16,8 @@ Current version: `0.0.52`
   - Major: breaking file format, CLI, template, or workflow change.
 
 ## Current Baseline
+
+`0.0.53` includes two neutral color-based chart themes, remembers the GUI choice, and removes Office document identity from generated chart styles.
 
 `0.0.52` extracts native CRTX styles from existing PowerPoint decks, inventories their properties, and converts compatible templates to editable report starters.
 
