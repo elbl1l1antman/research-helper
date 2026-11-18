@@ -1,6 +1,8 @@
 # ReportAutomation
 
-Current version: `0.0.55`
+Current version: `0.0.56`
+
+실제 테스트 원자료, 캡처, 산출물과 진단 기록은 Git에 올리지 않고 로컬 `outputs/` 또는 `test-data/`에 보관합니다. 자동 테스트에는 코드로 생성한 합성 자료를 사용합니다.
 
 `0.0.48` stabilizes [HWPX survey chart and split-table output](docs/survey_chart_style.md).
 

@@ -1,6 +1,6 @@
 # Versioning
 
-Current version: `0.0.55`
+Current version: `0.0.56`
 
 ## Policy
 
@@ -16,6 +16,8 @@ Current version: `0.0.55`
   - Major: breaking file format, CLI, template, or workflow change.
 
 ## Current Baseline
+
+`0.0.56` keeps private QA inputs, outputs, and diagnostics out of Git. No executable changes.
 
 `0.0.55` makes HWPX the first launcher choice, keeps table and template readiness in context, separates chart-style management, and distinguishes progress, saved files, warnings, and failures.
 
