@@ -2028,6 +2028,9 @@ namespace ReportAutomationLauncher
 
     internal sealed class MainForm : Form
     {
+        private const string HwpOutput = "HWPX 보고서";
+        private const string ExcelOutput = "Excel 산출 시트";
+        private bool IsHwpOutput { get { return outputTypeCombo.SelectedIndex == 0; } }
         private readonly HwpStylePresetStore hwpStylePresetStore;
         private readonly TextBox workbookPathText = new TextBox();
         private readonly ComboBox outputTypeCombo = new ComboBox();
@@ -2058,6 +2061,11 @@ namespace ReportAutomationLauncher
         private readonly TextBox bannerText = new TextBox();
         private readonly CheckedListBox bannerList = new CheckedListBox();
         private readonly TabControl workflowTabs = new TabControl();
+        private readonly TabControl reportSettingsTabs = new TabControl { Dock = DockStyle.Fill };
+        private readonly TabPage sourceStep, dataStep, settingsStep, resultsStep, dashboardStep;
+        private readonly Button nextStepButton = new Button();
+        private readonly Button browseWorkbookButton = new Button();
+        private readonly Label outputLocationLabel = new Label();
         private readonly ListView tablePreviewList = new ListView();
         private readonly Button selectTableRangeButton = new Button();
         private readonly Button clearTableRangeButton = new Button();
@@ -2089,6 +2097,7 @@ namespace ReportAutomationLauncher
         private readonly Button createSurveyChartReviewButton = new Button();
         private readonly Button exportReviewedChartsButton = new Button();
         private readonly ComboBox surveyChartStyleCombo = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Width = 180 };
+        private readonly PictureBox chartStylePreview = new PictureBox { Size = new Size(360, 202), SizeMode = PictureBoxSizeMode.Zoom, AccessibleName = "차트 서식 예시" };
         private static readonly string[] SurveyChartStyleKeys = { "deep_blue", "sky_blue", "standard", "custom" };
         private readonly ComboBox tableInsertModeCombo = new ComboBox();
         private readonly CheckBox llmEnabledCheck = new CheckBox();
@@ -2109,6 +2118,7 @@ namespace ReportAutomationLauncher
         private readonly Button copyDraftButton = new Button();
         private readonly TextBox logText = new TextBox();
         private readonly TextBox resultSummaryText = new TextBox();
+        private readonly Label resultStatusLabel = new Label();
         private readonly ListView readinessList = new ListView();
         private readonly TextBox draftPreviewText = new TextBox();
         private readonly TabControl draftReviewTabs = new TabControl();
@@ -2153,6 +2163,9 @@ namespace ReportAutomationLauncher
         private readonly List<DraftQaIssue> draftQaIssues = new List<DraftQaIssue>();
         private readonly HashSet<string> recommendedBanners = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         private string lastTemplateStatus = "미검사";
+        private string previewWorkbookPath = "";
+        private int workbookPreviewRequest;
+        private bool workbookPreviewRunning, workbookPreviewFailed;
         private string currentDraftPath = "";
         private DashboardWorkbookInfo currentDashboardInfo;
         private string lastDashboardOutputPath = "";
@@ -2166,6 +2179,12 @@ namespace ReportAutomationLauncher
             Size = new Size(1120, 820);
             StartPosition = FormStartPosition.CenterScreen;
             LauncherUi.ApplyToForm(this);
+            Load += delegate
+            {
+                Rectangle area = Screen.FromControl(this).WorkingArea;
+                MinimumSize = new Size(Math.Min(MinimumSize.Width, area.Width), Math.Min(MinimumSize.Height, area.Height));
+                Size = new Size(Math.Min(Width, area.Width), Math.Min(Height, area.Height));
+            };
 
             var root = new TableLayoutPanel();
             root.Dock = DockStyle.Fill;
@@ -2184,20 +2203,22 @@ namespace ReportAutomationLauncher
             workflowTabs.SizeMode = TabSizeMode.Fixed;
             workflowTabs.ItemSize = new Size(146, 37);
             workflowTabs.DrawItem += WorkflowTabs_DrawItem;
-            workflowTabs.TabPages.Add(CreateStepPage("1  원본 파일", BuildFileGroup()));
-            workflowTabs.TabPages.Add(CreateStepPage("2  표 · 배너", BuildDataReviewGroup()));
-            workflowTabs.TabPages.Add(CreateStepPage("3  보고서 설정", BuildRulesPage()));
-            workflowTabs.TabPages.Add(CreateStepPage("4  산출 결과", BuildRunGroup()));
-            workflowTabs.TabPages.Add(CreateStepPage("기관 대시보드 PPT", BuildDashboardPage()));
+            sourceStep = CreateStepPage("1  원본 · 산출물", BuildFileGroup());
+            dataStep = CreateStepPage("2  표 · 분석 배너", BuildDataReviewGroup());
+            settingsStep = CreateStepPage("3  보고서 설정", BuildRulesPage());
+            resultsStep = CreateStepPage("4  결과", BuildRunGroup());
+            dashboardStep = CreateStepPage("도구: 기관 PPT", BuildDashboardPage());
+            workflowTabs.TabPages.AddRange(new[] { sourceStep, dataStep, settingsStep, resultsStep, dashboardStep });
             workflowTabs.SelectedIndexChanged += delegate { UpdateWorkflowStatus(); };
             root.Controls.Add(workflowTabs, 0, 1);
 
             var footer = new TableLayoutPanel
             {
-                Dock = DockStyle.Fill, AutoSize = true, ColumnCount = 2,
+                Dock = DockStyle.Fill, AutoSize = true, ColumnCount = 3,
                 Margin = new Padding(0, LauncherUi.SpaceSm, 0, 0)
             };
             footer.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+            footer.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
             footer.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
             workspaceStatus.Dock = DockStyle.Fill;
             workspaceStatus.AutoEllipsis = true;
@@ -2208,8 +2229,21 @@ namespace ReportAutomationLauncher
             runButton.MinimumSize = new Size(176, 34);
             runButton.Tag = LauncherButtonKind.Primary;
             runButton.Click += RunButton_Click;
+            nextStepButton.AutoSize = true;
+            nextStepButton.Tag = LauncherButtonKind.Primary;
+            nextStepButton.Click += delegate
+            {
+                if (workflowTabs.SelectedTab == sourceStep)
+                {
+                    workflowTabs.SelectedTab = dataStep;
+                    if (string.IsNullOrEmpty(previewWorkbookPath)) LoadWorkbookPreviewAsync();
+                }
+                else
+                    workflowTabs.SelectedTab = settingsStep;
+            };
             footer.Controls.Add(workspaceStatus, 0, 0);
-            footer.Controls.Add(runButton, 1, 0);
+            footer.Controls.Add(nextStepButton, 1, 0);
+            footer.Controls.Add(runButton, 2, 0);
             root.Controls.Add(footer, 0, 2);
             FormClosing += delegate(object sender, FormClosingEventArgs args)
             {
@@ -2217,10 +2251,10 @@ namespace ReportAutomationLauncher
             };
             Disposed += delegate { actionTips.Dispose(); };
 
-            workbookPathText.TextChanged += delegate { UpdateWorkflowStatus(); };
+            workbookPathText.TextChanged += delegate { ResetWorkbookPreview(); UpdateOutputLocation(); };
             outputTypeCombo.SelectedIndexChanged += delegate { UpdateWorkflowStatus(); };
-            hwpTemplateText.TextChanged += delegate { UpdateWorkflowStatus(); };
-            pptTemplateText.TextChanged += delegate { UpdateWorkflowStatus(); };
+            hwpTemplateText.TextChanged += delegate { ResetTemplateStatus("선택한 양식은 산출 전에 자동으로 확인합니다."); };
+            hwpMaxSectionsCombo.SelectedIndexChanged += delegate { UpdateWorkflowStatus(); };
 
             bannerText.Text = "전체";
             titlePrefixesText.Text = "";
@@ -2246,43 +2280,70 @@ namespace ReportAutomationLauncher
             draftTextCheck.Checked = true;
             copyWorkbookCheck.Checked = true;
             keepExcelOpenCheck.Checked = true;
+            UpdateOutputLocation();
             LauncherUi.ApplyTree(this);
-            UpdateWorkflowStatus();
-            UpdateReadinessChecklist();
+            ResetWorkbookPreview();
         }
 
         internal void CheckWorkflowLayout()
         {
             Size = MinimumSize;
-            var rulesTabs = workflowTabs.TabPages[2].Controls[0] as TabControl;
-            if (rulesTabs == null || !rulesTabs.TabPages.Cast<TabPage>().Any(page => page.Text == "PPTX 차트 서식") || createSurveyChartReviewButton.Enabled)
+            Control outputPage = outputTypeCombo;
+            while (outputPage != null && !(outputPage is TabPage)) outputPage = outputPage.Parent;
+            if (outputPage != sourceStep || outputTypeCombo.Items.Count != 2 || !IsHwpOutput)
+                throw new InvalidOperationException("첫 화면에서 보고서 산출 목적을 선택할 수 없습니다.");
+            if (!reportSettingsTabs.TabPages.Cast<TabPage>().Any(page => page.Text == "표 · 그림") || createSurveyChartReviewButton.Enabled)
                 throw new InvalidOperationException("PPTX 차트 서식 화면 또는 초기 버튼 상태가 올바르지 않습니다.");
-            if (runButton.Enabled || runButton.Text != "Excel 산출 시트 만들기")
-                throw new InvalidOperationException("원본 파일이 없는 Excel 산출 상태가 올바르지 않습니다.");
+            if (runButton.Enabled || runButton.Text != "한글 보고서 만들기")
+                throw new InvalidOperationException("원본 파일이 없는 한글 산출 상태가 올바르지 않습니다.");
 
             // Existing paths stand in for inputs; no Excel or Hancom session is opened.
             string bundledAddin = PathResolver.ResolveDefaultAddinPath();
             workbookPathText.Text = bundledAddin;
-            if (!runButton.Enabled || ReadOptions().AddinPath != bundledAddin)
+            workflowTabs.SelectedTab = settingsStep;
+            outputTypeCombo.SelectedIndex = 1;
+            if (!runButton.Enabled || ReadOptions().AddinPath != bundledAddin || ReadOptions().OutputType != ExcelOutput)
                 throw new InvalidOperationException("원본 파일만 선택한 Excel 산출에 내장 추가기능이 자동 지정되지 않았습니다.");
             if (workflowTabs.TabPages[0].Controls[0].Controls.Count != 1 ||
                 readinessList.Items.Cast<ListViewItem>().Any(item => item.Text == "추가기능"))
                 throw new InvalidOperationException("Excel 추가기능 수동 설정이 일반 작업 화면에 남아 있습니다.");
-            outputTypeCombo.SelectedIndex = 1;
+            outputTypeCombo.SelectedIndex = 0;
             if (runButton.Enabled || runButton.Text != "한글 보고서 만들기")
                 throw new InvalidOperationException("양식 없는 한글 보고서의 준비 상태가 올바르지 않습니다.");
-            hwpTemplateText.Text = bundledAddin;
-            if (!runButton.Enabled)
+            hwpTemplateText.Text = StandaloneBundle.Find("templates/report_template_basic.hwpx");
+            if (!runButton.Enabled || ReadOptions().OutputType != HwpOutput)
                 throw new InvalidOperationException("입력이 준비된 한글 보고서의 실행 버튼이 비활성 상태입니다.");
+            lastTemplateStatus = "needs_autofix";
+            UpdateWorkflowStatus();
+            if (runButton.Enabled) throw new InvalidOperationException("필수 필드가 없는 양식을 실행할 수 있습니다.");
+            hwpTemplateText.Text = StandaloneBundle.Find("templates/report_template_guardian.hwpx");
+            if (!runButton.Enabled || lastTemplateStatus != "미검사")
+                throw new InvalidOperationException("새 양식에 이전 검사 결과가 남아 있습니다.");
+            lastTemplateStatus = "usable_with_warnings";
+            UpdateWorkflowStatus();
+            if (!runButton.Enabled) throw new InvalidOperationException("권장 필드 경고가 출력까지 막습니다.");
+            hwpTemplateText.Text = bundledAddin;
+            if (runButton.Enabled) throw new InvalidOperationException("HWPX가 아닌 양식을 실행할 수 있습니다.");
+            hwpTemplateText.Text = StandaloneBundle.Find("templates/report_template_basic.hwpx");
+            int oldRequest = workbookPreviewRequest;
+            workbookPathText.Clear();
+            workbookPathText.Text = bundledAddin;
+            if (IsCurrentWorkbookPreview(oldRequest, bundledAddin) || workbookPreviewRunning)
+                throw new InvalidOperationException("이전 집계표 탐지 결과가 새 요청을 덮어쓸 수 있습니다.");
             int previousChartStyle = surveyChartStyleCombo.SelectedIndex;
             chartCheck.Checked = true;
             for (int i = 0; i < 2; i++)
             {
                 surveyChartStyleCombo.SelectedIndex = i;
                 string theme = StandaloneBundle.Find("templates/chart_style_" + SurveyChartStyleKeys[i] + ".pptx");
-                if (!File.Exists(theme) || ReadOptions().HwpChartStylePath != theme || !IsProtectedChartStyle(theme))
+                if (!File.Exists(theme) || ReadOptions().HwpChartStylePath != theme || !IsProtectedChartStyle(theme) || chartStylePreview.Image == null)
                     throw new InvalidOperationException("한글 차트에 선택한 기본 서식이 연결되지 않았습니다.");
             }
+            chartCheck.Checked = false;
+            hwpIncludeFiguresCheck.Checked = false;
+            if (surveyChartStyleCombo.SelectedIndex != 1 || ReadOptions().HwpChartStylePath != null)
+                throw new InvalidOperationException("차트 제외가 기존 서식 선택을 초기화합니다.");
+            chartCheck.Checked = hwpIncludeFiguresCheck.Checked = true;
             surveyChartStyleCombo.SelectedIndex = previousChartStyle;
             var expectedScope = new[] { 1, 3, 0 };
             for (int i = 0; i < expectedScope.Length; i++)
@@ -2297,6 +2358,25 @@ namespace ReportAutomationLauncher
                 ReadOptions().ArtifactDirectory != Path.GetFullPath(Path.GetTempPath()))
                 throw new InvalidOperationException("저장 폴더 선택 시 Excel 작업 복사본이 필요합니다.");
             outputFolderText.Clear();
+
+            var savedOptions = new LauncherOptions { LastGeneratedWorkbookPath = bundledAddin };
+            PopulateResultFiles(savedOptions);
+            if (!openHwpOutputButton.Enabled || openHwpOutputButton.Text != "산출 Excel 열기" ||
+                ResultStatus(false, true) != "저장하지 못함" || ResultStatus(true, false) != "저장 완료")
+                throw new InvalidOperationException("산출 파일 또는 저장 상태 표시가 올바르지 않습니다.");
+            string writerFixture = Path.GetTempFileName();
+            try
+            {
+                File.WriteAllText(writerFixture, "{\"chart_results\":[{\"status\":\"held\",\"number\":\"1-1\",\"reason\":\"fixture\"}]}");
+                bool held;
+                string details = BuildHwpWriterReportSummary(writerFixture, out held);
+                if (!held || !details.Contains("1-1") || ResultStatus(true, held) != "검토 필요 · 일부 차트 보류")
+                    throw new InvalidOperationException("차트 보류 결과를 검토 상태로 표시하지 않았습니다.");
+            }
+            finally { File.Delete(writerFixture); }
+            ClearResultFiles();
+            if (openHwpOutputButton.Tag != null || openHwpOutputButton.Enabled || createSurveyChartReviewButton.Tag != null)
+                throw new InvalidOperationException("이전 실행 파일이 새 작업의 버튼에 남아 있습니다.");
 
             var examples = new HashSet<string>();
             for (int index = 0; index < reportProfileCombo.Items.Count; index++)
@@ -2406,20 +2486,29 @@ namespace ReportAutomationLauncher
             int tableCount = tablePreviewList.Items.Count;
             int checkedBanners = CountCheckedBanners();
 
-            bool dashboard = workflowTabs.SelectedIndex == 4;
-            bool hwp = outputTypeCombo.Text.IndexOf("HWP", StringComparison.OrdinalIgnoreCase) >= 0;
-            bool needsTemplate = hwp && !File.Exists(hwpTemplateText.Text.Trim());
-            runButton.Visible = !dashboard;
-            runButton.Text = reportRunning ? "보고서 산출 중…" : hwp ? "한글 보고서 만들기" : "Excel 산출 시트 만들기";
+            bool dashboard = workflowTabs.SelectedTab == dashboardStep;
+            bool hwp = IsHwpOutput;
+            string templateIssue = hwp ? HwpTemplateIssue() : "";
+            bool busy = reportRunning || surveyChartExportRunning;
+            bool source = workflowTabs.SelectedTab == sourceStep;
+            runButton.Visible = workflowTabs.SelectedTab == settingsStep;
+            runButton.Text = hwp ? "한글 보고서 만들기" : "Excel 산출 시트 만들기";
             runButton.AccessibleName = runButton.Text;
-            runButton.Enabled = !reportRunning && !surveyChartExportRunning && hasWorkbook && !needsTemplate;
-            exportReviewedChartsButton.Enabled = !reportRunning && !surveyChartExportRunning;
+            runButton.Enabled = !busy && !workbookPreviewRunning && hasWorkbook && templateIssue.Length == 0;
+            nextStepButton.Visible = (source && hasWorkbook && previewWorkbookPath.Length == 0) || workflowTabs.SelectedTab == dataStep;
+            nextStepButton.Text = source ? "표·배너 확인" : "보고서 설정으로";
+            nextStepButton.AccessibleName = nextStepButton.Text;
+            nextStepButton.Enabled = !busy && hasWorkbook && !workbookPreviewRunning;
+            exportReviewedChartsButton.Enabled = !busy;
             workspaceStatus.Text = dashboard ? "기관 대시보드 · PowerPoint" :
-                reportRunning ? "산출 중 · 진행 기록은 산출 결과에서 확인" :
+                workflowTabs.SelectedTab == resultsStep ? "" :
+                reportRunning ? resultStatusLabel.Text :
                 !hasWorkbook ? "원본 Excel 미선택" :
-                needsTemplate ? "한글 양식 미선택 · 보고서 설정" :
-                Path.GetFileName(workbookPathText.Text.Trim()) + "  ·  표 " + tableCount + "개  ·  " +
-                    (checkedBanners == 0 ? "전체 기준" : "배너 " + checkedBanners + "개");
+                workbookPreviewRunning ? "표·배너를 읽는 중" :
+                (workflowTabs.SelectedTab == settingsStep && templateIssue.Length > 0) ? templateIssue :
+                (hwp ? "한글 · " + hwpMaxSectionsCombo.Text : ExcelOutput) + "  |  " +
+                (string.IsNullOrEmpty(previewWorkbookPath) || workbookPreviewFailed ? "표·배너 미확인" :
+                "표 " + tableCount + "개  ·  " + (checkedBanners == 0 ? "전체 기준" : "배너 " + checkedBanners + "개"));
             UpdateReadinessChecklist();
         }
 
@@ -2434,17 +2523,26 @@ namespace ReportAutomationLauncher
             int tableCount = tablePreviewList.Items.Count;
             int checkedBanners = CountCheckedBanners();
             bool bannerPreviewReady = bannerList.Items.Count > 0;
-            bool outputReady = IsOutputReadyForSelectedOutput();
 
             readinessList.BeginUpdate();
             try
             {
                 readinessList.Items.Clear();
                 AddReadinessItem("집계표", workbookReady, workbookReady ? Path.GetFileName(workbookPathText.Text.Trim()) : "집계표 엑셀 파일을 선택하세요.");
-                AddReadinessItem("표 탐지", tableCount > 0, tableCount > 0 ? tableCount + "개 표를 발견했습니다." : "파일 등록 후 표 목록을 확인하세요.");
-                AddReadinessItem("분석 배너", bannerPreviewReady, BuildBannerReadinessText(checkedBanners, bannerPreviewReady));
-                AddReadinessItem("산출 방식", outputReady, BuildOutputReadinessText(outputReady));
-                AddReadinessItem("템플릿", IsTemplateReadyForSelectedOutput(), BuildTemplateReadinessText());
+                bool previewComplete = previewWorkbookPath.Length > 0 && !workbookPreviewRunning && !workbookPreviewFailed;
+                string previewStatus = workbookPreviewRunning ? "읽는 중" : workbookPreviewFailed ? "탐지 실패" : null;
+                AddReadinessItem("표 탐지", previewComplete && tableCount > 0, dataStatusLabel.Text, previewStatus);
+                AddReadinessItem("분석 배너", previewComplete, previewComplete && !bannerPreviewReady
+                    ? "탐지한 배너가 없어 전체 기준을 사용합니다." : BuildBannerReadinessText(checkedBanners, bannerPreviewReady), previewStatus);
+                AddReadinessItem("산출 방식", true, IsHwpOutput ? "한글 보고서 · " + hwpMaxSectionsCombo.Text : ExcelOutput);
+                if (IsHwpOutput)
+                {
+                    string issue = HwpTemplateIssue();
+                    bool inspected = IsTemplateStatusUsable();
+                    AddReadinessItem("한글 양식", issue.Length == 0 && inspected,
+                        issue.Length > 0 ? issue : inspected ? "본문 삽입 위치 확인" : "실행 시 본문 위치를 자동 확인합니다.",
+                        issue.Length == 0 ? (!inspected ? "자동 확인" : lastTemplateStatus == "usable_with_warnings" ? "경고 있음" : null) : null);
+                }
             }
             finally
             {
@@ -2452,14 +2550,14 @@ namespace ReportAutomationLauncher
             }
         }
 
-        private void AddReadinessItem(string name, bool ready, string detail)
+        private void AddReadinessItem(string name, bool ready, string detail, string status = null)
         {
             var item = new ListViewItem(name);
-            item.SubItems.Add(ready ? "완료" : "확인 필요");
+            item.SubItems.Add(status ?? (ready ? "완료" : "확인 필요"));
             item.SubItems.Add(detail);
             LauncherUi.StyleListItem(item, readinessList.Items.Count);
             item.UseItemStyleForSubItems = false;
-            item.SubItems[1].ForeColor = ready ? LauncherUi.ColorSuccess : LauncherUi.ColorWarning;
+            item.SubItems[1].ForeColor = ready && status == null ? LauncherUi.ColorSuccess : LauncherUi.ColorWarning;
             readinessList.Items.Add(item);
         }
 
@@ -2489,130 +2587,87 @@ namespace ReportAutomationLauncher
             return count;
         }
 
-        private bool IsOutputReadyForSelectedOutput()
+        private string HwpTemplateIssue()
         {
-            string output = outputTypeCombo.Text;
-            if (output.StartsWith("Excel", StringComparison.OrdinalIgnoreCase))
-            {
-                return true;
-            }
-            if (output.IndexOf("HWP", StringComparison.OrdinalIgnoreCase) >= 0)
-            {
-                return true;
-            }
-            return false;
-        }
-
-        private string BuildOutputReadinessText(bool ready)
-        {
-            string output = outputTypeCombo.Text;
-            if (output.StartsWith("Excel", StringComparison.OrdinalIgnoreCase))
-            {
-                return "Excel 산출 시트 기준으로 실행합니다.";
-            }
-            if (output.IndexOf("HWP", StringComparison.OrdinalIgnoreCase) >= 0)
-            {
-                return "Excel 산출 후 아래한글 COM으로 HWPX 초본을 생성합니다.";
-            }
-            return ready ? output + " 기준으로 실행합니다." : "현재 런처 직접 생성은 Excel/HWPX만 지원합니다.";
-        }
-
-        private bool IsTemplateReadyForSelectedOutput()
-        {
-            string output = outputTypeCombo.Text;
-            if (output.StartsWith("Excel", StringComparison.OrdinalIgnoreCase))
-            {
-                return true;
-            }
-            if (output.IndexOf("HWP", StringComparison.OrdinalIgnoreCase) >= 0)
-            {
-                return File.Exists(hwpTemplateText.Text.Trim()) && IsTemplateStatusUsable();
-            }
-            if (output.IndexOf("PowerPoint", StringComparison.OrdinalIgnoreCase) >= 0)
-            {
-                return File.Exists(pptTemplateText.Text.Trim()) && IsTemplateStatusUsable();
-            }
-            return false;
+            string path = hwpTemplateText.Text.Trim();
+            if (!File.Exists(path)) return "한글 양식을 선택하거나 기본 양식을 적용하세요.";
+            if (!path.EndsWith(".hwpx", StringComparison.OrdinalIgnoreCase)) return "한글 양식을 .hwpx로 저장한 뒤 선택하세요.";
+            if (lastTemplateStatus != "미검사" && !IsTemplateStatusUsable())
+                return "한글 양식에서 본문 위치를 확인할 수 없습니다. 양식을 다시 검사하세요.";
+            return "";
         }
 
         private bool IsTemplateStatusUsable()
         {
-            return lastTemplateStatus.IndexOf("ready", StringComparison.OrdinalIgnoreCase) >= 0 ||
-                   lastTemplateStatus.IndexOf("usable_with_warnings", StringComparison.OrdinalIgnoreCase) >= 0;
-        }
-
-        private string BuildTemplateReadinessText()
-        {
-            string output = outputTypeCombo.Text;
-            if (output.StartsWith("Excel", StringComparison.OrdinalIgnoreCase))
-            {
-                return "Excel 산출은 외부 문서 템플릿이 필요하지 않습니다.";
-            }
-            if (output.IndexOf("HWP", StringComparison.OrdinalIgnoreCase) >= 0)
-            {
-                return File.Exists(hwpTemplateText.Text.Trim()) ? "HWPX/HWP 템플릿 상태: " + lastTemplateStatus : "HWPX/HWP 템플릿을 선택하거나 기본 템플릿을 생성하세요.";
-            }
-            if (output.IndexOf("PowerPoint", StringComparison.OrdinalIgnoreCase) >= 0)
-            {
-                return File.Exists(pptTemplateText.Text.Trim()) ? "PPTX 템플릿 상태: " + lastTemplateStatus : "PPTX 템플릿을 선택하거나 기본 템플릿을 생성하세요.";
-            }
-            return "템플릿 검사가 필요합니다.";
+            return lastTemplateStatus == "ready" || lastTemplateStatus == "usable_with_warnings";
         }
 
         private Control BuildFileGroup()
         {
             var page = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, AutoScroll = true };
-            var source = new GroupBox { Text = "원본 집계표", Dock = DockStyle.Top, AutoSize = true };
-            var input = CreateGrid(4);
+            var source = new GroupBox { Text = "원본 및 저장 위치", Dock = DockStyle.Top, AutoSize = true };
+            var input = CreateGrid(5);
             source.Controls.Add(input);
-            AddPathRow(input, 0, "Excel 집계표", workbookPathText, "Excel 파일 선택…", BrowseWorkbook);
+            AddLabel(input, 0, "산출물");
+            outputTypeCombo.DropDownStyle = ComboBoxStyle.DropDownList;
+            outputTypeCombo.Items.AddRange(new object[] { "한글 보고서 (.hwpx)", ExcelOutput });
+            outputTypeCombo.AccessibleName = "산출물";
+            outputTypeCombo.Dock = DockStyle.Fill;
+            input.Controls.Add(outputTypeCombo, 1, 0);
+            browseWorkbookButton.Tag = LauncherButtonKind.Primary;
+            AddPathRow(input, 1, "Excel 집계표", workbookPathText, "Excel 파일 선택…", BrowseWorkbook, browseWorkbookButton);
+            AddPathRow(input, 2, "산출물 저장 폴더", outputFolderText, "폴더 선택…", BrowseOutputFolder);
+            outputLocationLabel.AutoEllipsis = true;
+            outputLocationLabel.Dock = DockStyle.Fill;
+            outputLocationLabel.Height = 24;
+            outputLocationLabel.ForeColor = LauncherUi.ColorMutedText;
+            input.Controls.Add(outputLocationLabel, 1, 3);
+            input.SetColumnSpan(outputLocationLabel, 2);
+            actionTips.SetToolTip(outputLocationLabel, "");
             var checks = new FlowLayoutPanel { Dock = DockStyle.Fill, AutoSize = true };
             copyWorkbookCheck.Text = "작업 복사본에 저장";
             keepExcelOpenCheck.Text = "산출 완료 후 Excel 다시 열기";
             checks.Controls.Add(copyWorkbookCheck);
             checks.Controls.Add(keepExcelOpenCheck);
-            AddLabel(input, 1, "산출 파일");
-            input.Controls.Add(checks, 1, 1);
+            AddLabel(input, 4, "Excel 작업 파일");
+            input.Controls.Add(checks, 1, 4);
             input.SetColumnSpan(checks, 2);
-            AddPathRow(input, 2, "산출물 저장 폴더", outputFolderText, "폴더 선택…", BrowseOutputFolder);
-            var folderHint = new Label { Text = "비워 두면 원본 옆에 저장합니다. 폴더를 지정하면 원본을 보존하고 작업 복사본을 만듭니다.",
-                AutoSize = true, ForeColor = LauncherUi.ColorMutedText, Margin = new Padding(0, 4, 0, 0) };
-            input.Controls.Add(folderHint, 1, 3);
-            input.SetColumnSpan(folderHint, 2);
             outputFolderText.TextChanged += delegate
             {
                 bool custom = !string.IsNullOrWhiteSpace(outputFolderText.Text);
                 if (custom) copyWorkbookCheck.Checked = true;
                 copyWorkbookCheck.Enabled = !custom;
+                UpdateOutputLocation();
             };
+            copyWorkbookCheck.CheckedChanged += delegate { UpdateOutputLocation(); };
             page.Controls.Add(source, 0, 0);
 
             return page;
         }
 
+        private void UpdateOutputLocation()
+        {
+            string folder = outputFolderText.Text.Trim();
+            string path = workbookPathText.Text.Trim();
+            if (folder.Length == 0)
+                folder = File.Exists(path) ? Path.GetDirectoryName(Path.GetFullPath(path)) : "원본 Excel과 같은 폴더";
+            outputLocationLabel.Text = (copyWorkbookCheck.Checked ? "작업 복사본에 저장" : "원본 Excel에 산출 시트 추가") + "  |  " + folder;
+            actionTips.SetToolTip(outputLocationLabel, outputLocationLabel.Text);
+        }
+
         private Control BuildOutputGroup()
         {
             var group = new GroupBox();
-            group.Text = "출력 파일";
+            group.Text = "양식 · 용지 및 포함 항목";
             group.Dock = DockStyle.Top;
             group.AutoSize = true;
             group.Padding = new Padding(10);
 
-            var grid = CreateGrid(9);
+            var grid = CreateGrid(11);
             group.Controls.Add(grid);
 
-            AddLabel(grid, 0, "출력 형식");
-            outputTypeCombo.DropDownStyle = ComboBoxStyle.DropDownList;
-            outputTypeCombo.Items.Add("Excel 산출 시트");
-            outputTypeCombo.Items.Add("HWPX 보고서");
-            outputTypeCombo.Items.Add("PowerPoint 보고서");
-            outputTypeCombo.Dock = DockStyle.Fill;
-            grid.Controls.Add(outputTypeCombo, 1, 0);
-            grid.SetColumnSpan(outputTypeCombo, 2);
-
             AddPathRow(grid, 1, "한글 보고서 양식", hwpTemplateText, "한글 양식 선택…", BrowseHwpTemplate);
-            AddPathRow(grid, 2, "PowerPoint 양식", pptTemplateText, "PPTX 양식 선택…", BrowsePptTemplate);
-            AddPathRow(grid, 3, "표 구조 프로필 (고급)", hwpTableStyleProfileText, "JSON 프로필 선택…", BrowseHwpTableStyleProfile);
+            AddPathRow(grid, 8, "표 구조 프로필", hwpTableStyleProfileText, "프로필 선택…", BrowseHwpTableStyleProfile);
 
             var templateButtons = new FlowLayoutPanel();
             templateButtons.Dock = DockStyle.Fill;
@@ -2635,22 +2690,17 @@ namespace ReportAutomationLauncher
             openTemplateGuideButton.Click += OpenTemplateGuideButton_Click;
             templateButtons.Controls.Add(basicHwpVariant);
             templateButtons.Controls.Add(useBasicHwpTemplateButton);
-            templateButtons.Controls.Add(createHwpTemplateButton);
             templateButtons.Controls.Add(inspectTemplateButton);
-            templateButtons.Controls.Add(autoFixTemplateButton);
-            templateButtons.Controls.Add(createPptTemplateButton);
-            templateButtons.Controls.Add(createChartTemplateButton);
-            templateButtons.Controls.Add(openTemplateGuideButton);
             foreach (Button button in templateButtons.Controls.OfType<Button>()) button.AutoSize = true;
-            AddLabel(grid, 4, "양식 도구");
-            grid.Controls.Add(templateButtons, 1, 4);
+            AddLabel(grid, 2, "기본 양식");
+            grid.Controls.Add(templateButtons, 1, 2);
             grid.SetColumnSpan(templateButtons, 2);
 
-            templateStatusLabel.Text = "템플릿을 선택하거나 기본 템플릿을 생성하세요.";
+            templateStatusLabel.Text = "기본 양식을 적용하거나 한글 양식 파일을 선택하세요.";
             templateStatusLabel.AutoSize = true;
             templateStatusLabel.ForeColor = LauncherUi.ColorMutedText;
             templateStatusLabel.Margin = new Padding(0, 4, 0, 0);
-            grid.Controls.Add(templateStatusLabel, 1, 5);
+            grid.Controls.Add(templateStatusLabel, 1, 3);
             grid.SetColumnSpan(templateStatusLabel, 2);
 
             var hwpOptions = new FlowLayoutPanel();
@@ -2658,15 +2708,11 @@ namespace ReportAutomationLauncher
             hwpOptions.AutoSize = true;
             hwpVisibleCheck.Text = "아래한글 창 표시";
             hwpKeepOpenOnErrorCheck.Text = "실패 시 문서 유지";
-            var hwpLimitLabel = new Label();
-            hwpLimitLabel.Text = "출력 문항 수";
-            hwpLimitLabel.AutoSize = true;
-            hwpLimitLabel.Margin = new Padding(12, 7, 6, 0);
             hwpMaxSectionsCombo.DropDownStyle = ComboBoxStyle.DropDownList;
             hwpMaxSectionsCombo.Width = 145;
-            hwpMaxSectionsCombo.Items.Add("첫 표만 (시험 출력)");
-            hwpMaxSectionsCombo.Items.Add("첫 3개 표");
-            hwpMaxSectionsCombo.Items.Add("모든 표");
+            hwpMaxSectionsCombo.Items.Add("첫 문항 (시험)");
+            hwpMaxSectionsCombo.Items.Add("처음 3문항");
+            hwpMaxSectionsCombo.Items.Add("전체 문항");
             var hwpDispatchLabel = new Label();
             hwpDispatchLabel.Text = "한글 연결 방식";
             hwpDispatchLabel.AutoSize = true;
@@ -2680,10 +2726,6 @@ namespace ReportAutomationLauncher
             actionTips.SetToolTip(hwpDispatchModeCombo, "기본: 등록된 한글 보안 모듈 사용. pyhwpx: 별도 Python 환경에서 필요 시 모듈 자동 등록.");
             hwpEnvironmentCheckButton.Text = "한글 연결 확인";
             hwpEnvironmentCheckButton.Click += HwpEnvironmentCheckButton_Click;
-            var hwpStyleLabel = new Label();
-            hwpStyleLabel.Text = "본문·표 서식";
-            hwpStyleLabel.AutoSize = true;
-            hwpStyleLabel.Margin = new Padding(12, 7, 6, 0);
             hwpStylePresetCombo.DropDownStyle = ComboBoxStyle.DropDownList;
             hwpStylePresetCombo.Width = 182;
             hwpStyleSettingsButton.Text = "내 서식 추가·편집…";
@@ -2699,15 +2741,14 @@ namespace ReportAutomationLauncher
             hwpStyleSettingsButton.AutoSize = true;
             hwpPageSetupButton.AutoSize = true;
             hwpEnvironmentCheckButton.AutoSize = true;
-            hwpOptions.Controls.Add(hwpStyleLabel);
             hwpOptions.Controls.Add(hwpStylePresetCombo);
             hwpOptions.Controls.Add(hwpStyleSettingsButton);
             hwpOptions.Controls.Add(hwpPageSetupButton);
-            hwpOptions.Controls.Add(hwpLimitLabel);
-            hwpOptions.Controls.Add(hwpMaxSectionsCombo);
-            AddLabel(grid, 6, "한글 서식");
-            grid.Controls.Add(hwpOptions, 1, 6);
+            AddLabel(grid, 4, "본문·표 서식");
+            grid.Controls.Add(hwpOptions, 1, 4);
             grid.SetColumnSpan(hwpOptions, 2);
+            AddLabel(grid, 5, "출력 문항 수");
+            grid.Controls.Add(hwpMaxSectionsCombo, 1, 5);
 
             var components = new FlowLayoutPanel();
             components.Dock = DockStyle.Fill;
@@ -2744,39 +2785,33 @@ namespace ReportAutomationLauncher
             connection.Controls.Add(hwpSecurityHelpButton);
             connection.Controls.Add(hwpVisibleCheck);
             connection.Controls.Add(hwpKeepOpenOnErrorCheck);
-            var figurePrefixLabel = new Label { Text = "그림 번호 앞자리", AutoSize = true, Margin = new Padding(8, 7, 0, 0) };
-            connection.Controls.Add(hwpIncludeFiguresCheck);
-            connection.Controls.Add(figurePrefixLabel);
-            connection.Controls.Add(hwpFigurePrefix);
-            EventHandler refreshFigureOptions = delegate
-            {
-                hwpIncludeFiguresCheck.Enabled = chartCheck.Checked;
-                hwpFigurePrefix.Enabled = figurePrefixLabel.Enabled = chartCheck.Checked && hwpIncludeFiguresCheck.Checked;
-            };
-            chartCheck.CheckedChanged += refreshFigureOptions;
-            hwpIncludeFiguresCheck.CheckedChanged += refreshFigureOptions;
-            refreshFigureOptions(this, EventArgs.Empty);
-            AddLabel(grid, 8, "한글 실행 옵션");
-            grid.Controls.Add(connection, 1, 8);
+            AddLabel(grid, 9, "한글 연결");
+            grid.Controls.Add(connection, 1, 9);
             grid.SetColumnSpan(connection, 2);
-
-            outputTypeCombo.SelectedIndexChanged += delegate
+            var more = new CheckBox { Text = "고급 양식 도구 보기", AutoSize = true };
+            grid.Controls.Add(more, 1, 6);
+            var moreTools = new FlowLayoutPanel { Dock = DockStyle.Fill, AutoSize = true };
+            foreach (var button in new[] { createHwpTemplateButton, autoFixTemplateButton, openTemplateGuideButton, createPptTemplateButton, createChartTemplateButton })
             {
-                bool hwp = outputTypeCombo.SelectedIndex == 1;
-                bool ppt = outputTypeCombo.SelectedIndex == 2;
+                button.AutoSize = true;
+                moreTools.Controls.Add(button);
+            }
+            // The normal workflow never needs a file conversion or a connection override.
+            grid.Controls.Add(moreTools, 1, 10);
+            grid.SetColumnSpan(moreTools, 2);
+
+            EventHandler refresh = delegate
+            {
                 grid.SuspendLayout();
                 foreach (Control control in grid.Controls)
                 {
                     int row = grid.GetRow(control);
-                    control.Visible = row == 0 || row == 7 ||
-                        (hwp && (row == 1 || row == 3 || row == 6 || row == 8)) ||
-                        (ppt && row == 2) || ((hwp || ppt) && (row == 4 || row == 5));
+                    control.Visible = row == 7 || (IsHwpOutput && (row < 8 || more.Checked));
                 }
-                basicHwpVariant.Visible = useBasicHwpTemplateButton.Visible = createHwpTemplateButton.Visible = hwp;
-                createPptTemplateButton.Visible = ppt;
-                createChartTemplateButton.Visible = ppt;
                 grid.ResumeLayout(true);
             };
+            more.CheckedChanged += refresh;
+            outputTypeCombo.SelectedIndexChanged += refresh;
             return group;
         }
 
@@ -2814,18 +2849,19 @@ namespace ReportAutomationLauncher
             tablePreviewList.Columns.Add("인식 확인", 180);
             tablePreviewList.Columns[5].DisplayIndex = 3;
             tablePreviewList.AccessibleName = "감지한 통계표 목록";
+            tablePreviewList.SelectedIndexChanged += delegate { UpdateTableRangeActions(); };
             panel.Controls.Add(tablePreviewList, 0, 2);
 
             var buttons = new FlowLayoutPanel();
             buttons.Dock = DockStyle.Fill;
             buttons.AutoSize = true;
-            selectTableRangeButton.Text = "Excel에서 표 범위 지정…";
+            selectTableRangeButton.Text = "선택한 표 범위 수정…";
             selectTableRangeButton.AutoSize = true;
             selectTableRangeButton.Click += delegate { SelectTableRangeInExcel(); };
-            clearTableRangeButton.Text = "감지 범위 복원";
+            clearTableRangeButton.Text = "자동 범위로 되돌리기";
             clearTableRangeButton.AutoSize = true;
             clearTableRangeButton.Click += delegate { ClearSelectedTableRange(); };
-            reloadBannerButton.Text = "표·배너 다시 읽기";
+            reloadBannerButton.Text = "표·배너 읽기";
             reloadBannerButton.AutoSize = true;
             reloadBannerButton.Click += delegate { LoadBannerPreviewAsync(); };
             buttons.Controls.Add(reloadBannerButton);
@@ -2842,23 +2878,27 @@ namespace ReportAutomationLauncher
 
         private Control BuildRulesPage()
         {
-            var tabs = new TabControl { Dock = DockStyle.Fill };
             foreach (var page in new[]
             {
-                CreateStepPage("파일 · 서식", BuildOutputGroup()),
+                CreateStepPage("양식 · 용지", BuildOutputGroup()),
                 CreateStepPage("분석문", BuildOptionsGroup()),
+                CreateStepPage("표 · 그림", BuildSurveyChartStyleGroup()),
                 CreateStepPage("수치 · 고급", BuildAdvancedOptionsGroup())
             })
             {
                 page.AutoScroll = true;
                 page.Controls[0].Dock = DockStyle.Top;
-                tabs.TabPages.Add(page);
+                reportSettingsTabs.TabPages.Add(page);
             }
-            tabs.TabPages.Insert(2, CreateStepPage("집계표별 산출 예시", BuildTableExamplePage()));
-            var chartPage = CreateStepPage("PPTX 차트 서식", BuildSurveyChartStyleGroup());
-            chartPage.AutoScroll = true;
-            tabs.TabPages.Add(chartPage);
-            return tabs;
+            reportSettingsTabs.TabPages.Insert(2, CreateStepPage("집계표별 산출 예시", BuildTableExamplePage()));
+            var panel = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 3 };
+            panel.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+            panel.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+            panel.RowStyles.Add(new RowStyle(SizeType.Absolute, 125));
+            panel.Controls.Add(reportSettingsTabs, 0, 0);
+            panel.Controls.Add(new Label { Text = "산출 전 확인", Font = LauncherUi.SectionFont(), AutoSize = true }, 0, 1);
+            panel.Controls.Add(BuildReadinessList(), 0, 2);
+            return panel;
         }
 
         private static string SurveyChartStylePath
@@ -2924,6 +2964,73 @@ namespace ReportAutomationLauncher
 
         private Control BuildSurveyChartStyleGroup()
         {
+            var panel = new FlowLayoutPanel { Dock = DockStyle.Top, AutoSize = true, FlowDirection = FlowDirection.TopDown, WrapContents = false, Padding = new Padding(12) };
+            var figures = new FlowLayoutPanel { AutoSize = true };
+            figures.Controls.Add(hwpIncludeFiguresCheck);
+            figures.Controls.Add(new Label { Text = "그림 번호 앞자리", AutoSize = true, Margin = new Padding(8, 7, 0, 0) });
+            figures.Controls.Add(hwpFigurePrefix);
+            panel.Controls.Add(figures);
+            var selection = new FlowLayoutPanel { AutoSize = true };
+            selection.Controls.Add(new Label { Text = "차트 서식", AutoSize = true, Margin = new Padding(3, 6, 8, 0) });
+            surveyChartStyleCombo.AccessibleName = "차트 서식";
+            surveyChartStyleCombo.Items.AddRange(new object[] { "딥 블루", "스카이 블루", "표준 세로 막대 · 도넛" });
+            var previewNote = new Label { AutoSize = true };
+            EventHandler updatePreview = delegate
+            {
+                var existing = chartStylePreview.Image;
+                chartStylePreview.Image = null;
+                if (existing != null) existing.Dispose();
+                int index = surveyChartStyleCombo.SelectedIndex;
+                string path = index >= 0 && index < 2
+                    ? StandaloneBundle.Find("templates/chart_preview_" + SurveyChartStyleKeys[index] + ".png") : null;
+                if (File.Exists(path))
+                {
+                    using (var image = Image.FromFile(path)) chartStylePreview.Image = new Bitmap(image);
+                }
+                chartStylePreview.Visible = chartStylePreview.Image != null;
+                previewNote.Text = chartStylePreview.Image != null ? "세로 막대 미리보기 · 예시 데이터" :
+                    index == 3 ? "등록한 개인 서식 · 미리보기 없음" : "표준 서식 · 세로 막대 및 도넛";
+            };
+            surveyChartStyleCombo.SelectedIndexChanged += updatePreview;
+            RefreshSurveyChartStyle(LoadSurveyChartStyleChoice());
+            surveyChartStyleCombo.SelectionChangeCommitted += delegate { SaveSurveyChartStyleChoice(); };
+            selection.Controls.Add(surveyChartStyleCombo);
+            var manage = new Button { Text = "차트 서식 관리…", AutoSize = true };
+            manage.Click += delegate
+            {
+                using (var dialog = new Form { Text = "차트 서식 관리", StartPosition = FormStartPosition.CenterParent, ClientSize = new Size(640, 190) })
+                {
+                    dialog.FormClosing += delegate(object sender, FormClosingEventArgs args) { if (surveyChartExportRunning) args.Cancel = true; };
+                    dialog.Controls.Add(BuildSurveyChartStyleManagement());
+                    LauncherUi.ApplyToForm(dialog);
+                    LauncherUi.ApplyTree(dialog);
+                    dialog.ShowDialog(this);
+                }
+            };
+            selection.Controls.Add(manage);
+            panel.Controls.Add(selection);
+            panel.Controls.Add(previewNote);
+            panel.Controls.Add(chartStylePreview);
+            var offNote = new Label { Text = "차트 데이터가 포함되지 않았습니다.", AutoSize = true };
+            panel.Controls.Add(offNote);
+            EventHandler refresh = delegate
+            {
+                figures.Visible = IsHwpOutput && chartCheck.Checked;
+                hwpFigurePrefix.Enabled = hwpIncludeFiguresCheck.Checked;
+                selection.Visible = previewNote.Visible = chartCheck.Checked;
+                chartStylePreview.Visible = chartCheck.Checked && chartStylePreview.Image != null;
+                offNote.Visible = !chartCheck.Checked;
+            };
+            chartCheck.CheckedChanged += refresh;
+            hwpIncludeFiguresCheck.CheckedChanged += refresh;
+            outputTypeCombo.SelectedIndexChanged += refresh;
+            refresh(this, EventArgs.Empty);
+            chartStylePreview.Disposed += delegate { if (chartStylePreview.Image != null) chartStylePreview.Image.Dispose(); };
+            return panel;
+        }
+
+        private Control BuildSurveyChartStyleManagement()
+        {
             var layout = new FlowLayoutPanel { Dock = DockStyle.Top, AutoSize = true, FlowDirection = FlowDirection.TopDown, WrapContents = false, Padding = new Padding(12) };
             var commands = new FlowLayoutPanel { AutoSize = true };
             var libraryCommands = new FlowLayoutPanel { AutoSize = true };
@@ -2937,7 +3044,7 @@ namespace ReportAutomationLauncher
             {
                 using (var dialog = new SaveFileDialog { Filter = "PowerPoint (*.pptx)|*.pptx", FileName = "기본 차트 서식.pptx", DefaultExt = "pptx" })
                 {
-                    if (dialog.ShowDialog(this) != DialogResult.OK) return;
+                    if (dialog.ShowDialog(layout.FindForm()) != DialogResult.OK) return;
                     if (IsProtectedChartStyle(dialog.FileName)) { MessageBox.Show(this, "원본 서식이 아닌 다른 경로에 저장하세요.", "차트 서식"); return; }
                     string selected = ActiveSurveyChartStyle();
                     string command = selected == null ? "create" : "register --input " + QuoteArg(selected);
@@ -2948,8 +3055,8 @@ namespace ReportAutomationLauncher
             {
                 using (var dialog = new OpenFileDialog { Filter = "PowerPoint (*.pptx)|*.pptx", CheckFileExists = true })
                 {
-                    if (dialog.ShowDialog(this) != DialogResult.OK) return;
-                    if (File.Exists(SurveyChartStylePath) && MessageBox.Show(this, "현재 공통 차트 서식을 교체할까요?", "차트 서식 등록", MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes) return;
+                    if (dialog.ShowDialog(layout.FindForm()) != DialogResult.OK) return;
+                    if (File.Exists(SurveyChartStylePath) && MessageBox.Show(layout.FindForm(), "현재 공통 차트 서식을 교체할까요?", "차트 서식 등록", MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes) return;
                     if (await RunSurveyChartCommand(layout, "register --input " + QuoteArg(dialog.FileName) + " --output " + QuoteArg(SurveyChartStylePath), "모든 프로젝트에 사용할 공통 서식을 등록했습니다."))
                     {
                         RefreshSurveyChartStyle(3);
@@ -2960,7 +3067,7 @@ namespace ReportAutomationLauncher
             reset.Click += delegate
             {
                 if (!File.Exists(SurveyChartStylePath)) return;
-                if (MessageBox.Show(this, "등록한 내 공통 서식 사본을 삭제할까요?", "차트 서식", MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes) return;
+                if (MessageBox.Show(layout.FindForm(), "등록한 내 공통 서식 사본을 삭제할까요?", "차트 서식", MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes) return;
                 try
                 {
                     int index = surveyChartStyleCombo.SelectedIndex;
@@ -2973,7 +3080,7 @@ namespace ReportAutomationLauncher
             };
             guide.Click += delegate
             {
-                MessageBox.Show(this, "기본 PPTX를 PowerPoint에서 열고 차트의 글꼴, 색, 막대 간격, 축, 범례, 레이블을 조정한 뒤 등록하세요." + Environment.NewLine +
+                MessageBox.Show(layout.FindForm(), "기본 PPTX를 PowerPoint에서 열고 차트의 글꼴, 색, 막대 간격, 축, 범례, 레이블을 조정한 뒤 등록하세요." + Environment.NewLine +
                     "첫 번째 보기 또는 조각은 기본색, 두 번째는 최대값 강조색입니다. 예제 데이터는 보고서 값으로 교체됩니다." + Environment.NewLine +
                     "차트 종류와 개체 이름(RA_CHART_COLUMN, RA_CHART_DOUGHNUT)은 유지하세요." + Environment.NewLine +
                     "기존 그래프틀은 먼저 CRTX를 추출하세요. 목록에서 기본 서식 후보를 골라 PPTX를 만든 뒤 등록할 수 있습니다.", "차트 서식 편집 안내");
@@ -2983,7 +3090,7 @@ namespace ReportAutomationLauncher
                 using (var deck = new OpenFileDialog { Title = "기존 그래프틀 선택", Filter = "PowerPoint (*.pptx)|*.pptx", CheckFileExists = true })
                 using (var folder = new FolderBrowserDialog { Description = "차트 서식과 비교 목록을 저장할 폴더를 선택하세요." })
                 {
-                    if (deck.ShowDialog(this) != DialogResult.OK || folder.ShowDialog(this) != DialogResult.OK) return;
+                    if (deck.ShowDialog(layout.FindForm()) != DialogResult.OK || folder.ShowDialog(layout.FindForm()) != DialogResult.OK) return;
                     await RunSurveyChartCommand(layout, "extract --input " + QuoteArg(deck.FileName) +
                         " --output " + QuoteArg(folder.SelectedPath), "차트 서식 추출을 마쳤습니다.", "chart_style_library.py");
                 }
@@ -2993,7 +3100,7 @@ namespace ReportAutomationLauncher
                 using (var template = new OpenFileDialog { Title = "단일 계열 세로 막대 또는 도넛 서식 선택", Filter = "차트 서식 (*.crtx)|*.crtx", CheckFileExists = true })
                 using (var output = new SaveFileDialog { Filter = "PowerPoint (*.pptx)|*.pptx", FileName = "추출한 기본 차트 서식.pptx", DefaultExt = "pptx" })
                 {
-                    if (template.ShowDialog(this) != DialogResult.OK || output.ShowDialog(this) != DialogResult.OK) return;
+                    if (template.ShowDialog(layout.FindForm()) != DialogResult.OK || output.ShowDialog(layout.FindForm()) != DialogResult.OK) return;
                     if (IsProtectedChartStyle(output.FileName)) { MessageBox.Show(this, "원본 서식이 아닌 새 파일에 저장하세요.", "차트 서식"); return; }
                     string existing = ActiveSurveyChartStyle();
                     await RunSurveyChartCommand(layout, "make-default --input " + QuoteArg(template.FileName) +
@@ -3004,14 +3111,6 @@ namespace ReportAutomationLauncher
             foreach (var button in new[] { save, register, reset, guide }) commands.Controls.Add(button);
             libraryCommands.Controls.Add(extract);
             libraryCommands.Controls.Add(fromTemplate);
-            var selection = new FlowLayoutPanel { AutoSize = true };
-            selection.Controls.Add(new Label { Text = "사용할 차트 서식", AutoSize = true, Margin = new Padding(3, 6, 8, 0) });
-            surveyChartStyleCombo.AccessibleName = "사용할 차트 서식";
-            surveyChartStyleCombo.Items.AddRange(new object[] { "딥 블루", "스카이 블루", "표준 세로 막대 · 도넛" });
-            RefreshSurveyChartStyle(LoadSurveyChartStyleChoice());
-            surveyChartStyleCombo.SelectionChangeCommitted += delegate { SaveSurveyChartStyleChoice(); };
-            selection.Controls.Add(surveyChartStyleCombo);
-            layout.Controls.Add(selection);
             layout.Controls.Add(commands);
             layout.Controls.Add(libraryCommands);
             return layout;
@@ -3048,12 +3147,12 @@ namespace ReportAutomationLauncher
                     success += Environment.NewLine + path;
                 }
                 Log(success);
-                MessageBox.Show(this, success, "PPTX 차트", MessageBoxButtons.OK, icon);
+                MessageBox.Show(controls.FindForm() ?? this, success, "PPTX 차트", MessageBoxButtons.OK, icon);
                 return true;
             }
             catch (Exception ex)
             {
-                MessageBox.Show(this, ex.Message, "PPTX 차트", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                MessageBox.Show(controls.FindForm() ?? this, ex.Message, "PPTX 차트", MessageBoxButtons.OK, MessageBoxIcon.Warning);
                 return false;
             }
             finally
@@ -3198,25 +3297,8 @@ namespace ReportAutomationLauncher
             return group;
         }
 
-        private Control BuildRunGroup()
+        private Control BuildReadinessList()
         {
-            var panel = new TableLayoutPanel();
-            panel.Dock = DockStyle.Fill;
-            panel.ColumnCount = 1;
-            panel.RowCount = 3;
-            panel.RowStyles.Add(new RowStyle(SizeType.Absolute, 172));
-            panel.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-            panel.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
-
-            var overview = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2, RowCount = 2, Margin = new Padding(0) };
-            overview.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 57));
-            overview.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 43));
-            overview.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-            overview.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
-            overview.Controls.Add(new Label { Text = "산출 전 확인", Font = LauncherUi.SectionFont(), AutoSize = true }, 0, 0);
-            overview.Controls.Add(new Label { Text = "최근 산출 요약", Font = LauncherUi.SectionFont(), AutoSize = true }, 1, 0);
-            panel.Controls.Add(overview, 0, 0);
-
             readinessList.Dock = DockStyle.Fill;
             readinessList.View = View.Details;
             readinessList.FullRowSelect = true;
@@ -3229,8 +3311,20 @@ namespace ReportAutomationLauncher
             {
                 readinessList.Columns[2].Width = Math.Max(145, readinessList.ClientSize.Width - 158 - SystemInformation.VerticalScrollBarWidth);
             };
-            overview.Controls.Add(readinessList, 0, 1);
+            return readinessList;
+        }
 
+        private Control BuildRunGroup()
+        {
+            var panel = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 4 };
+            panel.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+            panel.RowStyles.Add(new RowStyle(SizeType.Absolute, 106));
+            panel.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+            panel.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+            resultStatusLabel.Text = "아직 산출하지 않았습니다.";
+            resultStatusLabel.Font = LauncherUi.SectionFont();
+            resultStatusLabel.AutoSize = true;
+            panel.Controls.Add(resultStatusLabel, 0, 0);
             logText.Multiline = true;
             logText.ReadOnly = true;
             logText.ScrollBars = ScrollBars.Vertical;
@@ -3241,8 +3335,9 @@ namespace ReportAutomationLauncher
             resultSummaryText.ReadOnly = true;
             resultSummaryText.ScrollBars = ScrollBars.Vertical;
             resultSummaryText.Dock = DockStyle.Fill;
-            resultSummaryText.Text = "아직 실행 결과가 없습니다.";
-            overview.Controls.Add(resultSummaryText, 1, 1);
+            resultSummaryText.Text = "보고서 설정에서 산출할 수 있습니다.";
+            resultSummaryText.AccessibleName = "최근 산출 결과";
+            panel.Controls.Add(resultSummaryText, 0, 1);
 
             var resultButtons = new FlowLayoutPanel();
             resultButtons.Dock = DockStyle.Fill;
@@ -3256,6 +3351,8 @@ namespace ReportAutomationLauncher
             openDraftButton.Click += OpenDraftButton_Click;
             openHwpOutputButton.Text = "한글 보고서 열기";
             openHwpOutputButton.Enabled = false;
+            openHwpOutputButton.Visible = false;
+            openHwpOutputButton.Tag = LauncherButtonKind.Primary;
             openHwpOutputButton.Click += OpenHwpOutputButton_Click;
             openHwpReportButton.Text = "한글 생성 기록 열기";
             openHwpReportButton.Enabled = false;
@@ -3274,14 +3371,23 @@ namespace ReportAutomationLauncher
             createSurveyChartReviewButton.Text = "차트 검토 PPTX 만들기…";
             createSurveyChartReviewButton.Enabled = false;
             createSurveyChartReviewButton.Click += CreateSurveyChartReview;
-            exportReviewedChartsButton.Text = "편집한 차트 EMF 저장…";
+            exportReviewedChartsButton.Text = "편집한 PPTX를 EMF로 저장…";
             exportReviewedChartsButton.Click += ExportReviewedCharts;
-            foreach (var button in new[] { openHwpOutputButton, openWorkbookButton, openDraftButton, openPreflightButton, openHwpReportButton, createSurveyChartReviewButton, exportReviewedChartsButton })
+            openHwpOutputButton.AutoSize = true;
+            resultButtons.Controls.Add(openHwpOutputButton);
+            panel.Controls.Add(resultButtons, 0, 2);
+            var records = new FlowLayoutPanel { AutoScroll = true };
+            foreach (var button in new[] { openWorkbookButton, openDraftButton, openPreflightButton, openHwpReportButton })
             {
                 button.AutoSize = true;
-                resultButtons.Controls.Add(button);
+                records.Controls.Add(button);
             }
-            panel.Controls.Add(resultButtons, 0, 1);
+            var charts = new FlowLayoutPanel { AutoScroll = true };
+            foreach (var button in new[] { createSurveyChartReviewButton, exportReviewedChartsButton })
+            {
+                button.AutoSize = true;
+                charts.Controls.Add(button);
+            }
 
             draftPreviewText.Multiline = true;
             draftPreviewText.ReadOnly = true;
@@ -3302,7 +3408,9 @@ namespace ReportAutomationLauncher
             draftReviewTabs.TabPages.Add(CreateStepPage("문장 수정", BuildSentenceReviewPanel()));
             draftReviewTabs.TabPages.Add(CreateStepPage("문장 검토 경고", BuildQaReviewPanel()));
             draftReviewTabs.TabPages.Add(CreateStepPage("진행 기록", logText));
-            panel.Controls.Add(draftReviewTabs, 0, 2);
+            draftReviewTabs.TabPages.Add(CreateStepPage("파일 · 검사 기록", records));
+            draftReviewTabs.TabPages.Add(CreateStepPage("차트 검토", charts));
+            panel.Controls.Add(draftReviewTabs, 0, 3);
             return panel;
         }
 
@@ -4040,7 +4148,7 @@ namespace ReportAutomationLauncher
             grid.Controls.Add(label, 0, row);
         }
 
-        private static void AddPathRow(TableLayoutPanel grid, int row, string label, TextBox textBox, string buttonText, EventHandler handler)
+        private static void AddPathRow(TableLayoutPanel grid, int row, string label, TextBox textBox, string buttonText, EventHandler handler, Button button = null)
         {
             AddLabel(grid, row, label);
             textBox.AccessibleName = label;
@@ -4048,7 +4156,7 @@ namespace ReportAutomationLauncher
             textBox.Margin = new Padding(0, LauncherUi.SpaceXs, LauncherUi.SpaceSm, LauncherUi.SpaceXs);
             grid.Controls.Add(textBox, 1, row);
 
-            var button = new Button();
+            button = button ?? new Button();
             button.Text = buttonText;
             button.Dock = DockStyle.Fill;
             button.Margin = new Padding(0, LauncherUi.SpaceXs, 0, LauncherUi.SpaceXs);
@@ -4066,7 +4174,7 @@ namespace ReportAutomationLauncher
                 {
                     workbookPathText.Text = dialog.FileName;
                     LoadWorkbookPreviewAsync();
-                    workflowTabs.SelectedIndex = 1;
+                    workflowTabs.SelectedTab = dataStep;
                 }
             }
         }
@@ -4085,6 +4193,29 @@ namespace ReportAutomationLauncher
             LoadWorkbookPreviewAsync();
         }
 
+        private void ResetWorkbookPreview()
+        {
+            ++workbookPreviewRequest;
+            previewWorkbookPath = "";
+            workbookPreviewRunning = workbookPreviewFailed = false;
+            tablePreviewList.Items.Clear();
+            currentTablePreviews.Clear();
+            bannerList.Items.Clear();
+            recommendedBanners.Clear();
+            bannerText.Text = "전체";
+            bannerStatusLabel.Text = "";
+            dataStatusLabel.Text = File.Exists(workbookPathText.Text.Trim())
+                ? "표·배너를 아직 읽지 않았습니다." : "원본 단계에서 Excel 집계표를 선택하세요.";
+            SetBannerPreviewEnabled(true);
+            UpdateWorkflowStatus();
+        }
+
+        private bool IsCurrentWorkbookPreview(int request, string path)
+        {
+            return request == workbookPreviewRequest &&
+                string.Equals(path, workbookPathText.Text.Trim(), StringComparison.OrdinalIgnoreCase);
+        }
+
         private void LoadWorkbookPreviewAsync()
         {
             string path = workbookPathText.Text.Trim();
@@ -4099,57 +4230,61 @@ namespace ReportAutomationLauncher
                 return;
             }
 
+            int request = ++workbookPreviewRequest;
+            previewWorkbookPath = path;
+            workbookPreviewRunning = true;
+            workbookPreviewFailed = false;
             SetBannerPreviewEnabled(false);
             bannerStatusLabel.Text = "읽는 중...";
             dataStatusLabel.Text = "집계표 구조를 읽는 중...";
-            tablePreviewList.Items.Clear();
+            UpdateWorkflowStatus();
             Log("표 목록과 배너 목록을 읽습니다.");
 
             var thread = new Thread(delegate()
             {
+                WorkbookPreview preview = null;
+                string error = null;
+                try { preview = BannerInspector.ReadPreview(path); }
+                catch (Exception ex) { error = ex.Message; }
+                if (IsDisposed || !IsHandleCreated) return;
                 try
                 {
-                    WorkbookPreview preview = BannerInspector.ReadPreview(path);
                     BeginInvoke(new Action(delegate()
                     {
-                        bannerList.Items.Clear();
-                        recommendedBanners.Clear();
-                        foreach (string banner in preview.PrimaryBanners)
+                        if (!IsCurrentWorkbookPreview(request, path)) return;
+                        workbookPreviewRunning = false;
+                        workbookPreviewFailed = error != null;
+                        if (workbookPreviewFailed)
                         {
-                            recommendedBanners.Add(banner);
+                            bannerStatusLabel.Text = "탐지 실패";
+                            dataStatusLabel.Text = "표·배너를 읽지 못했습니다. 다시 읽거나 설정에서 계속할 수 있습니다.";
+                            Log("표·배너 탐지 실패: " + error);
+                            actionTips.SetToolTip(dataStatusLabel, error);
                         }
-                        foreach (string banner in preview.Banners)
+                        else
                         {
-                            bool isRecommended = recommendedBanners.Contains(banner) || preview.PrimaryBanners.Count == 0;
-                            bannerList.Items.Add(banner, isRecommended);
+                            bannerList.Items.Clear();
+                            recommendedBanners.Clear();
+                            foreach (string banner in preview.PrimaryBanners) recommendedBanners.Add(banner);
+                            foreach (string banner in preview.Banners)
+                                bannerList.Items.Add(banner, recommendedBanners.Contains(banner) || recommendedBanners.Count == 0);
+                            bannerText.Text = "전체";
+                            PopulateTablePreview(preview.Tables);
+                            UpdateBannerTextFromCheckedList();
+                            dataStatusLabel.Text = "발견한 표 " + preview.Tables.Count + "개 · 분석 배너 " + preview.Banners.Count + "개";
+                            actionTips.SetToolTip(dataStatusLabel, "");
+                            Log(dataStatusLabel.Text + " · 추천 " + preview.PrimaryBanners.Count + "개");
                         }
-                        UpdateBannerTextFromCheckedList();
-                        PopulateTablePreview(preview.Tables);
-                        UpdateBannerStatusText();
-                        UpdateWorkflowStatus();
-                        dataStatusLabel.Text = preview.Tables.Count + "개 표, " + preview.Banners.Count + "개 배너를 발견했습니다.";
-                        Log("표 " + preview.Tables.Count + "개, 배너 " + preview.Banners.Count + "개, 추천 배너 " + preview.PrimaryBanners.Count + "개를 발견했습니다.");
-                    }));
-                }
-                catch (Exception ex)
-                {
-                    BeginInvoke(new Action(delegate()
-                    {
-                        bannerStatusLabel.Text = "확인 실패";
-                        dataStatusLabel.Text = "집계표 구조 확인에 실패했습니다.";
-                        UpdateWorkflowStatus();
-                        Log("배너 확인 실패: " + ex.Message);
-                        MessageBox.Show(this, ex.Message, "배너 확인 실패", MessageBoxButtons.OK, MessageBoxIcon.Warning);
-                    }));
-                }
-                finally
-                {
-                    BeginInvoke(new Action(delegate()
-                    {
                         SetBannerPreviewEnabled(true);
+                        UpdateWorkflowStatus();
                     }));
+                }
+                catch (InvalidOperationException)
+                {
+                    if (!IsDisposed && IsHandleCreated) throw;
                 }
             });
+            thread.IsBackground = true;
             thread.SetApartmentState(ApartmentState.STA);
             thread.Start();
         }
@@ -4295,7 +4430,12 @@ namespace ReportAutomationLauncher
         {
             if (bannerList.Items.Count == 0)
             {
-                bannerStatusLabel.Text = "";
+                if (!workbookPreviewFailed && !workbookPreviewRunning)
+                {
+                    bannerText.Text = "전체";
+                    bannerStatusLabel.Text = previewWorkbookPath.Length == 0 ? "" : "전체 기준";
+                    UpdateWorkflowStatus();
+                }
                 return;
             }
 
@@ -4402,14 +4542,19 @@ namespace ReportAutomationLauncher
 
         private void SetBannerPreviewEnabled(bool enabled)
         {
-            reloadBannerButton.Enabled = enabled;
-            recommendedBannerButton.Enabled = enabled;
-            selectAllBannerButton.Enabled = enabled;
-            clearBannerButton.Enabled = enabled;
-            moveBannerUpButton.Enabled = enabled;
-            moveBannerDownButton.Enabled = enabled;
-            deleteBannerButton.Enabled = enabled;
-            bannerList.Enabled = enabled;
+            reloadBannerButton.Enabled = enabled && File.Exists(workbookPathText.Text.Trim());
+            reloadBannerButton.Text = previewWorkbookPath.Length == 0 ? "표·배너 읽기" : "표·배너 다시 읽기";
+            bool canSelectBanners = enabled && bannerList.Items.Count > 0;
+            recommendedBannerButton.Enabled = selectAllBannerButton.Enabled = clearBannerButton.Enabled =
+                moveBannerUpButton.Enabled = moveBannerDownButton.Enabled = deleteBannerButton.Enabled = bannerList.Enabled = canSelectBanners;
+            UpdateTableRangeActions();
+        }
+
+        private void UpdateTableRangeActions()
+        {
+            var selected = tablePreviewList.SelectedItems.Count == 1 ? tablePreviewList.SelectedItems[0].Tag as TablePreview : null;
+            selectTableRangeButton.Enabled = !workbookPreviewRunning && selected != null;
+            clearTableRangeButton.Enabled = selectTableRangeButton.Enabled && selected.IsManual;
         }
 
         private void BrowseHwpTemplate(object sender, EventArgs e)
@@ -4490,9 +4635,9 @@ namespace ReportAutomationLauncher
             string path = Path.GetFullPath(Path.Combine(engineDirectory, "..", "templates", "report_template_" + BasicHwpVariantIds[index] + ".hwpx"));
             try
             {
+                hwpTemplateText.Text = path;
                 InspectTemplate(path, "hwpx_report", false);
                 if (!IsTemplateStatusUsable()) throw new InvalidOperationException("기본 한글 양식을 확인할 수 없습니다.");
-                hwpTemplateText.Text = path;
                 if (index > 0) SelectReferenceStyle(index);
                 templateStatusLabel.Text = Convert.ToString(basicHwpVariant.SelectedItem) + " 양식을 사용합니다. 본문·표 서식은 별도로 바꿀 수 있습니다.";
             }
@@ -4625,20 +4770,7 @@ namespace ReportAutomationLauncher
 
         private string SelectedTemplatePath()
         {
-            string output = outputTypeCombo.Text;
-            if (output.IndexOf("HWP", StringComparison.OrdinalIgnoreCase) >= 0)
-            {
-                return hwpTemplateText.Text.Trim();
-            }
-            if (output.IndexOf("PowerPoint", StringComparison.OrdinalIgnoreCase) >= 0)
-            {
-                return pptTemplateText.Text.Trim();
-            }
-            if (File.Exists(hwpTemplateText.Text.Trim()))
-            {
-                return hwpTemplateText.Text.Trim();
-            }
-            return pptTemplateText.Text.Trim();
+            return hwpTemplateText.Text.Trim();
         }
 
         private string SelectedTemplateType(string templatePath)
@@ -4658,13 +4790,18 @@ namespace ReportAutomationLauncher
 
         private void InspectTemplate(string templatePath, string templateType, bool showMessage)
         {
-            string reportPath = Path.Combine(Path.GetTempPath(), "report_automation_template_report.json");
-            string arguments = "--template " + QuoteArg(templatePath) +
-                              " --type " + QuoteArg(templateType) +
-                              " --output " + QuoteArg(reportPath);
-            RunTemplateTool("template_inspector.py", arguments, 60000);
-
-            string json = File.Exists(reportPath) ? File.ReadAllText(reportPath, System.Text.Encoding.UTF8) : "";
+            string reportPath = Path.GetTempFileName();
+            string json;
+            try
+            {
+                RunTemplateTool("template_inspector.py", "--template " + QuoteArg(templatePath) +
+                    " --type " + QuoteArg(templateType) + " --output " + QuoteArg(reportPath), 60000);
+                json = File.ReadAllText(reportPath, System.Text.Encoding.UTF8);
+            }
+            finally
+            {
+                try { File.Delete(reportPath); } catch (IOException) { } catch (UnauthorizedAccessException) { }
+            }
             string status = ReadJsonStringValue(json, "status");
             string detectedType = ReadJsonStringValue(json, "template_type");
             string found = ReadJsonArrayValue(json, "found_placeholders");
@@ -4680,12 +4817,15 @@ namespace ReportAutomationLauncher
                 detectedType = templateType;
             }
 
-            lastTemplateStatus = status;
-            templateStatusLabel.Text = "상태: " + status + " / 유형: " + detectedType +
-                                       " / 발견: " + EmptyToDash(found) +
-                                       " / 누락 필수: " + EmptyToDash(missingRequired);
-            templateStatusLabel.ForeColor = IsTemplateStatusUsable() ? LauncherUi.ColorSuccess : LauncherUi.ColorWarning;
-            UpdateWorkflowStatus();
+            if (string.Equals(templatePath, hwpTemplateText.Text.Trim(), StringComparison.OrdinalIgnoreCase))
+            {
+                lastTemplateStatus = status;
+                templateStatusLabel.Text = status == "ready" ? "본문 삽입 위치 확인" :
+                    status == "usable_with_warnings" ? "사용 가능 · 권장 필드 누락: " + EmptyToDash(missingRecommended) :
+                    "양식 확인 필요 · 필수 필드 누락: " + EmptyToDash(missingRequired);
+                templateStatusLabel.ForeColor = status == "ready" ? LauncherUi.ColorSuccess : LauncherUi.ColorWarning;
+                UpdateWorkflowStatus();
+            }
 
             Log("템플릿 검사: " + status + " (" + detectedType + ")");
             if (showMessage)
@@ -4849,7 +4989,7 @@ namespace ReportAutomationLauncher
 
         private void RunButton_Click(object sender, EventArgs e)
         {
-            if (surveyChartExportRunning) return;
+            if (!runButton.Enabled || reportRunning || surveyChartExportRunning) return;
             LauncherOptions options;
             try
             {
@@ -4862,20 +5002,14 @@ namespace ReportAutomationLauncher
             }
 
             reportRunning = true;
-            workflowTabs.SelectedIndex = 3;
+            workflowTabs.SelectedTab = resultsStep;
             draftReviewTabs.SelectedIndex = 3;
+            ClearResultFiles();
+            SetResultStatus("만드는 중 · 원본 확인", LauncherUi.ColorText);
             UpdateWorkflowStatus();
-            resultSummaryText.Text = options.OutputType.IndexOf("HWP", StringComparison.OrdinalIgnoreCase) >= 0
-                ? "원본 확인 → Excel 산출 시트 자동 생성 → QA → 한글 보고서"
-                : "원본 확인 → Excel 산출 시트 자동 생성 → QA";
+            resultSummaryText.Text = "산출물 저장 폴더: " + options.ArtifactDirectory;
             draftPreviewText.Text = "문장 초안을 기다리는 중입니다.";
             draftPreviewStatusLabel.Text = "실행 중...";
-            openWorkbookButton.Enabled = false;
-            openDraftButton.Enabled = false;
-            openHwpOutputButton.Enabled = false;
-            openHwpReportButton.Enabled = false;
-            openPreflightButton.Enabled = false;
-            createSurveyChartReviewButton.Enabled = false;
             copyDraftButton.Enabled = false;
             Log("실행을 시작합니다.");
 
@@ -4883,15 +5017,23 @@ namespace ReportAutomationLauncher
             {
                 try
                 {
-                    EngineRunner.RunWorkflow(options, Log);
+                    EngineRunner.RunWorkflow(options, Log, stage => BeginInvoke(new Action(delegate
+                    {
+                        SetResultStatus("만드는 중 · " + stage, LauncherUi.ColorText);
+                    })));
                     BeginInvoke(new Action(delegate()
                     {
-                        resultSummaryText.Text = BuildResultSummary(options);
+                        bool heldCharts;
+                        resultSummaryText.Text = BuildResultSummary(options, out heldCharts);
                         PopulateResultFiles(options);
-                        bool heldCharts = resultSummaryText.Text.Contains("수동 교체:");
-                        bool missingHwp = options.OutputType.IndexOf("HWP", StringComparison.OrdinalIgnoreCase) >= 0 && !File.Exists(options.LastHwpOutputPath);
-                        MessageBox.Show(this, missingHwp ? "한글 보고서가 저장되지 않았습니다. 산출 결과에서 생성 기록을 확인하세요." : heldCharts ? "한글 보고서는 저장했지만 일부 차트는 보류했습니다. 산출 결과에서 그림 번호와 사유를 확인하세요." : "보고서 자동화 산출이 완료되었습니다.",
-                            missingHwp ? "한글 보고서 저장 실패" : heldCharts ? "차트 검토 필요" : "완료", MessageBoxButtons.OK, heldCharts || missingHwp ? MessageBoxIcon.Warning : MessageBoxIcon.Information);
+                        bool hwp = options.OutputType == HwpOutput;
+                        bool saved = File.Exists(hwp ? options.LastHwpOutputPath : options.LastGeneratedWorkbookPath);
+                        string status = ResultStatus(saved, heldCharts);
+                        if (heldCharts && saved)
+                            resultSummaryText.Text = "한글 보고서가 저장됐습니다. 아래 그림 번호와 보류 사유를 확인하세요." + Environment.NewLine + resultSummaryText.Text;
+                        if (!saved)
+                            resultSummaryText.Text = "지정한 산출물 파일이 없습니다. 진행 기록을 확인하세요." + Environment.NewLine + resultSummaryText.Text;
+                        SetResultStatus(status, !saved ? LauncherUi.ColorDanger : heldCharts ? LauncherUi.ColorWarning : LauncherUi.ColorSuccess);
                     }));
                 }
                 catch (Exception ex)
@@ -4920,7 +5062,7 @@ namespace ReportAutomationLauncher
                                 Environment.NewLine + "저장된 산출 Excel: " + options.LastGeneratedWorkbookPath) +
                             (string.IsNullOrWhiteSpace(options.LastPreflightReportPath) ? "" :
                                 Environment.NewLine + "QA 검사 기록: " + options.LastPreflightReportPath);
-                        MessageBox.Show(this, errorMessage, "오류", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                        SetResultStatus(ResultStatus(false, false), LauncherUi.ColorDanger);
                     }));
                 }
                 finally
@@ -4937,11 +5079,24 @@ namespace ReportAutomationLauncher
             thread.Start();
         }
 
-        private static string BuildResultSummary(LauncherOptions options)
+        private static string ResultStatus(bool saved, bool heldCharts)
         {
+            return !saved ? "저장하지 못함" : heldCharts ? "검토 필요 · 일부 차트 보류" : "저장 완료";
+        }
+
+        private void SetResultStatus(string status, Color color)
+        {
+            resultStatusLabel.Text = status;
+            resultStatusLabel.ForeColor = color;
+            if (reportRunning && workflowTabs.SelectedTab != resultsStep) workspaceStatus.Text = status;
+        }
+
+        private static string BuildResultSummary(LauncherOptions options, out bool heldCharts)
+        {
+            heldCharts = false;
             var lines = new List<string>();
-            lines.Add("완료되었습니다.");
-            lines.Add("");
+            lines.Add("저장 폴더: " + options.ArtifactDirectory);
+            if (File.Exists(options.LastHwpOutputPath)) lines.Add("한글 보고서: " + options.LastHwpOutputPath);
             lines.Add("출력 형식: " + options.OutputType);
             lines.Add("보고서 유형: " + options.ReportProfile);
             lines.Add("문체: " + options.StyleProfile);
@@ -4950,7 +5105,6 @@ namespace ReportAutomationLauncher
             lines.Add("삽입표 방식: " + options.TableInsertMode);
             lines.Add("LLM 문장 고도화: " + (options.UseLlm ? options.LlmProvider + " / " + options.LlmModel : "사용 안 함"));
             lines.Add("작업 방식: " + (options.CopyWorkbook ? "Excel 작업 복사본 생성" : "원본 파일 직접 산출"));
-            lines.Add("저장 폴더: " + options.ArtifactDirectory);
             if (options.OutputType.IndexOf("HWP", StringComparison.OrdinalIgnoreCase) >= 0)
                 lines.Add("한글 출력 범위: " + (options.HwpMaxSections == 0 ? "모든 표" : "첫 " + options.HwpMaxSections + "개 표"));
             lines.Add("선택 배너: " + options.BannerSetting);
@@ -4976,18 +5130,14 @@ namespace ReportAutomationLauncher
                 lines.Add("Preflight: " + options.LastPreflightReportPath);
                 lines.Add(BuildPreflightSummary(options.LastPreflightReportPath));
             }
-            if (!string.IsNullOrWhiteSpace(options.LastHwpOutputPath))
-            {
-                lines.Add("HWPX 초본: " + options.LastHwpOutputPath);
-            }
-            else if (options.OutputType.IndexOf("HWP", StringComparison.OrdinalIgnoreCase) >= 0)
+            if (!File.Exists(options.LastHwpOutputPath) && options.OutputType.IndexOf("HWP", StringComparison.OrdinalIgnoreCase) >= 0)
             {
                 lines.Add("HWPX 초본: 생성하지 못했습니다. 로그와 writer report를 확인하세요.");
             }
             if (!string.IsNullOrWhiteSpace(options.LastHwpWriterReportPath))
             {
                 lines.Add("HWPX writer report: " + options.LastHwpWriterReportPath);
-                lines.Add(BuildHwpWriterReportSummary(options.LastHwpWriterReportPath));
+                lines.Insert(1, BuildHwpWriterReportSummary(options.LastHwpWriterReportPath, out heldCharts));
             }
             lines.Add("");
             lines.Add("Excel에서 보고서_분석문, 보고서_차트데이터, 보고서_삽입표, 보고서_QA 시트를 확인하세요.");
@@ -5009,8 +5159,9 @@ namespace ReportAutomationLauncher
                    " / 오류 " + EmptyToDash(ReadJsonPrimitiveValue(json, "qa_error_count"));
         }
 
-        private static string BuildHwpWriterReportSummary(string path)
+        private static string BuildHwpWriterReportSummary(string path, out bool heldCharts)
         {
+            heldCharts = false;
             if (string.IsNullOrWhiteSpace(path) || !File.Exists(path))
             {
                 return "HWP COM: report 없음";
@@ -5046,6 +5197,7 @@ namespace ReportAutomationLauncher
                 {
                     var figures = ((object[])figuresValue).OfType<Dictionary<string, object>>().ToArray();
                     int held = figures.Count(item => JsonString(item, "status") == "held");
+                    heldCharts = held > 0;
                     figureLines.Add("차트: " + (figures.Length - held) + "개 삽입 · " + held + "개 보류");
                     foreach (var item in figures.Where(entry => JsonString(entry, "status") == "held"))
                         figureLines.Add("<그림 " + JsonString(item, "number") + "> " + JsonString(item, "title") + " · " + JsonString(item, "reason"));
@@ -5111,6 +5263,16 @@ namespace ReportAutomationLauncher
             return components.Count == 0 ? "선택 없음" : string.Join(", ", components.ToArray());
         }
 
+        private void ClearResultFiles()
+        {
+            foreach (var item in new[] { openHwpOutputButton, openWorkbookButton, openDraftButton, openHwpReportButton, openPreflightButton, createSurveyChartReviewButton })
+            {
+                item.Tag = null;
+                item.Enabled = false;
+            }
+            openHwpOutputButton.Visible = false;
+        }
+
         private void PopulateResultFiles(LauncherOptions options)
         {
             openWorkbookButton.Tag = options.LastGeneratedWorkbookPath;
@@ -5119,8 +5281,12 @@ namespace ReportAutomationLauncher
             openDraftButton.Tag = options.LastDraftTextPath;
             openDraftButton.Enabled = !string.IsNullOrWhiteSpace(options.LastDraftTextPath) && File.Exists(options.LastDraftTextPath);
 
-            openHwpOutputButton.Tag = options.LastHwpOutputPath;
-            openHwpOutputButton.Enabled = !string.IsNullOrWhiteSpace(options.LastHwpOutputPath) && File.Exists(options.LastHwpOutputPath);
+            bool hwpSaved = File.Exists(options.LastHwpOutputPath);
+            openHwpOutputButton.Tag = hwpSaved ? options.LastHwpOutputPath : options.LastGeneratedWorkbookPath;
+            openHwpOutputButton.Text = hwpSaved ? "한글 보고서 열기" : "산출 Excel 열기";
+            openHwpOutputButton.AccessibleName = openHwpOutputButton.Text;
+            openHwpOutputButton.Visible = openHwpOutputButton.Enabled = File.Exists(openHwpOutputButton.Tag as string);
+            openWorkbookButton.Visible = hwpSaved;
 
             openHwpReportButton.Tag = options.LastHwpWriterReportPath;
             openHwpReportButton.Enabled = !string.IsNullOrWhiteSpace(options.LastHwpWriterReportPath) && File.Exists(options.LastHwpWriterReportPath);
@@ -6139,7 +6305,7 @@ namespace ReportAutomationLauncher
             var options = new LauncherOptions();
             options.WorkbookPath = workbookPathText.Text.Trim();
             options.OutputDirectory = outputFolderText.Text.Trim();
-            options.OutputType = outputTypeCombo.SelectedItem == null ? "" : outputTypeCombo.SelectedItem.ToString();
+            options.OutputType = IsHwpOutput ? HwpOutput : ExcelOutput;
             options.ReportProfile = reportProfileCombo.SelectedItem == null ? "" : reportProfileCombo.SelectedItem.ToString();
             options.StyleProfile = styleProfileCombo.SelectedItem == null ? "" : styleProfileCombo.SelectedItem.ToString();
             options.HwpTemplatePath = hwpTemplateText.Text.Trim();
@@ -6162,7 +6328,7 @@ namespace ReportAutomationLauncher
             options.CopyWorkbook = copyWorkbookCheck.Checked;
             options.KeepExcelOpen = keepExcelOpenCheck.Checked;
             options.HwpVisible = hwpVisibleCheck.Checked;
-            if (outputTypeCombo.SelectedIndex == 1 && chartCheck.Checked && hwpIncludeFiguresCheck.Checked)
+            if (IsHwpOutput && chartCheck.Checked && hwpIncludeFiguresCheck.Checked)
             {
                 options.HwpFigurePrefix = Decimal.ToInt32(hwpFigurePrefix.Value).ToString(System.Globalization.CultureInfo.InvariantCulture);
                 options.HwpChartStylePath = ActiveSurveyChartStyle();
@@ -6910,12 +7076,12 @@ namespace ReportAutomationLauncher
 
     internal static class EngineRunner
     {
-        internal static void RunWorkflow(LauncherOptions options, Action<string> log)
+        internal static void RunWorkflow(LauncherOptions options, Action<string> log, Action<string> showStage = null)
         {
             bool hwp = options.OutputType.IndexOf("HWP", StringComparison.OrdinalIgnoreCase) >= 0;
             if (!hwp)
             {
-                RunWorkflowCore(options, log, null);
+                RunWorkflowCore(options, log, null, showStage);
                 return;
             }
             // HWP table insertion uses the shared Windows clipboard.
@@ -6927,20 +7093,22 @@ namespace ReportAutomationLauncher
                 if (!acquired) throw new InvalidOperationException("다른 한글 보고서를 작성 중입니다. 완료 후 다시 실행하세요.");
                 try
                 {
+                    if (showStage != null) showStage("한글 양식 확인");
                     log("한글 양식의 본문 위치를 확인합니다.");
                     RequireHwpTemplate(options.HwpTemplatePath);
-                    RunWorkflowCore(options, log, HwpJobPath(options));
+                    RunWorkflowCore(options, log, HwpJobPath(options), showStage);
                 }
                 finally { mutex.ReleaseMutex(); }
             }
         }
 
-        private static void RunWorkflowCore(LauncherOptions options, Action<string> log, string jobPath)
+        private static void RunWorkflowCore(LauncherOptions options, Action<string> log, string jobPath, Action<string> showStage)
         {
             bool resume = jobPath != null && File.Exists(jobPath) && File.Exists(jobPath + ".recovery.json");
             string workbookPath;
             if (resume)
             {
+                if (showStage != null) showStage("이전 작업의 Excel·QA 사용");
                 workbookPath = File.ReadAllText(jobPath, System.Text.Encoding.UTF8).Trim();
                 if (!File.Exists(workbookPath) || !string.Equals(Path.GetDirectoryName(Path.GetFullPath(workbookPath)).TrimEnd(Path.DirectorySeparatorChar),
                     Path.GetFullPath(options.ArtifactDirectory).TrimEnd(Path.DirectorySeparatorChar), StringComparison.OrdinalIgnoreCase))
@@ -6952,6 +7120,7 @@ namespace ReportAutomationLauncher
             }
             else
             {
+                if (showStage != null) showStage(jobPath == null ? "1/2 Excel 산출 시트 생성" : "1/3 Excel 산출 시트 생성");
                 log("1단계: 원본 집계표에서 Excel 산출 시트를 자동 생성합니다.");
                 workbookPath = AutomationRunner.Run(options, log);
             }
@@ -6960,6 +7129,7 @@ namespace ReportAutomationLauncher
             {
                 if (!resume)
                 {
+                    if (showStage != null) showStage(jobPath == null ? "2/2 QA 검사" : "2/3 QA 검사");
                     log("2단계: 생성된 산출 시트에서 분석문·표를 읽어 QA를 검사합니다.");
                     TryGenerateReportPackage(workbookPath, options, log);
                 }
@@ -6968,6 +7138,7 @@ namespace ReportAutomationLauncher
                     RequireHwpPreflight(options);
                     if (!resume) File.WriteAllText(jobPath, workbookPath, System.Text.Encoding.UTF8);
                     options.HwpRecoveryPath = jobPath + ".recovery.json";
+                    if (showStage != null) showStage(resume ? "한글 작성 재개 · 기존 Excel·QA 사용" : "3/3 한글 보고서 작성");
                     log("3단계: QA를 통과한 산출 데이터로 한글 보고서를 만듭니다.");
                     TryGenerateHwpDocument(options, log);
                     if (string.IsNullOrWhiteSpace(options.LastHwpOutputPath))
@@ -6977,7 +7148,10 @@ namespace ReportAutomationLauncher
                     catch (UnauthorizedAccessException ex) { log("자동 재개 기록 정리 실패: " + ex.Message); }
                 }
                 if (options.GenerateDraftText)
+                {
+                    if (showStage != null) showStage("분석문 초안 저장");
                     options.LastDraftTextPath = TryGenerateDraft(workbookPath, log);
+                }
                 AutomationRunner.WriteLauncherConfig(workbookPath, options);
             }
             finally

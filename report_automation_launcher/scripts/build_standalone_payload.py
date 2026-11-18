@@ -129,7 +129,8 @@ def collect_payload_files(repository, base_prefix, distributions):
     add(repository / addin, repository, addin)
     for name in ("report_template_basic.hwpx", "report_template_guardian.hwpx", "report_template_screening.hwpx",
                  "report_template_basic.pptx", "chart_review_template_basic.pptx",
-                 "chart_style_deep_blue.pptx", "chart_style_sky_blue.pptx"):
+                 "chart_style_deep_blue.pptx", "chart_style_sky_blue.pptx",
+                 "chart_preview_deep_blue.png", "chart_preview_sky_blue.png"):
         add(repository / "templates" / name, repository, "templates/" + name)
     add(repository / "LICENSE", repository, "LICENSE")
     license_root = repository / "report_automation_launcher/licenses"
