@@ -24,8 +24,82 @@ def _header_row_count(matrix):
     return len(matrix)
 
 
-def prepare_report_table(table):
+def _merged_ranges_from_matrix(matrix):
+    return [{"row": r + 1, "col": c + 1, "rowspan": int(cell.get("rowspan") or 1), "colspan": int(cell.get("colspan") or 1)}
+            for r, row in enumerate(matrix) for c, cell in enumerate(row)
+            if not cell.get("covered_by") and (int(cell.get("rowspan") or 1) > 1 or int(cell.get("colspan") or 1) > 1)]
+
+
+def _cell_id(cell, row_index, col_index):
+    return cell.get("source_cell") or f"R{row_index + 1}C{col_index + 1}"
+
+
+def apply_vertical_banner_policy(table, policy="merge"):
+    """Optionally unmerge vertical banners so every page of a long table shows the label.
+
+    Hancom prints a merged cell's text once, on the page where the merge starts.
+    ``repeat_per_row`` writes the banner label into every row it covered instead.
+    Values are never moved; only label cells (``banner_vertical``) change.
+    """
+    if policy == "merge":
+        return table
+    if policy != "repeat_per_row":
+        raise ValueError(f"알 수 없는 세로 배너 정책입니다: {policy}")
+    result = copy.deepcopy(table)
+    matrix = result.get("matrix") or []
+    headers = _header_row_count(matrix)
+    changed = 0
+    for row_index in range(headers, len(matrix)):
+        for col_index, cell in enumerate(matrix[row_index]):
+            rowspan = int(cell.get("rowspan") or 1)
+            if cell.get("covered_by") or cell.get("role") != "banner_vertical" or rowspan <= 1:
+                continue
+            colspan = int(cell.get("colspan") or 1)
+            cell["rowspan"] = 1
+            for r in range(row_index + 1, min(row_index + rowspan, len(matrix))):
+                target = matrix[r][col_index]
+                anchor = copy.deepcopy(cell)
+                anchor.update(row=target.get("row", r + 1), col=target.get("col", col_index + 1), rowspan=1, colspan=colspan,
+                              covered_by="", source_cell=target.get("source_cell") or "", repeated_label=True)
+                matrix[r][col_index] = anchor
+                for c in range(col_index + 1, col_index + colspan):
+                    matrix[r][c].update(covered_by=_cell_id(anchor, r, col_index), display_text="", role="blank")
+            changed += 1
+    if not changed:
+        return table
+    result["merged_ranges"] = _merged_ranges_from_matrix(matrix)
+    result["cells"] = [cell for row in matrix for cell in row]
+    result["vertical_banner_repeated"] = changed
+    return result
+
+
+def _split_merges_at_header(matrix, headers):
+    """Cut label merges that run from the header into the body at the header boundary."""
+    crossing = [(r, c, cell) for r, row in enumerate(matrix[:headers]) for c, cell in enumerate(row)
+                if not cell.get("covered_by") and r + int(cell.get("rowspan") or 1) > headers]
+    if any(cell.get("role") in {"value", "base"} for _, _, cell in crossing):
+        return False
+    for r, c, cell in crossing:
+        end = r + int(cell["rowspan"])
+        colspan = int(cell.get("colspan") or 1)
+        cell["rowspan"] = headers - r
+        body = matrix[headers][c]
+        remainder = copy.deepcopy(body)
+        remainder.update(rowspan=end - headers, colspan=colspan, covered_by="", display_text="",
+                         role="blank", split_from=_cell_id(cell, r, c))
+        matrix[headers][c] = remainder
+        anchor_id = _cell_id(remainder, headers, c)
+        for rr in range(headers, end):
+            for cc in range(c, c + colspan):
+                if (rr, cc) != (headers, c):
+                    matrix[rr][cc].update(covered_by=anchor_id, display_text="", role="blank")
+    return True
+
+
+def prepare_report_table(table, header_merge_policy="base_only"):
     """Add a render-only merged metadata row; Excel/source coordinates stay intact."""
+    if header_merge_policy not in ("base_only", "split_at_header"):
+        raise ValueError(f"알 수 없는 헤더 병합 정책입니다: {header_merge_policy}")
     result = copy.deepcopy(table)
     matrix = result["matrix"]
     # Hancom collapses a row with no cell anchor, even on a native TableMergeCell.
@@ -51,9 +125,14 @@ def prepare_report_table(table):
     result["visual_header_row"] = headers if headers else None
     crosses_body = any(not cell.get("covered_by") and row_index < headers and row_index + int(cell.get("rowspan") or 1) > headers
                        for row_index, row in enumerate(matrix) for cell in row)
-    if crosses_body:
+    if crosses_body and header_merge_policy == "split_at_header" and _split_merges_at_header(matrix, headers):
+        result["merged_ranges"] = _merged_ranges_from_matrix(matrix)
+        result["header_repeat_warning"] = "헤더와 본문에 걸친 병합 셀을 헤더 경계에서 나누어 헤더 행을 반복합니다."
+    elif crosses_body:
         headers = 0
-        result["header_repeat_warning"] = "헤더 병합이 본문까지 이어져 BASE 행만 반복합니다."
+        result["header_repeat_warning"] = (
+            "헤더 병합이 본문까지 이어져 BASE 행만 반복합니다." if header_merge_policy == "base_only"
+            else "헤더와 본문에 걸친 병합에 값 셀이 있어 나누지 않고 BASE 행만 반복합니다.")
     metadata = resolve_table_metadata(table)
     result.update(metadata)
     cols = len(matrix[0])
@@ -74,12 +153,21 @@ def prepare_report_table(table):
     return result
 
 
-def plan_table_parts(table, body_width, font_size_pt, style_config=None):
+def plan_table_parts(table, body_width, font_size_pt, style_config=None, layout=None):
     """Repeat left labels/BASE, split data columns, and project header merges.
 
     Header banners may be repeated across fragments. Body merges are atomic:
     a value must never be silently divided or dropped to make a table fit.
+
+    ``layout`` (see ``hwp_table_layout_options``) may give explicit ``cuts``
+    (1-based source columns that start a new fragment), fixed
+    ``column_widths_mm``, and ``body_merge_policy`` ``split_repeat`` which allows
+    cutting a merged body cell; its text is then repeated in every fragment.
     """
+    layout = layout or {}
+    body_policy = layout.get("body_merge_policy", "block")
+    if body_policy not in ("block", "split_repeat"):
+        raise ValueError(f"알 수 없는 본문 병합 정책입니다: {body_policy}")
     if not math.isfinite(body_width) or body_width <= 0 or not math.isfinite(font_size_pt) or font_size_pt <= 0:
         raise ValueError("본문 폭과 표 글자 크기는 양수여야 합니다.")
     matrix = table.get("matrix") or []
@@ -111,11 +199,19 @@ def plan_table_parts(table, body_width, font_size_pt, style_config=None):
         padding = max((horizontal_margin(row[col], index) for index, row in enumerate(matrix)
                        if not row[col].get("covered_by") and int(row[col].get("colspan") or 1) == 1), default=0)
         widths.append(math.ceil(units * font_size_pt * 100 + max(600, padding)))
+    fixed_columns = set()
+    for col, mm in (layout.get("column_widths_mm") or {}).items():
+        col = int(col)
+        if not 1 <= col <= count:
+            raise ValueError(f"열 폭 보정의 {col}열이 표 범위(1~{count}열)를 벗어납니다.")
+        widths[col - 1] = margin_units(mm)
+        fixed_columns.add(col - 1)
 
     # A small clearance avoids clipboard pixel rounding and outer border clipping.
     budget = int(body_width) - 500
     fixed = sum(widths[:prefix])
     forbidden, preferred = set(), set()
+    body_merges = []
     for row_index, row in enumerate(matrix):
         for col, cell in enumerate(row):
             if cell.get("covered_by"):
@@ -125,12 +221,32 @@ def plan_table_parts(table, body_width, font_size_pt, style_config=None):
                 raise ValueError("병합 범위가 표 영역을 벗어납니다.")
             if span > 1:
                 if row_index >= header_rows:
-                    forbidden.update(range(col + 1, col + span))
+                    body_merges.append((row_index, col, span, cell))
+                    if body_policy == "block":
+                        forbidden.update(range(col + 1, col + span))
                 elif col >= prefix:
                     preferred.add(col + span)
 
     selections = []
-    if sum(widths) <= budget:
+    explicit = layout.get("cuts")
+    if explicit is not None:
+        edges = sorted({int(c) - 1 for c in explicit})
+        for edge in edges:
+            if not prefix < edge < count:
+                raise ValueError(f"분할 경계 {edge + 1}열은 반복 보기/BASE 열({prefix}열) 다음부터 {count}열 사이여야 합니다.")
+            if edge in forbidden:
+                raise ValueError(f"{edge + 1}열 앞에서 나누면 본문 병합 셀이 잘립니다. 경계를 옮기거나 본문 병합 분할을 허용하세요.")
+        if not edges:
+            selections.append(list(range(count)))
+        else:
+            bounds = [prefix, *edges, count]
+            for start, end in zip(bounds, bounds[1:]):
+                selections.append(list(range(prefix)) + list(range(start, end)))
+        for index, columns in enumerate(selections, 1):
+            if sum(widths[col] for col in columns) > budget:
+                first = next((col for col in columns if col >= prefix), columns[0])
+                raise ValueError(f"{index}번째 표({first + 1}~{columns[-1] + 1}열)가 본문 폭을 넘습니다. 분할 경계나 열 폭을 조정하세요.")
+    elif sum(widths) <= budget:
         selections.append(list(range(count)))
     else:
         if prefix in forbidden:
@@ -154,19 +270,40 @@ def plan_table_parts(table, body_width, font_size_pt, style_config=None):
             selections.append(list(range(prefix)) + list(range(start, cut)))
             start = cut
 
+    split_warnings = []
+    edges = {columns[len(range(prefix))] for columns in selections[1:] if len(columns) > prefix}
+    for row_index, col, span, cell in body_merges:
+        if any(col < edge < col + span for edge in edges) or (len(selections) > 1 and col < prefix < col + span):
+            text = str(cell.get("display_text") or "").strip() or "(빈 셀)"
+            split_warnings.append(f"{row_index + 1}행 본문 병합 셀 '{text}'을 분할 경계에서 나누어 각 표에 반복 표시했습니다.")
+
     parts = []
     for index, columns in enumerate(selections, 1):
         part = _project_columns(table, columns)
         minimum = [widths[col] for col in columns]
-        allocated = [int(value * budget / sum(minimum)) for value in minimum]
-        allocated[-1] += budget - sum(allocated)
+        flexible = [i for i, col in enumerate(columns) if col not in fixed_columns]
+        fixed_total = sum(minimum[i] for i in range(len(columns)) if i not in flexible)
+        if fixed_total > budget:
+            raise ValueError("고정한 열 폭의 합이 본문 폭을 넘습니다.")
+        if flexible and len(flexible) < len(columns):
+            # User-fixed columns keep their width; the rest share what remains.
+            allocated = list(minimum)
+            remaining = budget - fixed_total
+            flexible_total = sum(minimum[i] for i in flexible)
+            for i in flexible:
+                allocated[i] = int(minimum[i] * remaining / flexible_total)
+            allocated[flexible[-1]] += budget - sum(allocated)
+        else:
+            allocated = [int(value * budget / sum(minimum)) for value in minimum]
+            allocated[-1] += budget - sum(allocated)
         for row_index, row in enumerate(part["matrix"]):
             for col_index, cell in enumerate(row):
                 if not cell.get("covered_by") and horizontal_margin(cell, row_index) >= sum(allocated[col_index:col_index + cell["colspan"]]):
                     raise ValueError(f"{row_index + 1}행 {col_index + 1}열: 셀 여백을 빼면 글자가 들어갈 폭이 없습니다.")
         part.update(source_columns=[col + 1 for col in columns], repeated_columns=list(range(1, prefix + 1)),
                     column_widths_hwpunit=allocated, body_width_hwpunit=int(body_width),
-                    part_index=index, part_count=len(selections), layout_prepared=True)
+                    part_index=index, part_count=len(selections), layout_prepared=True,
+                    layout_warnings=split_warnings if index == 1 else [])
         parts.append(part)
     return parts
 

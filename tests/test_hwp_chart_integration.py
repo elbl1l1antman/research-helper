@@ -39,10 +39,8 @@ def test_page_break_before_split_table_only_with_inserted_emf(monkeypatch, has_e
     monkeypatch.setattr(writer, 'run_action', lambda _, action, *__: events.append(action) or True)
     monkeypatch.setattr(writer, 'insert_narrative_blocks', lambda *_: None)
     monkeypatch.setattr(writer, 'current_body_width', lambda *_: 40000)
-    monkeypatch.setattr(writer, 'resolve_table_metadata', lambda *_: {'unit': '%', 'base_label': '전체'})
-    monkeypatch.setattr(writer, 'format_table_display', lambda table, _: table)
-    monkeypatch.setattr(writer, 'plan_table_parts', lambda *_: [dict(part_index=i) for i in range(1, parts + 1)])
-    monkeypatch.setattr(writer, 'prepare_report_table', lambda part: dict(part, header_repeat_warning=''))
+    monkeypatch.setattr(writer, 'plan_hwp_table', lambda *_a, **_k: {
+        'orientation': 'portrait', 'warnings': [], 'parts': [dict(part_index=i) for i in range(1, parts + 1)]})
     monkeypatch.setattr(writer, 'write_table_part', lambda *args: events.append('table'))
     package = {'sections': [{'table_key': 'A'}], 'tables': [{'table_key': 'A', 'matrix': [[{}]]}]}
 
