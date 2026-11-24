@@ -256,6 +256,8 @@ def plan_table_parts(table, body_width, font_size_pt, style_config=None, layout=
                 raise ValueError(f"분할 경계 {edge + 1}열은 반복 보기/BASE 열({prefix}열) 다음부터 {count}열 사이여야 합니다.")
             if edge in forbidden:
                 raise ValueError(f"{edge + 1}열 앞에서 나누면 본문 병합 셀이 잘립니다. 경계를 옮기거나 본문 병합 분할을 허용하세요.")
+        if edges and prefix in forbidden:
+            raise ValueError("본문 병합 셀이 반복 보기/BASE 열 경계를 가로질러 분할할 수 없습니다.")
         if not edges:
             selections.append(list(range(count)))
         else:

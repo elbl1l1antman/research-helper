@@ -49,7 +49,7 @@ POLICY_VALUES = {
     "vertical_banner_policy": ("merge", "repeat_per_row"),
 }
 LAYOUT_DEFAULTS = {name: values[0] for name, values in POLICY_VALUES.items()}
-TABLE_FIELDS = set(POLICY_VALUES) | {"cuts", "column_widths_mm"}
+TABLE_FIELDS = set(POLICY_VALUES) | {"cuts", "column_widths_mm", "col_count"}
 MAX_COLUMN_WIDTH_MM = 400.0
 
 
@@ -92,7 +92,11 @@ def normalize_table_layout(config: Dict[str, Any] | None) -> Dict[str, Any]:
         field = f"tables.{key}"
         if not isinstance(key, str) or not key.strip():
             raise ValueError("tables: 빈 table_key는 사용할 수 없습니다.")
-        entry = _policies(raw, field, {"cuts", "column_widths_mm"})
+        entry = _policies(raw, field, {"cuts", "column_widths_mm", "col_count"})
+        if "col_count" in raw:
+            if type(raw["col_count"]) is not int or raw["col_count"] < 1:
+                raise ValueError(f"{field}.col_count: 1 이상의 정수가 필요합니다.")
+            entry["col_count"] = raw["col_count"]
         if "cuts" in raw:
             cuts = raw["cuts"]
             if not isinstance(cuts, list) or any(type(c) is not int or c < 2 for c in cuts):

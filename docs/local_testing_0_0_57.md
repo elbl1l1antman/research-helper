@@ -99,8 +99,15 @@ powershell -ExecutionPolicy Bypass -File tests\test_standalone_launcher.ps1
    | 차트(EMF) 뒤 가로 구역 표 | 차트 쪽 다음에 가로 쪽이 시작되고 한글이 멈추지 않음 |
 
 4. 가로 구역이 열린 상태에서 생성을 중단한 뒤 다시 시작해(자동 재개) 다음 문항이 세로로 돌아오는지 확인합니다.
-5. 확인할 한글 API 가정: `BreakSection` 다음에 `PageSetup`(`ApplyTo=2`)을 실행하면 새 구역에만 적용되어야 합니다. 기존 편집용지 기능과 같은 값입니다.
-   - 실제로 앞 구역까지 바뀌면 `hwp_com_writer.begin_section`의 `ApplyTo` 값을 조정해야 합니다.
+5. 확인할 한글 API 가정이 두 가지 있습니다.
+   - `BreakSection` 다음에 `PageSetup`(`ApplyTo=2`)을 실행하면 새 구역에만 적용되어야 합니다. 기존 편집용지 기능과 같은 값입니다.
+     실제로 앞 구역까지 바뀌면 `hwp_com_writer.begin_section`의 `ApplyTo` 값을 조정해야 합니다.
+   - `at_document_end`는 `GetPos` → `MoveSelDocEnd` → `GetTextFile("TEXT","saveblock")` → `SetPos` 순서로 확인합니다.
+     - `{{BODY}}` 뒤에 '검토 요약' 같은 템플릿 글이 있으면: 마지막 가로 표 다음에 세로 구역으로 돌아와야 합니다.
+     - `{{BODY}}`가 문서 끝이면: 빈 세로 쪽 없이 끝나고, 경고 '문서가 가로 용지로 끝납니다'가 남아야 합니다.
+     - 이 호출이 실패하면 안전하게 세로로 되돌립니다. 그래서 끝에 빈 쪽이 하나 생길 수 있습니다.
+6. 저장한 분할 보정에는 열 수(`col_count`)가 함께 저장됩니다. 배너 선택을 바꿔 열 수가 달라지면 경계와 폭 보정은 적용되지 않습니다.
+   대신 '…열 표용이라 … 적용하지 않았습니다' 경고가 남아야 합니다.
 
 ## 4. PPTX 초본 (작업 4)
 

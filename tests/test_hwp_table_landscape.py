@@ -76,20 +76,55 @@ def test_landscape_if_needed_rotates_only_that_section(monkeypatch):
     hwp, events, widths, report = run(monkeypatch, layout, keys=("W", "N"))
     # Title and narrative stay on the portrait page; only the table moves to a rotated section.
     assert events == ["BreakPara", "BreakPara", "BreakSection", "table",
-                      "BreakSection", "BreakPara", "BreakPara", "BreakSection", "table"]
+                      "BreakSection", "BreakPara", "BreakPara", "BreakSection", "table",
+                      "BreakSection"]  # template text after {{BODY}} returns to portrait
     assert widths == [(84186 - 14174, 1), (84186 - 14174, 1)]
-    # rotate W, restore portrait for N's text (no extra BreakPage), rotate N.
-    assert [entry[1] for entry in hwp.executed] == [1, 0, 1]
+    # rotate W, restore portrait for N's text (no extra BreakPage), rotate N, restore at the end.
+    assert [entry[1] for entry in hwp.executed] == [1, 0, 1, 0]
+    assert "rotated_section" not in report
     assert all(entry[2] == 2 for entry in hwp.executed)
     assert report["table_layouts"][0]["orientation"] == "landscape"
     assert any("가로 용지" in warning for warning in report["warnings"])
 
 
-def test_rotated_state_survives_to_the_next_section_through_the_report(monkeypatch):
+def test_document_ending_in_a_rotated_table_adds_no_trailing_section(monkeypatch):
     layout = {"schema_version": "1.0", "defaults": {"wide_table_policy": "landscape_if_needed"}}
-    _hwp, _events, _widths, report = run(monkeypatch, layout)
-    # The last rotated section stays open; a recovery resume restores it at the next section.
-    assert report["rotated_section"] == {"table_key": "W", "original_landscape": False}
+    original = FakeHwp.__init__
+
+    def with_cursor(self):
+        original(self)
+        self.GetPos = lambda: (0, 5, 0)
+        self.SetPos = lambda *_: True
+        self.GetTextFile = lambda *_: "\r\n"
+        self.HAction.Run = lambda *_: True
+
+    monkeypatch.setattr(FakeHwp, "__init__", with_cursor)
+    hwp, events, _widths, report = run(monkeypatch, layout)
+    assert events[-1] == "table"
+    assert [entry[1] for entry in hwp.executed] == [1]
+    assert any("가로 용지로 끝납니다" in w for w in report["warnings"])
+
+
+def test_resume_after_a_rotated_section_restores_orientation(monkeypatch):
+    from report_automation_engine.hwp_recovery import COUNTERS
+
+    assert "rotated_section" in COUNTERS  # saved with each recovery snapshot
+    layout = normalize_table_layout({"schema_version": "1.0", "defaults": {"wide_table_policy": "landscape_if_needed"}})
+    events = []
+    hwp = FakeHwp()
+    hwp.page.Landscape = 1  # the snapshot ends inside the rotated section
+    monkeypatch.setattr(writer, "insert_text", lambda *_: None)
+    monkeypatch.setattr(writer, "insert_narrative_blocks", lambda *_: None)
+    monkeypatch.setattr(writer, "run_action", lambda _h, action, *_: events.append(action) or True)
+    monkeypatch.setattr(writer, "write_table_part", lambda *_a: events.append("table"))
+    package = {"sections": [{"table_key": "W"}, {"table_key": "S"}],
+               "tables": [merged_wide_table("W"), merged_wide_table("S", cols=3)]}
+    report = {"sections_written": 1, "warnings": [], "charts_deferred": 0,
+              "rotated_section": {"table_key": "W", "original_landscape": False}}
+    write_body(hwp, package, report, table_layout=layout)
+    assert events[0] == "BreakSection" and "BreakPage" not in events
+    assert hwp.page.Landscape == 0
+    assert report["table_layouts"][0]["orientation"] == "portrait"
 
 
 def test_table_override_can_split_the_merge_instead_of_rotating(monkeypatch):

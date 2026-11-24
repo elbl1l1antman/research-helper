@@ -9240,6 +9240,7 @@ namespace ReportAutomationLauncher
         private string currentKey;
         private bool loading;
         private bool dirty;
+        private bool busy;
 
         private readonly ListView tableList = new ListView();
         private readonly DataGridView columnGrid = new DataGridView();
@@ -9428,10 +9429,12 @@ namespace ReportAutomationLauncher
             return item != null && item.TryGetValue(key, out value) && value != null ? Convert.ToString(value, System.Globalization.CultureInfo.InvariantCulture) : "";
         }
 
-        private void SetBusy(bool busy)
+        private void SetBusy(bool value)
         {
-            UseWaitCursor = busy;
-            recalculateButton.Enabled = saveButton.Enabled = resetButton.Enabled = !busy;
+            busy = value;
+            UseWaitCursor = value;
+            recalculateButton.Enabled = saveButton.Enabled = resetButton.Enabled = closeButton.Enabled = !value;
+            tableList.Enabled = columnGrid.Enabled = !value;
         }
 
         // Copy combo/grid edits of the visible table into the layout dictionary.
@@ -9474,6 +9477,9 @@ namespace ReportAutomationLauncher
             if (widths.Count > 0) entry["column_widths_mm"] = widths;
             else entry.Remove("column_widths_mm");
             if (editedCuts.Contains(currentKey)) entry["cuts"] = cuts.ToArray();
+            // Column numbers only mean something for this column structure (banner choice can change it).
+            if (entry.ContainsKey("cuts") || entry.ContainsKey("column_widths_mm")) entry["col_count"] = columnGrid.Rows.Count;
+            else entry.Remove("col_count");
             if (entry.Count == 0) Tables.Remove(currentKey);
             return true;
         }
@@ -9599,6 +9605,7 @@ namespace ReportAutomationLauncher
 
                 var lines = new List<string>();
                 string status = JsonText(table, "status");
+                if (JsonText(table, "override_ignored").Length > 0) lines.Add("확인: " + JsonText(table, "override_ignored"));
                 if (status == "blocked") lines.Add("차단: " + JsonText(table, "error"));
                 else if (status == "skipped") lines.Add(JsonText(table, "error"));
                 else
@@ -9701,7 +9708,7 @@ namespace ReportAutomationLauncher
                     var entry = (Dictionary<string, object>)((Dictionary<string, object>)TableLayoutPolicies.Load(layoutPath)["tables"])["Q1"];
                     var cuts = AsArray(entry["cuts"]).Select(v => Convert.ToInt32(v)).ToArray();
                     var widths = (Dictionary<string, object>)entry["column_widths_mm"];
-                    if (cuts.Length != 1 || cuts[0] != 3 || Convert.ToDouble(widths["1"]) != 28.5 ||
+                    if (cuts.Length != 1 || cuts[0] != 3 || Convert.ToDouble(widths["1"]) != 28.5 || Convert.ToInt32(entry["col_count"]) != 4 ||
                         Convert.ToString(entry["body_merge_policy"]) != "split_repeat" || entry.ContainsKey("wide_table_policy"))
                         throw new InvalidOperationException("Self-check failed: saved table override");
                     dialog.dirty = false;
@@ -9716,6 +9723,12 @@ namespace ReportAutomationLauncher
 
         private void OnClosingDialog(object sender, FormClosingEventArgs e)
         {
+            if (busy)
+            {
+                // The preview process still reads files in the work folder.
+                e.Cancel = true;
+                return;
+            }
             if (!dirty) return;
             var answer = MessageBox.Show(this, "저장하지 않은 표 분할 보정이 있습니다. 닫을까요?", "표 분할 보정", MessageBoxButtons.YesNo, MessageBoxIcon.Question);
             if (answer != DialogResult.Yes) e.Cancel = true;

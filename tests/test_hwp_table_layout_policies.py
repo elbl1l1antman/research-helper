@@ -235,3 +235,34 @@ def test_vertical_banner_repeat_per_row_writes_the_label_in_each_row():
     assert [row[2]["display_text"] for row in result["matrix"][1:]] == ["2.0", "3.0", "4.0", "5.0"]
     parts = plan_table_parts(result, 40000, 8.5)
     assert parts[0]["matrix"][2][0]["display_text"] == "성별"
+
+
+# --- review regressions ---------------------------------------------------
+
+def test_explicit_cut_cannot_split_a_merge_across_the_repeated_columns():
+    table = merge(wide_table(), 2, 1, colspan=3)  # stub merged into value columns
+    with pytest.raises(ValueError, match="반복 보기/BASE"):
+        plan_table_parts(table, 60000, 8.5, layout={"cuts": [6]})
+
+
+def test_saved_override_for_another_column_count_is_ignored_with_a_warning():
+    from report_automation_engine.hwp_table_planning import plan_hwp_table
+
+    stale = {"cuts": [12], "column_widths_mm": {"14": 30}, "col_count": 14}
+    plan = plan_hwp_table(keyed_table(wide_table(9)), 60000, None, stale)
+    assert len(plan["parts"]) == 1
+    assert any("14열 표용" in w for w in plan["warnings"])
+    # The same override is used when the structure matches.
+    plan = plan_hwp_table(keyed_table(wide_table(14)), 60000, None, {**stale, "column_widths_mm": {"2": 30}})
+    assert [p["source_columns"][1] for p in plan["parts"]] == [2, 12]
+
+
+def test_col_count_is_validated():
+    assert normalize_table_layout({"schema_version": "1.0", "tables": {"Q": {"col_count": 9}}})["tables"]["Q"]["col_count"] == 9
+    with pytest.raises(ValueError, match="col_count"):
+        normalize_table_layout({"schema_version": "1.0", "tables": {"Q": {"col_count": 0}}})
+
+
+def keyed_table(table):
+    table["table_key"] = "K"
+    return table

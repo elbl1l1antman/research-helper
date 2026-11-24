@@ -54,6 +54,27 @@ def choose_orientation(source, body_width, font_size, style_config, layout, land
     return "portrait", int(body_width), parts
 
 
+def prepare_source(table, style_config, layout):
+    """Apply the same display formatting and banner policy the writer uses."""
+    metadata = resolve_table_metadata(table)
+    source = {**table, "base_label": metadata["base_label"], "unit": metadata["unit"]}
+    source = format_table_display(source, {**TABLE_OUTPUT_DEFAULTS, **(style_config or {}).get("table_output", {})})
+    return apply_vertical_banner_policy(source, layout["vertical_banner_policy"]), metadata
+
+
+def effective_layout(table, layout):
+    """Drop saved cuts/widths that were made for a different column structure."""
+    layout = {**LAYOUT_DEFAULTS, **(layout or {})}
+    saved = layout.pop("col_count", None)
+    matrix = table.get("matrix") or []
+    count = len(matrix[0]) if matrix and matrix[0] else 0
+    if saved is not None and saved != count and ("cuts" in layout or "column_widths_mm" in layout):
+        layout.pop("cuts", None)
+        layout.pop("column_widths_mm", None)
+        return layout, f"저장된 분할·열 폭 보정은 {saved}열 표용이라 현재 {count}열 표에는 적용하지 않았습니다. 미리보기에서 다시 지정하세요."
+    return layout, None
+
+
 def plan_hwp_table(
     table: Dict[str, Any],
     body_width: int,
@@ -68,18 +89,15 @@ def plan_hwp_table(
     width after rotating that section; pass ``None`` to forbid rotation.
     Raises ValueError with a user-facing reason when no layout is possible.
     """
-    layout = {**LAYOUT_DEFAULTS, **(layout or {})}
+    layout, ignored = effective_layout(table, layout)
     key = str(table.get("table_key", ""))
     font_size = table_font_size(style_config)
     # Resolve metadata before splitting so every fragment carries the same unit.
-    metadata = resolve_table_metadata(table)
-    source = {**table, "base_label": metadata["base_label"], "unit": metadata["unit"]}
-    source = format_table_display(source, {**TABLE_OUTPUT_DEFAULTS, **(style_config or {}).get("table_output", {})})
-    source = apply_vertical_banner_policy(source, layout["vertical_banner_policy"])
+    source, metadata = prepare_source(table, style_config, layout)
     orientation, width, planned = choose_orientation(source, body_width, font_size, style_config, layout, landscape_width)
     parts = [prepare_report_table(part, layout["header_merge_policy"]) for part in planned]
 
-    warnings = []
+    warnings = [f"{key}: {ignored}"] if ignored else []
     if "확인 필요" in (metadata["base_label"], metadata["unit"]):
         warnings.append(f"{key}: BASE 조건 또는 단위를 확인해 주세요.")
     if source.get("vertical_banner_repeated"):

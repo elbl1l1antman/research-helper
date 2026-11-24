@@ -163,14 +163,26 @@ def new_report(package_file, template, output, document_type, preflight) -> Dict
 # --------------------------------------------------------------------- template model
 
 
+def is_group(shape) -> bool:
+    # shape.shape_type raises for ink (contentPart) and geometry-less shapes; read the tag instead.
+    return shape._element.tag.endswith("}grpSp")
+
+
+def has_text(shape) -> bool:
+    try:
+        return bool(shape.has_text_frame)
+    except Exception:
+        return False
+
+
 def shape_tokens(shape) -> set[str]:
     tokens = set()
     name = str(getattr(shape, "name", "") or "")
     if name.startswith("RA_"):
         tokens.add(name[3:])
-    if getattr(shape, "has_text_frame", False) and shape.has_text_frame:
+    if has_text(shape):
         tokens.update(TOKEN.findall(shape.text_frame.text))
-    if shape.shape_type == 6:  # group
+    if is_group(shape):
         for child in shape.shapes:
             tokens |= shape_tokens(child)
     return tokens
@@ -273,8 +285,8 @@ def fill_item_slide(slide, package, item, document_type, report) -> None:
     values = report_values(package)
     values.update(SECTION_TITLE=item["title"], CHART_TITLE=item["title"], SOURCE=source_text(table, key),
                   NARRATIVE=narrative_text(item.get("section") or {}), CHART_NOTE=chart_note(charts) if charts else "차트 데이터 없음")
-    boxes = block_boxes(slide)
-    fill_slide(slide, values, report, context=key)
+    boxes = block_boxes(slide, report, key)
+    fill_slide(slide, values, report, context=key, placed=set(boxes))
     layout_blocks(slide, boxes)
     if "TABLE" in boxes:
         add_table(slide, table, boxes["TABLE"], report, key)
@@ -285,20 +297,37 @@ def fill_item_slide(slide, package, item, document_type, report) -> None:
 # ------------------------------------------------------------------- placeholders
 
 
-def block_boxes(slide) -> Dict[str, Dict[str, Any]]:
-    """Find and remove ``{{TABLE}}``/``{{CHART}}`` holders, returning their boxes."""
+def block_boxes(slide, report: Dict[str, Any] | None = None, context: str = "") -> Dict[str, Dict[str, Any]]:
+    """Find ``{{TABLE}}``/``{{CHART}}`` holders and return their boxes.
+
+    A holder that contains only the token (or is named ``RA_TABLE``/``RA_CHART``,
+    or is an existing table/chart) is removed. A token inside other text keeps
+    the shape (the token is blanked later) and the object is placed over its box.
+    """
     boxes = {}
-    for shape in list(slide.shapes):
-        tokens = shape_tokens(shape)
-        text = shape.text_frame.text.strip() if getattr(shape, "has_text_frame", False) and shape.has_text_frame else ""
-        for token in BLOCK_TOKENS:
-            named = str(shape.name or "") == "RA_" + token
-            if token in tokens and (named or text == "{{" + token + "}}" or getattr(shape, "has_chart", False) or getattr(shape, "has_table", False)):
-                if token in boxes:
-                    continue  # first holder wins; later duplicates are left as text and reported by fill_slide
+
+    def visit(shapes, in_group):
+        for shape in list(shapes):
+            if is_group(shape):
+                visit(shape.shapes, True)
+                continue
+            tokens = shape_tokens(shape)
+            text = shape.text_frame.text.strip() if has_text(shape) else ""
+            for token in BLOCK_TOKENS:
+                if token not in tokens or token in boxes:
+                    continue
                 boxes[token] = {"left": shape.left, "top": shape.top, "width": shape.width, "height": shape.height}
-                shape._element.getparent().remove(shape._element)
-                break
+                whole = (str(shape.name or "") == "RA_" + token or text == "{{" + token + "}}"
+                         or getattr(shape, "has_chart", False) or getattr(shape, "has_table", False))
+                if in_group and report is not None:
+                    report["warnings"].append(f"{context}: {{{{{token}}}}}가 그룹 도형 안에 있어 위치가 어긋날 수 있습니다.")
+                if whole:
+                    shape._element.getparent().remove(shape._element)
+                    break
+                if report is not None:
+                    report["warnings"].append(f"{context}: {{{{{token}}}}}가 다른 글자와 같은 도형에 있어 그 도형 위치에 겹쳐 넣었습니다.")
+
+    visit(slide.shapes, False)
     return boxes
 
 
@@ -335,7 +364,8 @@ def layout_blocks(slide, boxes) -> None:
         boxes[key].update(left=margin + index * (each + gap), top=top, width=each, height=bottom - top)
 
 
-def fill_slide(slide, values: Dict[str, str], report: Dict[str, Any], context: str = "") -> None:
+def fill_slide(slide, values: Dict[str, str], report: Dict[str, Any], context: str = "", placed=frozenset()) -> None:
+    """Replace every text token; block tokens not in ``placed`` are blanked with a warning."""
     seen = set()
     for shape in iter_text_shapes(slide.shapes):
         frame = shape.text_frame
@@ -345,10 +375,8 @@ def fill_slide(slide, values: Dict[str, str], report: Dict[str, Any], context: s
             if not tokens:
                 continue
             for token in tokens:
-                if token in BLOCK_TOKENS:
-                    continue
-                if token in seen:
-                    report["warnings"].append(f"{context}: {{{{{token}}}}}가 여러 번 있어 첫 번째만 채웠습니다.")
+                if token in BLOCK_TOKENS and token not in placed:
+                    report["warnings"].append(f"{context}: {{{{{token}}}}} 자리를 찾지 못해 비워 두었습니다.")
                 seen.add(token)
             replaced = TOKEN.sub(lambda m: values.get(m.group(1), m.group(0)) if m.group(1) not in BLOCK_TOKENS else "", text)
             set_paragraph_text(frame, paragraph, replaced)
@@ -358,9 +386,9 @@ def fill_slide(slide, values: Dict[str, str], report: Dict[str, Any], context: s
 
 def iter_text_shapes(shapes):
     for shape in shapes:
-        if shape.shape_type == 6:
+        if is_group(shape):
             yield from iter_text_shapes(shape.shapes)
-        elif getattr(shape, "has_text_frame", False) and shape.has_text_frame:
+        elif has_text(shape):
             yield shape
 
 

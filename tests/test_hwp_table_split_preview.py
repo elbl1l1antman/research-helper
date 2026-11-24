@@ -115,3 +115,25 @@ def test_cli_writes_json_and_reports_bad_input(tmp_path, capsys):
     layout.write_text('{"schema_version": "9"}', encoding="utf-8")
     assert run_cli(["--package", str(package_path), "--table-layout", str(layout)]) == 2
     assert "schema_version" in capsys.readouterr().err
+
+
+def test_one_broken_table_does_not_hide_the_others():
+    layout = normalize_table_layout({"schema_version": "1.0", "tables": {"BAD": {"column_widths_mm": {"9": 20}}}})
+    preview = build_preview(package(keyed(wide_table(5), "BAD"), keyed({"matrix": [[]]}, "EMPTY"), keyed(wide_table(4), "OK")),
+                            template=TEMPLATE, table_layout=layout)
+    status = {t["table_key"]: t["status"] for t in preview["tables"]}
+    assert status == {"BAD": "blocked", "EMPTY": "blocked", "OK": "ok"}
+
+
+def test_preview_minimum_widths_follow_display_formatting():
+    from report_automation_engine.hwp_style_config import load_hwp_style_config
+
+    table = keyed(wide_table(4), "F")
+    for row in table["matrix"][1:]:
+        for item in row[1:]:
+            item["display_text"] = "1234.5678"
+    style = load_hwp_style_config(None)
+    style["table_output"]["value_decimals"] = 0
+    narrow = build_preview(package(table), template=TEMPLATE, style_config=style)["tables"][0]
+    wide = build_preview(package(table), template=TEMPLATE)["tables"][0]
+    assert narrow["columns"][1]["min_width_mm"] <= wide["columns"][1]["min_width_mm"]

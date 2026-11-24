@@ -245,3 +245,45 @@ def test_cli_reports_errors_with_exit_code(files, tmp_path, capsys):
     assert run_cli(["--package", str(source), "--preflight", str(preflight), "--type", "pptx_report",
                     "--output", str(tmp_path / "o.pptx")]) == 2
     assert "blocked" in capsys.readouterr().err
+
+
+def _template_with(tmp_path, build):
+    prs = Presentation()
+    repeat = prs.slides.add_slide(prs.slide_layouts[6])
+    heading = repeat.shapes.add_textbox(Inches(0.5), Inches(0.3), Inches(9), Inches(0.6))
+    heading.text_frame.text = "{{SECTION_TITLE}}"
+    build(repeat)
+    path = tmp_path / "custom.pptx"
+    prs.save(path)
+    return path
+
+
+def test_inline_and_grouped_block_tokens_are_not_silently_dropped(files, tmp_path):
+    def build(slide):
+        inline = slide.shapes.add_textbox(Inches(0.5), Inches(1.2), Inches(6), Inches(3))
+        inline.text_frame.text = "표: {{TABLE}}"
+        group = slide.shapes.add_group_shape()
+        inner = group.shapes.add_textbox(Inches(7), Inches(1.2), Inches(5), Inches(3))
+        inner.text_frame.text = "{{CHART}}"
+
+    source, preflight = files()
+    out = tmp_path / "o.pptx"
+    prs = Presentation(write_document(source, out, "pptx_report", preflight, _template_with(tmp_path, build)))
+    first = prs.slides[0]
+    assert any(shape.has_table for shape in first.shapes)
+    assert any(shape.has_chart for shape in first.shapes)
+    report = json.loads((tmp_path / "o_pptx_writer_report.json").read_text(encoding="utf-8"))
+    assert any("겹쳐 넣었습니다" in w for w in report["warnings"])
+    assert any("그룹 도형" in w for w in report["warnings"])
+
+
+def test_shapes_without_geometry_do_not_crash_the_writer(files, tmp_path):
+    def build(slide):
+        odd = slide.shapes.add_textbox(Inches(0.5), Inches(1.2), Inches(3), Inches(1))
+        geometry = odd._element.spPr.find("{http://schemas.openxmlformats.org/drawingml/2006/main}prstGeom")
+        odd._element.spPr.remove(geometry)
+        odd.text_frame.text = "{{NARRATIVE}}"
+
+    source, preflight = files()
+    prs = Presentation(write_document(source, tmp_path / "g.pptx", "pptx_report", preflight, _template_with(tmp_path, build)))
+    assert "Q1 첫 문장." in all_text(prs)

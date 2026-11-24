@@ -29,13 +29,13 @@ try:
     from .hwp_style_config import load_hwp_style_config
     from .hwp_table_layout import analyze_table_columns, apply_vertical_banner_policy
     from .hwp_table_layout_options import layout_for_table, load_table_layout
-    from .hwp_table_planning import plan_hwp_table, table_font_size
+    from .hwp_table_planning import effective_layout, plan_hwp_table, prepare_source, table_font_size
 except ImportError:
     from hwp_page_setup import PAGE_FIELDS, normalize_page_setup
     from hwp_style_config import load_hwp_style_config
     from hwp_table_layout import analyze_table_columns, apply_vertical_banner_policy
     from hwp_table_layout_options import layout_for_table, load_table_layout
-    from hwp_table_planning import plan_hwp_table, table_font_size
+    from hwp_table_planning import effective_layout, plan_hwp_table, prepare_source, table_font_size
 
 HWPUNIT_PER_MM = 7200 / 25.4
 BODY_PLACEHOLDER = "{{BODY}}"
@@ -138,8 +138,16 @@ def preview_table(table: Dict[str, Any], page: Dict[str, Any], style_config: Dic
         result.update(status="skipped", error="셀 구조(matrix)가 없는 이전 형식 표는 미리보기를 지원하지 않습니다.")
         return result
     font_size = table_font_size(style_config)
-    source = apply_vertical_banner_policy(table, layout["vertical_banner_policy"])
-    analysis = analyze_table_columns(source, font_size, style_config, layout)
+    try:
+        working, ignored = effective_layout(table, layout)
+        source, _metadata = prepare_source(table, style_config, working)
+        analysis = analyze_table_columns(source, font_size, style_config, working)
+    except (ValueError, KeyError, IndexError, TypeError) as exc:
+        # One broken table or stale override must not hide the others; the dialog can reset it.
+        result.update(status="blocked", error=f"표 구조를 분석하지 못했습니다: {exc}")
+        return result
+    result["col_count"] = analysis["count"]
+    result["override_ignored"] = ignored or ""
     labels = column_labels(analysis["matrix"], analysis["header_rows"])
     prefix = analysis["prefix"]
     result["repeated_columns"] = list(range(1, prefix + 1))
@@ -163,6 +171,9 @@ def preview_table(table: Dict[str, Any], page: Dict[str, Any], style_config: Dic
         return result
     result.update(orientation=plan["orientation"], planned_body_width_mm=to_mm(plan["body_width_hwpunit"]),
                   warnings=plan["warnings"])
+    if ignored:
+        for column in columns:
+            column["fixed"] = False
     for part in plan["parts"]:
         sources = part.get("source_columns") or list(range(1, analysis["count"] + 1))
         part_widths = part.get("column_widths_hwpunit") or []

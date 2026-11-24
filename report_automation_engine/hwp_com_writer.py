@@ -174,9 +174,12 @@ def write_hwp_document(
                 raise HwpWriterError("recovery", "format", "자동 재개는 HWPX 템플릿과 출력에만 지원합니다.")
             workbook_path = package.get("meta", {}).get("source_workbook")
             path = Path(recovery_path).resolve()
-            sources = (package_file, preflight_file, template_file, workbook_path, style_config_path, table_style_profile_path, page_setup_path, table_layout_path)
+            sources = (package_file, preflight_file, template_file, workbook_path, style_config_path, table_style_profile_path, page_setup_path)
             if figure_prefix is not None:
                 sources += (chart_style_path,)
+            if table_layout_path:
+                # Appended only when used, so jobs interrupted before 0.0.57 still resume.
+                sources += (table_layout_path,)
             reserved = {Path(source).resolve() for source in (*sources, output_file, report_file, render_plan_file) if source}
             if reserved.intersection({path, *(path.with_name(f"{path.stem}_{slot}.hwpx") for slot in (0, 1))}):
                 raise HwpWriterError("recovery", "verify", "자동 재개 파일 경로가 입력 또는 출력 경로와 같습니다.")
@@ -491,6 +494,7 @@ def create_hwp_object(
     lifecycle.wait_for_previous_instances(report)
     last_error = None
     for prog_id in ("HWPFrame.HwpObject", "HwpFrame.HwpObject.2"):
+        hwp = None
         try:
             report["stage"] = "com"
             report["action"] = "dispatch"
@@ -510,6 +514,13 @@ def create_hwp_object(
             return hwp
         except Exception as exc:
             last_error = exc
+            if hwp is not None:
+                # A started but unresponsive instance must not be left running.
+                try:
+                    hwp.Quit()
+                except Exception:
+                    pass
+                hwp = None
             record_com_step(report, "dispatch", "failed", str(exc), prog_id=prog_id, dispatch_mode=dispatch_mode)
             write_checkpoint(report, checkpoint_path)
     raise HwpWriterError("com", "create_object", f"아래한글 COM 객체를 생성하지 못했습니다: {last_error}")
@@ -861,6 +872,30 @@ def write_body(
             report["recovery_sections"] = index
             remove_recovery_marker(hwp, recovery, report)
         write_checkpoint(report, checkpoint_path)
+    rotated = report.get("rotated_section")
+    if rotated is not None:
+        # Template text after {{BODY}} (e.g. the QA summary) must not inherit the rotated page.
+        if at_document_end(hwp):
+            report["warnings"].append("마지막 표가 가로 용지 구역이라 문서가 가로 용지로 끝납니다.")
+        else:
+            report.update(stage="layout", action="restore_orientation")
+            write_checkpoint(report, checkpoint_path)
+            begin_section(hwp, report, bool(rotated["original_landscape"]))
+        report.pop("rotated_section", None)
+        write_checkpoint(report, checkpoint_path)
+
+
+def at_document_end(hwp) -> bool:
+    """True when nothing but empty paragraphs follows the cursor (best effort)."""
+    try:
+        position = hwp.GetPos()
+        hwp.HAction.Run("MoveSelDocEnd")
+        following = str(hwp.GetTextFile("TEXT", "saveblock") or "")
+        hwp.HAction.Run("Cancel")
+        hwp.SetPos(*position)
+        return not following.strip()
+    except Exception:
+        return False
 
 
 def write_table_part(hwp, table, title, report, profile, workbook, style_indexes, style_config, index, checkpoint_path=None):
