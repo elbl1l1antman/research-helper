@@ -1,6 +1,6 @@
 # Versioning
 
-Current version: `0.0.56`
+Current version: `0.0.57`
 
 ## Policy
 
@@ -16,6 +16,8 @@ Current version: `0.0.56`
   - Major: breaking file format, CLI, template, or workflow change.
 
 ## Current Baseline
+
+`0.0.57` previews and corrects HWP table splits (boundaries, fixed widths, body/header merge, vertical banner, and landscape-section policies saved as `table_layout.json`), waits for Hancom to exit between back-to-back writer runs, and fills the user's PPTX template for report and chart review drafts. The committed launcher EXE was not rebuilt on this branch; rebuild it on Windows (see `docs/local_testing_0_0_57.md`).
 
 `0.0.56` keeps private QA inputs, outputs, and diagnostics out of Git. No executable changes.
 

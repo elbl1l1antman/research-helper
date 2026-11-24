@@ -28,7 +28,15 @@
 
 - `document_writer.py`
   - `report_package.json`을 읽어 PPTX 초본을 생성합니다.
-  - PowerPoint에서 편집 가능한 차트 객체와 표 객체를 생성합니다.
+  - 템플릿의 반복 슬라이드(`RA_REPORT_SLIDE` 또는 `{{SECTION_TITLE}}`/`{{CHART_TITLE}}`)를 문항·차트마다 복제합니다. `{{TOKEN}}` 글자와 `RA_` 도형 이름을 모두 인식합니다.
+  - `{{TABLE}}`/`{{CHART}}` 자리에 PowerPoint에서 편집 가능한 표(병합 유지)와 차트(배너별 계열, 2항목 원그래프, 최대값 강조)를 넣습니다.
+  - 실패한 문항은 '검토 필요' 슬라이드로 남깁니다. 저장에 실패하면 결과 파일을 남기지 않고 `<output>.error.txt`를 씁니다. `_pptx_writer_report.json`에 결과를 기록합니다.
+
+- `hwp_table_split_preview.py`, `hwp_table_planning.py`, `hwp_table_layout_options.py`
+  - 한글 writer와 같은 계산으로 표 분할·열 폭·가로 용지 배치를 미리 봅니다. `table_layout.json`(`--table-layout`)으로 표별 경계·고정 폭·병합/배너/용지 정책을 지정합니다. [안내](../docs/hwp_table_split_preview.md)
+
+- `hwp_com_lifecycle.py`
+  - writer가 띄운 Hwp.exe PID를 기록하고, 종료 후 실제로 끝날 때까지 기다립니다. dispatch, 연결 확인, Open의 일시적 RPC 오류는 재시도합니다.
 
 - `hwp_com_writer.py`
   - `report_package.json`을 읽어 아래한글 COM으로 HWPX 초본을 생성합니다.

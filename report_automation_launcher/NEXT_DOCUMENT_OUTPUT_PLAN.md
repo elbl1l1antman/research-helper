@@ -1,5 +1,15 @@
 # Next Alpha Plan: HWPX/PPTX Direct Report Output
 
+> `0.0.57` 상태: 아래 PPTX 보고서·차트 검토 writer의 다음 항목은 `document_writer.py`에 구현했다. 런처에는 'PPT 보고서 초안 만들기' 버튼으로 연결했다.
+> - 템플릿 반복 슬라이드 복제
+> - `{{TOKEN}}`/`RA_` 치환
+> - 편집 가능한 표·차트
+> - 문항별 실패 격리
+> - `.error.txt`
+> - 경고 확인
+>
+> HWPX는 한글 COM writer(`hwp_com_writer.py`)가 담당한다.
+
 ## 목표
 
 다음 알파의 목표는 `report_package.json`과 `preflight_report.json`을 기준으로 HWPX/PPTX 초본 보고서를 직접 생성하는 것이다. Excel 산출 시트를 다시 해석하지 않고, 이미 검증된 package만 writer 입력으로 사용한다.

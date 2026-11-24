@@ -7559,6 +7559,11 @@ namespace ReportAutomationLauncher
                 string layoutPath = TableLayoutPathForPackage(options.LastReportPackagePath);
                 if (!string.Equals(layoutPath, Path.Combine(directory, "report_package_table_layout.json"), StringComparison.OrdinalIgnoreCase))
                     throw new InvalidOperationException("Self-check failed: table layout path");
+                string first = TableLayoutPathForPackage(Path.Combine(directory, "설문 결과_report_alpha_20261124_101500_report_package.json"));
+                string second = TableLayoutPathForPackage(Path.Combine(directory, "설문 결과_report_alpha_20261125_090000_report_package.json"));
+                if (!string.Equals(first, second, StringComparison.OrdinalIgnoreCase) ||
+                    !string.Equals(first, Path.Combine(directory, "설문 결과_table_layout.json"), StringComparison.OrdinalIgnoreCase))
+                    throw new InvalidOperationException("Self-check failed: table layout must survive a new run of the same workbook");
                 TableLayoutPolicies.Save(layoutPath, TableLayoutPolicies.NewLayout());
                 arguments = BuildHwpWriterArguments("writer.py", options, "output.hwpx", "writer_report.json", "render_plan.json");
                 if (!arguments.Contains(" --table-layout " + Quote(layoutPath)))
@@ -7956,9 +7961,13 @@ namespace ReportAutomationLauncher
 
         internal static string TableLayoutPathForPackage(string packagePath)
         {
+            // Key reviewed layouts by the source workbook, not the timestamped run, so a saved
+            // correction also applies to the next run of the same workbook in this folder.
             string stem = Path.ChangeExtension(packagePath, null);
             const string packageSuffix = "_report_package";
             if (stem.EndsWith(packageSuffix, StringComparison.Ordinal)) stem = stem.Substring(0, stem.Length - packageSuffix.Length);
+            var run = System.Text.RegularExpressions.Regex.Match(Path.GetFileName(stem), @"^(.+)_report_alpha_\d{8}_\d{6}$");
+            if (run.Success) stem = Path.Combine(Path.GetDirectoryName(stem) ?? "", run.Groups[1].Value);
             return stem + "_table_layout.json";
         }
 

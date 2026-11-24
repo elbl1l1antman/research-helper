@@ -34,7 +34,7 @@ try:
     from .hwp_table_output import format_table_display
     from . import hwp_com_lifecycle as lifecycle
     from .hwp_table_layout_options import layout_for_table, load_table_layout
-    from .hwp_table_planning import plan_hwp_table, table_font_size
+    from .hwp_table_planning import plan_hwp_table
 except ImportError:
     from hwp_style_config import CAPTION_STYLES, DEFAULT_HWP_STYLE_CONFIG, HWP_LINE_NAMES, REQUIRED_STYLE_NAMES, TABLE_OUTPUT_DEFAULTS, load_hwp_style_config, margin_units, style_name_for_cell_role
     from hwpx_style_registry import register_named_styles
@@ -46,7 +46,7 @@ except ImportError:
     from hwp_table_output import format_table_display
     import hwp_com_lifecycle as lifecycle
     from hwp_table_layout_options import layout_for_table, load_table_layout
-    from hwp_table_planning import plan_hwp_table, table_font_size
+    from hwp_table_planning import plan_hwp_table
 
 
 BODY_PLACEHOLDER = "{{BODY}}"
