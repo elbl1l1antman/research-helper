@@ -2102,6 +2102,7 @@ namespace ReportAutomationLauncher
         private readonly ComboBox chartOutputCombo = new ComboBox();
         private readonly Button createSurveyChartReviewButton = new Button();
         private readonly Button exportReviewedChartsButton = new Button();
+        private readonly Button createPptReportButton = new Button();
         private readonly ComboBox surveyChartStyleCombo = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Width = 180 };
         private readonly PictureBox chartStylePreview = new PictureBox { Size = new Size(360, 202), SizeMode = PictureBoxSizeMode.Zoom, AccessibleName = "차트 서식 예시" };
         private static readonly string[] SurveyChartStyleKeys = { "deep_blue", "sky_blue", "standard", "custom" };
@@ -3189,6 +3190,47 @@ namespace ReportAutomationLauncher
             }
         }
 
+        private async void CreatePptReportDraft(object sender, EventArgs e)
+        {
+            string packagePath = createSurveyChartReviewButton.Tag as string;
+            string preflightPath = createPptReportButton.Tag as string;
+            if (reportRunning || surveyChartExportRunning || !File.Exists(packagePath)) return;
+            string status = File.Exists(preflightPath) ? ReadJsonStringValue(File.ReadAllText(preflightPath, System.Text.Encoding.UTF8), "status") : "";
+            if (status == "blocked")
+            {
+                MessageBox.Show(this, "QA 검사에서 차단된 항목이 있어 PPT 초안을 만들 수 없습니다. QA 검사 기록을 확인하세요.", "PPT 보고서 초안");
+                return;
+            }
+            if (status == "ready_with_warnings" && MessageBox.Show(this, "QA 검사에 확인할 경고가 있습니다. 경고를 남긴 채 초안을 만들까요?",
+                    "PPT 보고서 초안", MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes)
+                return;
+            string template = pptTemplateText.Text.Trim();
+            bool useTemplate = File.Exists(template) && Path.GetExtension(template).Equals(".pptx", StringComparison.OrdinalIgnoreCase);
+            using (var dialog = new SaveFileDialog { Filter = "PowerPoint (*.pptx)|*.pptx", FileName = "보고서 초안.pptx", DefaultExt = "pptx", InitialDirectory = Path.GetDirectoryName(packagePath) })
+            {
+                if (dialog.ShowDialog(this) != DialogResult.OK) return;
+                if (useTemplate && string.Equals(Path.GetFullPath(dialog.FileName), Path.GetFullPath(template), StringComparison.OrdinalIgnoreCase))
+                {
+                    MessageBox.Show(this, "원본 템플릿이 아닌 다른 경로에 저장하세요.", "PPT 보고서 초안");
+                    return;
+                }
+                string arguments = "--package " + QuoteArg(packagePath) + " --type pptx_report --output " + QuoteArg(dialog.FileName) +
+                                   (File.Exists(preflightPath) ? " --preflight " + QuoteArg(preflightPath) : "") +
+                                   (useTemplate ? " --template " + QuoteArg(template) : "");
+                string report = Path.Combine(Path.GetDirectoryName(dialog.FileName), Path.GetFileNameWithoutExtension(dialog.FileName) + "_pptx_writer_report.json");
+                bool ok = await RunSurveyChartCommand(createPptReportButton, arguments,
+                    "PPT 보고서 초안: " + dialog.FileName + (useTemplate ? "" : Environment.NewLine + "(PPT 템플릿을 선택하지 않아 기본 양식을 사용했습니다.)"),
+                    "document_writer.py");
+                if (ok && File.Exists(report))
+                {
+                    string json = File.ReadAllText(report, System.Text.Encoding.UTF8);
+                    if (ReadJsonStringValue(json, "status") == "ready_with_warnings")
+                        Log("PPT 초안 경고와 검토 필요 문항: " + report);
+                }
+                createPptReportButton.Enabled = !reportRunning && File.Exists(packagePath);
+            }
+        }
+
         private async void ExportReviewedCharts(object sender, EventArgs e)
         {
             if (reportRunning || surveyChartExportRunning) return;
@@ -3383,6 +3425,9 @@ namespace ReportAutomationLauncher
             createSurveyChartReviewButton.Click += CreateSurveyChartReview;
             exportReviewedChartsButton.Text = "편집한 PPTX를 EMF로 저장…";
             exportReviewedChartsButton.Click += ExportReviewedCharts;
+            createPptReportButton.Text = "PPT 보고서 초안 만들기…";
+            createPptReportButton.Enabled = false;
+            createPptReportButton.Click += CreatePptReportDraft;
             openHwpOutputButton.AutoSize = true;
             resultButtons.Controls.Add(openHwpOutputButton);
             panel.Controls.Add(resultButtons, 0, 2);
@@ -3393,7 +3438,7 @@ namespace ReportAutomationLauncher
                 records.Controls.Add(button);
             }
             var charts = new FlowLayoutPanel { AutoScroll = true };
-            foreach (var button in new[] { createSurveyChartReviewButton, exportReviewedChartsButton })
+            foreach (var button in new[] { createSurveyChartReviewButton, exportReviewedChartsButton, createPptReportButton })
             {
                 button.AutoSize = true;
                 charts.Controls.Add(button);
@@ -5129,6 +5174,7 @@ namespace ReportAutomationLauncher
                     {
                         reportRunning = false;
                         createSurveyChartReviewButton.Enabled = File.Exists(createSurveyChartReviewButton.Tag as string);
+                        createPptReportButton.Enabled = createSurveyChartReviewButton.Enabled;
                         UpdateWorkflowStatus();
                     }));
                 }
@@ -5354,6 +5400,8 @@ namespace ReportAutomationLauncher
 
             createSurveyChartReviewButton.Tag = options.LastReportPackagePath;
             createSurveyChartReviewButton.Enabled = !reportRunning && File.Exists(options.LastReportPackagePath);
+            createPptReportButton.Tag = options.LastPreflightReportPath;
+            createPptReportButton.Enabled = createSurveyChartReviewButton.Enabled;
 
             LoadDraftPreview(options.LastDraftTextPath);
         }
