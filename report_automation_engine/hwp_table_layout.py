@@ -153,23 +153,16 @@ def prepare_report_table(table, header_merge_policy="base_only"):
     return result
 
 
-def plan_table_parts(table, body_width, font_size_pt, style_config=None, layout=None):
-    """Repeat left labels/BASE, split data columns, and project header merges.
+def analyze_table_columns(table, font_size_pt, style_config=None, layout=None):
+    """Measure minimum column widths and where a table may be split.
 
-    Header banners may be repeated across fragments. Body merges are atomic:
-    a value must never be silently divided or dropped to make a table fit.
-
-    ``layout`` (see ``hwp_table_layout_options``) may give explicit ``cuts``
-    (1-based source columns that start a new fragment), fixed
-    ``column_widths_mm``, and ``body_merge_policy`` ``split_repeat`` which allows
-    cutting a merged body cell; its text is then repeated in every fragment.
+    Returns ``count``, ``header_rows``, ``prefix`` (repeated stub/BASE columns),
+    ``widths`` (HWPUNIT, user-fixed widths applied), ``fixed_columns``,
+    ``forbidden`` and ``preferred`` cut edges (0-based index of the first column
+    of a new fragment), ``body_merges`` and ``horizontal_margin(cell, row)``.
     """
     layout = layout or {}
     body_policy = layout.get("body_merge_policy", "block")
-    if body_policy not in ("block", "split_repeat"):
-        raise ValueError(f"알 수 없는 본문 병합 정책입니다: {body_policy}")
-    if not math.isfinite(body_width) or body_width <= 0 or not math.isfinite(font_size_pt) or font_size_pt <= 0:
-        raise ValueError("본문 폭과 표 글자 크기는 양수여야 합니다.")
     matrix = table.get("matrix") or []
     if not matrix or not matrix[0] or any(len(row) != len(matrix[0]) for row in matrix):
         raise ValueError("표 matrix가 비어 있거나 행별 열 수가 다릅니다.")
@@ -207,9 +200,6 @@ def plan_table_parts(table, body_width, font_size_pt, style_config=None, layout=
         widths[col - 1] = margin_units(mm)
         fixed_columns.add(col - 1)
 
-    # A small clearance avoids clipboard pixel rounding and outer border clipping.
-    budget = int(body_width) - 500
-    fixed = sum(widths[:prefix])
     forbidden, preferred = set(), set()
     body_merges = []
     for row_index, row in enumerate(matrix):
@@ -227,6 +217,36 @@ def plan_table_parts(table, body_width, font_size_pt, style_config=None, layout=
                 elif col >= prefix:
                     preferred.add(col + span)
 
+    return {"count": count, "header_rows": header_rows, "prefix": prefix, "widths": widths,
+            "fixed_columns": fixed_columns, "forbidden": forbidden, "preferred": preferred,
+            "body_merges": body_merges, "horizontal_margin": horizontal_margin, "matrix": matrix}
+
+
+def plan_table_parts(table, body_width, font_size_pt, style_config=None, layout=None):
+    """Repeat left labels/BASE, split data columns, and project header merges.
+
+    Header banners may be repeated across fragments. Body merges are atomic:
+    a value must never be silently divided or dropped to make a table fit.
+
+    ``layout`` (see ``hwp_table_layout_options``) may give explicit ``cuts``
+    (1-based source columns that start a new fragment), fixed
+    ``column_widths_mm``, and ``body_merge_policy`` ``split_repeat`` which allows
+    cutting a merged body cell; its text is then repeated in every fragment.
+    """
+    layout = layout or {}
+    body_policy = layout.get("body_merge_policy", "block")
+    if body_policy not in ("block", "split_repeat"):
+        raise ValueError(f"알 수 없는 본문 병합 정책입니다: {body_policy}")
+    if not math.isfinite(body_width) or body_width <= 0 or not math.isfinite(font_size_pt) or font_size_pt <= 0:
+        raise ValueError("본문 폭과 표 글자 크기는 양수여야 합니다.")
+    analysis = analyze_table_columns(table, font_size_pt, style_config, layout)
+    matrix, count, header_rows, prefix = analysis["matrix"], analysis["count"], analysis["header_rows"], analysis["prefix"]
+    widths, fixed_columns = analysis["widths"], analysis["fixed_columns"]
+    forbidden, preferred, body_merges = analysis["forbidden"], analysis["preferred"], analysis["body_merges"]
+    horizontal_margin = analysis["horizontal_margin"]
+    # A small clearance avoids clipboard pixel rounding and outer border clipping.
+    budget = int(body_width) - 500
+    fixed = sum(widths[:prefix])
     selections = []
     explicit = layout.get("cuts")
     if explicit is not None:
@@ -263,7 +283,8 @@ def plan_table_parts(table, body_width, font_size_pt, style_config=None, layout=
                 if end not in forbidden:
                     fitting.append(end)
             if not fitting:
-                raise ValueError("값 열 또는 본문 병합 묶음이 본문 폭에 들어가지 않습니다.")
+                raise ValueError("값 열 또는 본문 병합 묶음이 본문 폭에 들어가지 않습니다. "
+                                 "표 분할 미리보기에서 본문 병합 분할, 가로 용지 배치 또는 열 폭을 조정하세요.")
             cut = max(fitting)
             if cut < count:
                 cut = max((edge for edge in fitting if edge in preferred), default=cut)

@@ -65,6 +65,11 @@ namespace ReportAutomationLauncher
                     Console.WriteLine("HWP page setup self-check passed.");
                     return 0;
                 }
+                if (HasFlag(args, "self-check-table-split-preview"))
+                {
+                    TableSplitPreviewDialog.RunSelfCheck();
+                    return 0;
+                }
                 if (HasFlag(args, "self-check-hwp-style-presets"))
                 {
                     HwpStylePresetStore.RunSelfCheck();
@@ -2073,6 +2078,7 @@ namespace ReportAutomationLauncher
         private readonly Label workspaceStatus = new Label();
         private readonly ToolTip actionTips = new ToolTip();
         private readonly Button reloadBannerButton = new Button();
+        private readonly Button tableSplitPreviewButton = new Button();
         private readonly Button recommendedBannerButton = new Button();
         private readonly Button selectAllBannerButton = new Button();
         private readonly Button clearBannerButton = new Button();
@@ -2864,9 +2870,13 @@ namespace ReportAutomationLauncher
             reloadBannerButton.Text = "표·배너 읽기";
             reloadBannerButton.AutoSize = true;
             reloadBannerButton.Click += delegate { LoadBannerPreviewAsync(); };
+            tableSplitPreviewButton.Text = "한글 표 분할 미리보기…";
+            tableSplitPreviewButton.AutoSize = true;
+            tableSplitPreviewButton.Click += delegate { OpenTableSplitPreview(); };
             buttons.Controls.Add(reloadBannerButton);
             buttons.Controls.Add(selectTableRangeButton);
             buttons.Controls.Add(clearTableRangeButton);
+            buttons.Controls.Add(tableSplitPreviewButton);
             panel.Controls.Add(buttons, 0, 1);
 
             var banners = BuildBannerPanel();
@@ -4548,6 +4558,54 @@ namespace ReportAutomationLauncher
             recommendedBannerButton.Enabled = selectAllBannerButton.Enabled = clearBannerButton.Enabled =
                 moveBannerUpButton.Enabled = moveBannerDownButton.Enabled = deleteBannerButton.Enabled = bannerList.Enabled = canSelectBanners;
             UpdateTableRangeActions();
+        }
+
+        private void OpenTableSplitPreview()
+        {
+            if (reportRunning) return;
+            // The preview needs the cell structure written by an Excel run (report_package.json).
+            string packagePath = createSurveyChartReviewButton.Tag as string;
+            if (string.IsNullOrWhiteSpace(packagePath) || !File.Exists(packagePath))
+            {
+                using (var dialog = new OpenFileDialog
+                {
+                    Title = "표 분할을 확인할 실행의 report_package.json 선택",
+                    Filter = "보고서 데이터 (*.json)|*.json", CheckFileExists = true
+                })
+                {
+                    if (dialog.ShowDialog(this) != DialogResult.OK) return;
+                    packagePath = dialog.FileName;
+                }
+            }
+            string temp = Path.Combine(Path.GetTempPath(), "ResearchHelper_split_inputs_" + Guid.NewGuid().ToString("N"));
+            try
+            {
+                Directory.CreateDirectory(temp);
+                string styleName = hwpStylePresetCombo.SelectedItem == null ? HwpStylePresetStore.BuiltInName : hwpStylePresetCombo.SelectedItem.ToString();
+                string stylePath = Path.Combine(temp, "hwp_style_config.json");
+                HwpStylePresetStore.WriteConfig(stylePath, hwpStylePresetStore.Get(styleName) ?? HwpStylePresetStore.DefaultConfig());
+                string pagePath = null;
+                if (hwpPageSetup != null)
+                {
+                    pagePath = Path.Combine(temp, "hwp_page_setup.json");
+                    HwpPageSetup.WriteConfig(pagePath, HwpPageSetup.Normalize(hwpPageSetup));
+                }
+                string template = hwpTemplateText.Text.Trim();
+                using (var dialog = new TableSplitPreviewDialog(packagePath, File.Exists(template) ? template : "", pagePath, stylePath,
+                    EngineRunner.TableLayoutPathForPackage(packagePath)))
+                {
+                    dialog.ShowDialog(this);
+                }
+                Log("표 분할 설정: " + EngineRunner.TableLayoutPathForPackage(packagePath));
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show(this, "표 분할 미리보기를 열지 못했습니다: " + ex.Message, "표 분할 미리보기");
+            }
+            finally
+            {
+                try { Directory.Delete(temp, true); } catch { }
+            }
         }
 
         private void UpdateTableRangeActions()
@@ -6459,6 +6517,7 @@ namespace ReportAutomationLauncher
         public Dictionary<string, object> HwpStyleConfig;
         public Dictionary<string, object> HwpPageSetup;
         public string HwpPageSetupPath;
+        public string HwpTableLayoutPath;
         public string BannerSetting = "전체";
         public string TitlePrefixes = "";
         public int DecimalPlaces = 1;
@@ -6647,6 +6706,13 @@ namespace ReportAutomationLauncher
                     throw new InvalidOperationException("--hwp-page-setup <path> 값을 지정하세요.");
                 options.HwpPageSetupPath = Path.GetFullPath(options.HwpPageSetupPath);
                 options.HwpPageSetup = ReportAutomationLauncher.HwpPageSetup.Load(options.HwpPageSetupPath);
+            }
+            if (values.ContainsKey("hwp-table-layout"))
+            {
+                string layoutPath = Get(values, "hwp-table-layout", "");
+                if (string.IsNullOrWhiteSpace(layoutPath) || !File.Exists(layoutPath))
+                    throw new InvalidOperationException("--hwp-table-layout <path>: 표 배치 설정 파일을 찾지 못했습니다.");
+                options.HwpTableLayoutPath = Path.GetFullPath(layoutPath);
             }
             options.BannerSetting = Get(values, "banner", "전체");
             options.TitlePrefixes = Get(values, "prefixes", "");
@@ -7440,6 +7506,18 @@ namespace ReportAutomationLauncher
                 arguments = BuildHwpWriterArguments("writer.py", options, "output.hwpx", "writer_report.json", "render_plan.json");
                 if (!arguments.Contains(" --figure-prefix " + Quote("3")) || !arguments.Contains(" --chart-style " + Quote(options.HwpChartStylePath)))
                     throw new InvalidOperationException("Self-check failed: figure prefix and style forwarding");
+                if (arguments.Contains(" --table-layout "))
+                    throw new InvalidOperationException("Self-check failed: table layout forwarded before it was saved");
+                string layoutPath = TableLayoutPathForPackage(options.LastReportPackagePath);
+                if (!string.Equals(layoutPath, Path.Combine(directory, "report_package_table_layout.json"), StringComparison.OrdinalIgnoreCase))
+                    throw new InvalidOperationException("Self-check failed: table layout path");
+                TableLayoutPolicies.Save(layoutPath, TableLayoutPolicies.NewLayout());
+                arguments = BuildHwpWriterArguments("writer.py", options, "output.hwpx", "writer_report.json", "render_plan.json");
+                if (!arguments.Contains(" --table-layout " + Quote(layoutPath)))
+                    throw new InvalidOperationException("Self-check failed: saved table layout forwarding");
+                var reloaded = TableLayoutPolicies.Load(layoutPath);
+                if (Convert.ToString(((Dictionary<string, object>)reloaded["defaults"])["wide_table_policy"]) != "split")
+                    throw new InvalidOperationException("Self-check failed: table layout round trip");
                 var store = new HwpStylePresetStore(Path.Combine(directory, "presets.json"));
                 using (var dialog = new HwpStylePresetDialog(store, HwpStylePresetStore.BuiltInName))
                 {
@@ -7828,6 +7906,23 @@ namespace ReportAutomationLauncher
             return stem + suffix;
         }
 
+        internal static string TableLayoutPathForPackage(string packagePath)
+        {
+            string stem = Path.ChangeExtension(packagePath, null);
+            const string packageSuffix = "_report_package";
+            if (stem.EndsWith(packageSuffix, StringComparison.Ordinal)) stem = stem.Substring(0, stem.Length - packageSuffix.Length);
+            return stem + "_table_layout.json";
+        }
+
+        private static string TableLayoutArgument(LauncherOptions options)
+        {
+            // An explicit CLI path wins; otherwise use the reviewed file saved next to this run's package.
+            string path = options.HwpTableLayoutPath;
+            if (string.IsNullOrWhiteSpace(path) && !string.IsNullOrWhiteSpace(options.LastReportPackagePath))
+                path = TableLayoutPathForPackage(options.LastReportPackagePath);
+            return !string.IsNullOrWhiteSpace(path) && File.Exists(path) ? " --table-layout " + Quote(path) : "";
+        }
+
         private static string BuildHwpWriterArguments(string toolPath, LauncherOptions options, string outputPath, string reportPath, string renderPlanPath)
         {
             return Quote(toolPath) +
@@ -7846,6 +7941,7 @@ namespace ReportAutomationLauncher
                    OptionalArgument(" --recovery ", options.HwpRecoveryPath) +
                    OptionalArgument(" --figure-prefix ", options.HwpFigurePrefix) +
                    OptionalArgument(" --chart-style ", options.HwpChartStylePath) +
+                   TableLayoutArgument(options) +
                    (options.HwpKeepOpenOnError ? " --keep-open-on-error" : "");
         }
 
@@ -8998,6 +9094,574 @@ namespace ReportAutomationLauncher
                 }
                 return Convert.ToString(value ?? "").Trim();
             }
+        }
+    }
+
+    internal static class TableLayoutPolicies
+    {
+        internal static readonly string[] Names = { "wide_table_policy", "body_merge_policy", "header_merge_policy", "vertical_banner_policy" };
+        internal static readonly string[] Titles = { "넓은 표", "본문 병합", "헤더 병합", "세로 배너" };
+        internal static readonly string[][] Values =
+        {
+            new[] { "split", "landscape_if_needed", "landscape_if_split" },
+            new[] { "block", "split_repeat" },
+            new[] { "base_only", "split_at_header" },
+            new[] { "merge", "repeat_per_row" }
+        };
+        internal static readonly string[][] Labels =
+        {
+            new[] { "가로로 나누기(기본)", "맞지 않을 때만 가로 용지", "나누는 대신 가로 용지" },
+            new[] { "병합 셀 보호(기본)", "병합 셀 나눠 각 표에 반복" },
+            new[] { "BASE 행만 반복(기본)", "헤더 경계에서 나눠 헤더 반복" },
+            new[] { "병합 유지(기본)", "행마다 배너 반복" }
+        };
+
+        internal static Dictionary<string, object> NewLayout()
+        {
+            var defaults = new Dictionary<string, object>();
+            for (int i = 0; i < Names.Length; i++) defaults[Names[i]] = Values[i][0];
+            var layout = new Dictionary<string, object>();
+            layout["schema_version"] = "1.0";
+            layout["defaults"] = defaults;
+            layout["tables"] = new Dictionary<string, object>();
+            return layout;
+        }
+
+        internal static Dictionary<string, object> Load(string path)
+        {
+            var layout = NewLayout();
+            if (string.IsNullOrWhiteSpace(path) || !File.Exists(path)) return layout;
+            var loaded = new JavaScriptSerializer().DeserializeObject(File.ReadAllText(path, System.Text.Encoding.UTF8)) as Dictionary<string, object>;
+            if (loaded == null) return layout;
+            object value;
+            if (loaded.TryGetValue("defaults", out value) && value is Dictionary<string, object>)
+                foreach (var pair in (Dictionary<string, object>)value) ((Dictionary<string, object>)layout["defaults"])[pair.Key] = pair.Value;
+            if (loaded.TryGetValue("tables", out value) && value is Dictionary<string, object>)
+                layout["tables"] = value;
+            return layout;
+        }
+
+        internal static void Save(string path, Dictionary<string, object> layout)
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(path)));
+            HwpStylePresetStore.AtomicWrite(path, new JavaScriptSerializer().Serialize(layout));
+        }
+
+        internal static ComboBox CreateCombo(int index, bool allowInherit)
+        {
+            var combo = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Width = 210 };
+            if (allowInherit) combo.Items.Add("기본값 따름");
+            foreach (string label in Labels[index]) combo.Items.Add(label);
+            combo.SelectedIndex = 0;
+            return combo;
+        }
+
+        internal static void Select(ComboBox combo, int index, string value, bool allowInherit)
+        {
+            int position = Array.IndexOf(Values[index], value ?? "");
+            combo.SelectedIndex = position < 0 ? 0 : position + (allowInherit ? 1 : 0);
+        }
+
+        internal static string Selected(ComboBox combo, int index, bool allowInherit)
+        {
+            int position = combo.SelectedIndex - (allowInherit ? 1 : 0);
+            return position < 0 ? null : Values[index][position];
+        }
+    }
+
+    internal sealed class TableSplitPreviewDialog : Form
+    {
+        private readonly string packagePath;
+        private readonly string templatePath;
+        private readonly string pageSetupPath;
+        private readonly string styleConfigPath;
+        private readonly string layoutPath;
+        private readonly string workDirectory;
+        private Dictionary<string, object> layout;
+        private Dictionary<string, object> preview;
+        private readonly HashSet<string> editedCuts = new HashSet<string>();
+        private string currentKey;
+        private bool loading;
+        private bool dirty;
+
+        private readonly ListView tableList = new ListView();
+        private readonly DataGridView columnGrid = new DataGridView();
+        private readonly TextBox messageText = new TextBox();
+        private readonly Label pageLabel = new Label();
+        private readonly Label tableLabel = new Label();
+        private readonly ComboBox[] defaultCombos = new ComboBox[4];
+        private readonly ComboBox[] tableCombos = new ComboBox[4];
+        private readonly Button recalculateButton = new Button();
+        private readonly Button resetButton = new Button();
+        private readonly Button saveButton = new Button();
+        private readonly Button closeButton = new Button();
+
+        internal TableSplitPreviewDialog(string packagePath, string templatePath, string pageSetupPath, string styleConfigPath, string layoutPath)
+        {
+            this.packagePath = packagePath;
+            this.templatePath = templatePath;
+            this.pageSetupPath = pageSetupPath;
+            this.styleConfigPath = styleConfigPath;
+            this.layoutPath = layoutPath;
+            workDirectory = Path.Combine(Path.GetTempPath(), "ResearchHelper_table_preview_" + Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(workDirectory);
+            layout = TableLayoutPolicies.Load(layoutPath);
+
+            Text = "표 분할 미리보기 · 보정";
+            StartPosition = FormStartPosition.CenterParent;
+            MinimumSize = new Size(980, 620);
+            Size = new Size(1180, 720);
+            Font = LauncherUi.BaseFont();
+            BackColor = LauncherUi.ColorSurface;
+
+            var root = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 4, Padding = new Padding(12) };
+            root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+            root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+            root.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+            root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+            Controls.Add(root);
+
+            pageLabel.AutoSize = true;
+            pageLabel.ForeColor = LauncherUi.ColorMutedText;
+            pageLabel.Margin = new Padding(0, 0, 0, 6);
+            root.Controls.Add(pageLabel, 0, 0);
+
+            var defaultsPanel = new FlowLayoutPanel { Dock = DockStyle.Fill, AutoSize = true, WrapContents = true };
+            defaultsPanel.Controls.Add(new Label { Text = "모든 표 기본값", AutoSize = true, Font = LauncherUi.SectionFont(), Margin = new Padding(0, 6, 12, 0) });
+            var defaults = (Dictionary<string, object>)layout["defaults"];
+            for (int i = 0; i < 4; i++)
+            {
+                defaultsPanel.Controls.Add(new Label { Text = TableLayoutPolicies.Titles[i], AutoSize = true, Margin = new Padding(6, 7, 2, 0) });
+                defaultCombos[i] = TableLayoutPolicies.CreateCombo(i, false);
+                object value;
+                TableLayoutPolicies.Select(defaultCombos[i], i, defaults.TryGetValue(TableLayoutPolicies.Names[i], out value) ? Convert.ToString(value) : null, false);
+                defaultCombos[i].SelectedIndexChanged += delegate { if (!loading) dirty = true; };
+                defaultsPanel.Controls.Add(defaultCombos[i]);
+            }
+            root.Controls.Add(defaultsPanel, 0, 1);
+
+            var split = new SplitContainer { Dock = DockStyle.Fill, SplitterDistance = 330, FixedPanel = FixedPanel.Panel1 };
+            root.Controls.Add(split, 0, 2);
+
+            tableList.Dock = DockStyle.Fill;
+            tableList.View = View.Details;
+            tableList.FullRowSelect = true;
+            tableList.HideSelection = false;
+            tableList.MultiSelect = false;
+            tableList.Columns.Add("표", 70);
+            tableList.Columns.Add("제목", 130);
+            tableList.Columns.Add("분할", 45);
+            tableList.Columns.Add("상태", 70);
+            tableList.AccessibleName = "분할 미리보기 표 목록";
+            tableList.SelectedIndexChanged += delegate { OnTableSelected(); };
+            split.Panel1.Controls.Add(tableList);
+
+            var detail = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 4, Padding = new Padding(8, 0, 0, 0) };
+            detail.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+            detail.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+            detail.RowStyles.Add(new RowStyle(SizeType.Percent, 70));
+            detail.RowStyles.Add(new RowStyle(SizeType.Percent, 30));
+            split.Panel2.Controls.Add(detail);
+
+            tableLabel.AutoSize = true;
+            tableLabel.Font = LauncherUi.SectionFont();
+            detail.Controls.Add(tableLabel, 0, 0);
+
+            var policyPanel = new FlowLayoutPanel { Dock = DockStyle.Fill, AutoSize = true, WrapContents = true };
+            for (int i = 0; i < 4; i++)
+            {
+                policyPanel.Controls.Add(new Label { Text = TableLayoutPolicies.Titles[i], AutoSize = true, Margin = new Padding(0, 7, 2, 0) });
+                tableCombos[i] = TableLayoutPolicies.CreateCombo(i, true);
+                tableCombos[i].SelectedIndexChanged += delegate { if (!loading) dirty = true; };
+                policyPanel.Controls.Add(tableCombos[i]);
+            }
+            detail.Controls.Add(policyPanel, 0, 1);
+
+            columnGrid.Dock = DockStyle.Fill;
+            columnGrid.AllowUserToAddRows = false;
+            columnGrid.AllowUserToDeleteRows = false;
+            columnGrid.RowHeadersVisible = false;
+            columnGrid.SelectionMode = DataGridViewSelectionMode.CellSelect;
+            columnGrid.AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.Fill;
+            columnGrid.BackgroundColor = LauncherUi.ColorSurface;
+            columnGrid.AccessibleName = "열 폭과 분할 경계";
+            AddColumn("col", "열", 45, true);
+            AddColumn("label", "머리글", 170, true);
+            AddColumn("role", "구분", 60, true);
+            AddColumn("min", "최소 폭(mm)", 80, true);
+            AddColumn("planned", "배치 폭(mm)", 80, true);
+            AddColumn("part", "표", 40, true);
+            AddColumn("fixed", "고정 폭(mm)", 85, false);
+            var cut = new DataGridViewCheckBoxColumn { Name = "cut", HeaderText = "여기서 새 표", FillWeight = 70 };
+            columnGrid.Columns.Add(cut);
+            columnGrid.CurrentCellDirtyStateChanged += delegate
+            {
+                if (columnGrid.IsCurrentCellDirty) columnGrid.CommitEdit(DataGridViewDataErrorContexts.Commit);
+            };
+            columnGrid.CellValueChanged += OnCellValueChanged;
+            detail.Controls.Add(columnGrid, 0, 2);
+
+            messageText.Dock = DockStyle.Fill;
+            messageText.Multiline = true;
+            messageText.ReadOnly = true;
+            messageText.ScrollBars = ScrollBars.Vertical;
+            messageText.BackColor = LauncherUi.ColorSurface;
+            detail.Controls.Add(messageText, 0, 3);
+
+            var buttons = new FlowLayoutPanel { Dock = DockStyle.Fill, AutoSize = true, FlowDirection = FlowDirection.RightToLeft };
+            closeButton.Text = "닫기";
+            closeButton.AutoSize = true;
+            closeButton.Click += delegate { Close(); };
+            saveButton.Text = "저장";
+            saveButton.AutoSize = true;
+            saveButton.Click += async delegate { await SaveAsync(); };
+            recalculateButton.Text = "다시 계산";
+            recalculateButton.AutoSize = true;
+            recalculateButton.Click += async delegate { await RecalculateAsync(); };
+            resetButton.Text = "이 표 자동 설정으로 되돌리기";
+            resetButton.AutoSize = true;
+            resetButton.Click += async delegate { await ResetTableAsync(); };
+            buttons.Controls.Add(closeButton);
+            buttons.Controls.Add(saveButton);
+            buttons.Controls.Add(recalculateButton);
+            buttons.Controls.Add(resetButton);
+            root.Controls.Add(buttons, 0, 3);
+            AcceptButton = recalculateButton;
+            CancelButton = closeButton;
+
+            LauncherUi.ApplyToForm(this);
+            Shown += async delegate { await RecalculateAsync(); };
+            FormClosing += OnClosingDialog;
+            FormClosed += delegate { try { Directory.Delete(workDirectory, true); } catch { } };
+        }
+
+        private void AddColumn(string name, string header, int weight, bool readOnly)
+        {
+            var column = new DataGridViewTextBoxColumn { Name = name, HeaderText = header, FillWeight = weight, ReadOnly = readOnly };
+            if (readOnly) column.DefaultCellStyle.ForeColor = LauncherUi.ColorMutedText;
+            columnGrid.Columns.Add(column);
+        }
+
+        private Dictionary<string, object> Tables
+        {
+            get { return (Dictionary<string, object>)layout["tables"]; }
+        }
+
+        private Dictionary<string, object> TableEntry(string key, bool create)
+        {
+            object value;
+            if (Tables.TryGetValue(key, out value) && value is Dictionary<string, object>) return (Dictionary<string, object>)value;
+            if (!create) return null;
+            var entry = new Dictionary<string, object>();
+            Tables[key] = entry;
+            return entry;
+        }
+
+        private static object[] AsArray(object value)
+        {
+            var array = value as object[];
+            if (array != null) return array;
+            var list = value as System.Collections.ArrayList;
+            return list == null ? new object[0] : list.ToArray();
+        }
+
+        private static string JsonText(Dictionary<string, object> item, string key)
+        {
+            object value;
+            return item != null && item.TryGetValue(key, out value) && value != null ? Convert.ToString(value, System.Globalization.CultureInfo.InvariantCulture) : "";
+        }
+
+        private void SetBusy(bool busy)
+        {
+            UseWaitCursor = busy;
+            recalculateButton.Enabled = saveButton.Enabled = resetButton.Enabled = !busy;
+        }
+
+        // Copy combo/grid edits of the visible table into the layout dictionary.
+        private bool CollectEdits()
+        {
+            var defaults = (Dictionary<string, object>)layout["defaults"];
+            for (int i = 0; i < 4; i++) defaults[TableLayoutPolicies.Names[i]] = TableLayoutPolicies.Selected(defaultCombos[i], i, false);
+            if (currentKey == null) return true;
+            var entry = TableEntry(currentKey, true);
+            for (int i = 0; i < 4; i++)
+            {
+                string value = TableLayoutPolicies.Selected(tableCombos[i], i, true);
+                if (value == null) entry.Remove(TableLayoutPolicies.Names[i]);
+                else entry[TableLayoutPolicies.Names[i]] = value;
+            }
+            var widths = new Dictionary<string, object>();
+            var cuts = new List<int>();
+            foreach (DataGridViewRow row in columnGrid.Rows)
+            {
+                string col = Convert.ToString(row.Cells["col"].Value);
+                string text = Convert.ToString(row.Cells["fixed"].Value ?? "").Trim();
+                if (text.Length > 0)
+                {
+                    double mm;
+                    if (!double.TryParse(text, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out mm)
+                        && !double.TryParse(text, out mm))
+                    {
+                        MessageBox.Show(this, col + "열 고정 폭은 mm 숫자로 입력하세요.", "표 분할 보정");
+                        return false;
+                    }
+                    if (mm < 2 || mm > 400)
+                    {
+                        MessageBox.Show(this, col + "열 고정 폭은 2~400mm 사이여야 합니다.", "표 분할 보정");
+                        return false;
+                    }
+                    widths[col] = Math.Round(mm, 1);
+                }
+                if (Convert.ToBoolean(row.Cells["cut"].Value ?? false)) cuts.Add(Convert.ToInt32(col));
+            }
+            if (widths.Count > 0) entry["column_widths_mm"] = widths;
+            else entry.Remove("column_widths_mm");
+            if (editedCuts.Contains(currentKey)) entry["cuts"] = cuts.ToArray();
+            if (entry.Count == 0) Tables.Remove(currentKey);
+            return true;
+        }
+
+        private async System.Threading.Tasks.Task RecalculateAsync()
+        {
+            if (!CollectEdits()) return;
+            string draftLayout = Path.Combine(workDirectory, "table_layout_draft.json");
+            string output = Path.Combine(workDirectory, "table_split_preview.json");
+            TableLayoutPolicies.Save(draftLayout, layout);
+            string arguments = "--package " + MainForm.QuoteArg(packagePath) +
+                               " --table-layout " + MainForm.QuoteArg(draftLayout) +
+                               " --output " + MainForm.QuoteArg(output) +
+                               (string.IsNullOrWhiteSpace(templatePath) ? "" : " --template " + MainForm.QuoteArg(templatePath)) +
+                               (string.IsNullOrWhiteSpace(pageSetupPath) ? "" : " --page-setup " + MainForm.QuoteArg(pageSetupPath)) +
+                               (string.IsNullOrWhiteSpace(styleConfigPath) ? "" : " --style-config " + MainForm.QuoteArg(styleConfigPath));
+            SetBusy(true);
+            try
+            {
+                await System.Threading.Tasks.Task.Run(() => MainForm.RunTemplateTool("hwp_table_split_preview.py", arguments, 120000));
+                preview = new JavaScriptSerializer { MaxJsonLength = int.MaxValue }
+                    .DeserializeObject(File.ReadAllText(output, System.Text.Encoding.UTF8)) as Dictionary<string, object>;
+                ShowPreview();
+            }
+            catch (Exception ex)
+            {
+                messageText.Text = "미리보기를 계산하지 못했습니다: " + ex.Message;
+            }
+            finally
+            {
+                SetBusy(false);
+            }
+        }
+
+        private void ShowPreview()
+        {
+            var page = preview["page"] as Dictionary<string, object>;
+            string note = string.Join(" ", AsArray(preview["notes"]).Select(n => Convert.ToString(n)).ToArray());
+            pageLabel.Text = "본문 폭 " + JsonText(page, "body_width_mm") + "mm · 가로 용지로 돌리면 " + JsonText(page, "rotated_body_width_mm") +
+                             "mm (" + (JsonText(page, "source") == "template" ? "템플릿 기준" : JsonText(page, "source") == "page_setup" ? "편집용지 설정 기준" : "A4 추정") +
+                             ", 실제 생성 시 한글에서 다시 측정) " + note;
+            string keep = currentKey;
+            loading = true;
+            tableList.BeginUpdate();
+            try
+            {
+                tableList.Items.Clear();
+                foreach (object raw in AsArray(preview["tables"]))
+                {
+                    var table = raw as Dictionary<string, object>;
+                    string status = JsonText(table, "status");
+                    int parts = AsArray(table["parts"]).Length;
+                    var item = new ListViewItem(new[]
+                    {
+                        JsonText(table, "table_key"), JsonText(table, "title"),
+                        parts == 0 ? "-" : parts.ToString(),
+                        status == "ok" ? (JsonText(table, "orientation") == "landscape" ? "가로 용지" : "정상") : status == "blocked" ? "차단" : "미지원"
+                    });
+                    item.Tag = table;
+                    if (status == "blocked") item.ForeColor = LauncherUi.ColorDanger;
+                    else if (TableEntry(JsonText(table, "table_key"), false) != null) item.Font = new Font(tableList.Font, FontStyle.Bold);
+                    tableList.Items.Add(item);
+                }
+            }
+            finally
+            {
+                tableList.EndUpdate();
+                loading = false;
+            }
+            currentKey = null;
+            ListViewItem select = tableList.Items.Cast<ListViewItem>().FirstOrDefault(i => i.Text == keep) ??
+                                  tableList.Items.Cast<ListViewItem>().FirstOrDefault();
+            if (select != null) select.Selected = true;
+            else ShowTable(null);
+        }
+
+        private void OnTableSelected()
+        {
+            if (loading || tableList.SelectedItems.Count != 1) return;
+            if (currentKey != null && !CollectEdits()) return;
+            ShowTable(tableList.SelectedItems[0].Tag as Dictionary<string, object>);
+        }
+
+        private void ShowTable(Dictionary<string, object> table)
+        {
+            loading = true;
+            try
+            {
+                columnGrid.Rows.Clear();
+                currentKey = table == null ? null : JsonText(table, "table_key");
+                tableLabel.Text = table == null ? "표 없음" : "[" + currentKey + "] " + JsonText(table, "title");
+                var entry = currentKey == null ? null : TableEntry(currentKey, false);
+                for (int i = 0; i < 4; i++)
+                    TableLayoutPolicies.Select(tableCombos[i], i, entry == null ? null : JsonText(entry, TableLayoutPolicies.Names[i]), true);
+                if (table == null) { messageText.Text = ""; return; }
+
+                var fixedWidths = entry == null ? null : (entry.ContainsKey("column_widths_mm") ? entry["column_widths_mm"] as Dictionary<string, object> : null);
+                var allowed = new HashSet<int>(AsArray(table.ContainsKey("allowed_cuts") ? table["allowed_cuts"] : null).Select(v => Convert.ToInt32(v)));
+                var blocked = new Dictionary<int, string>();
+                foreach (object raw in AsArray(table.ContainsKey("blocked_cuts") ? table["blocked_cuts"] : null))
+                {
+                    var item = raw as Dictionary<string, object>;
+                    blocked[Convert.ToInt32(item["col"])] = JsonText(item, "reason");
+                }
+                var cuts = new HashSet<int>(AsArray(entry != null && entry.ContainsKey("cuts") ? entry["cuts"] :
+                    table.ContainsKey("current_cuts") ? table["current_cuts"] : null).Select(v => Convert.ToInt32(v)));
+                foreach (object raw in AsArray(table["columns"]))
+                {
+                    var column = raw as Dictionary<string, object>;
+                    int col = Convert.ToInt32(column["col"]);
+                    string fixedText = "";
+                    if (fixedWidths != null && fixedWidths.ContainsKey(col.ToString()))
+                        fixedText = Convert.ToString(fixedWidths[col.ToString()], System.Globalization.CultureInfo.InvariantCulture);
+                    int index = columnGrid.Rows.Add(col, JsonText(column, "label"), JsonText(column, "role") == "repeated" ? "반복" : "값",
+                        JsonText(column, "min_width_mm"), JsonText(column, "planned_width_mm"), JsonText(column, "part"), fixedText, cuts.Contains(col));
+                    DataGridViewRow row = columnGrid.Rows[index];
+                    bool canCut = allowed.Contains(col) || (cuts.Contains(col) && !blocked.ContainsKey(col));
+                    row.Cells["cut"].ReadOnly = !canCut;
+                    if (blocked.ContainsKey(col)) row.Cells["cut"].ToolTipText = blocked[col];
+                    else if (!canCut) row.Cells["cut"].ToolTipText = "반복 열 앞이나 첫 값 열에서는 나눌 수 없습니다.";
+                    if (!canCut) row.Cells["cut"].Style.BackColor = LauncherUi.ColorDisabledSurface;
+                }
+
+                var lines = new List<string>();
+                string status = JsonText(table, "status");
+                if (status == "blocked") lines.Add("차단: " + JsonText(table, "error"));
+                else if (status == "skipped") lines.Add(JsonText(table, "error"));
+                else
+                {
+                    lines.Add((JsonText(table, "orientation") == "landscape" ? "가로 용지" : "세로 용지") + " · " + AsArray(table["parts"]).Length + "개 표" +
+                              (entry != null && entry.ContainsKey("cuts") ? " (직접 지정한 분할 경계)" : " (자동 분할)"));
+                    foreach (object raw in AsArray(table["parts"]))
+                    {
+                        var part = raw as Dictionary<string, object>;
+                        var sources = AsArray(part["source_columns"]).Select(v => Convert.ToString(v)).ToArray();
+                        lines.Add("  " + JsonText(part, "index") + "번째 표: " + string.Join(", ", sources) + "열");
+                    }
+                }
+                foreach (object warning in AsArray(table["warnings"])) lines.Add("확인: " + Convert.ToString(warning));
+                lines.Add("");
+                lines.Add("· '여기서 새 표'를 바꾸면 이 표는 직접 지정한 경계로 나눕니다. 고정 폭은 비워 두면 자동입니다. 변경 후 [다시 계산]으로 결과를 확인하세요.");
+                messageText.Text = string.Join(Environment.NewLine, lines.ToArray());
+            }
+            finally
+            {
+                loading = false;
+            }
+        }
+
+        private void OnCellValueChanged(object sender, DataGridViewCellEventArgs e)
+        {
+            if (loading || e.RowIndex < 0 || currentKey == null) return;
+            dirty = true;
+            if (columnGrid.Columns[e.ColumnIndex].Name == "cut") editedCuts.Add(currentKey);
+        }
+
+        private async System.Threading.Tasks.Task ResetTableAsync()
+        {
+            if (currentKey == null) return;
+            Tables.Remove(currentKey);
+            editedCuts.Remove(currentKey);
+            dirty = true;
+            ShowTable(null);
+            currentKey = null;
+            await RecalculateAsync();
+        }
+
+        private async System.Threading.Tasks.Task SaveAsync()
+        {
+            if (!CollectEdits()) return;
+            await RecalculateAsync();
+            var blocked = preview == null ? new string[0] : AsArray(preview["tables"]).Cast<Dictionary<string, object>>()
+                .Where(t => JsonText(t, "status") == "blocked").Select(t => JsonText(t, "table_key")).ToArray();
+            if (blocked.Length > 0 && MessageBox.Show(this, "아직 배치할 수 없는 표가 있습니다: " + string.Join(", ", blocked) +
+                    "\n그대로 저장하면 한글 생성 시 해당 표에서 중단됩니다. 저장할까요?", "표 분할 보정", MessageBoxButtons.YesNo, MessageBoxIcon.Warning) != DialogResult.Yes)
+                return;
+            try
+            {
+                TableLayoutPolicies.Save(layoutPath, layout);
+                dirty = false;
+                MessageBox.Show(this, "저장했습니다. 다음 한글 보고서 생성부터 적용됩니다.\n" + layoutPath, "표 분할 보정");
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show(this, "저장하지 못했습니다: " + ex.Message, "표 분할 보정");
+            }
+        }
+
+        internal static void RunSelfCheck()
+        {
+            string directory = Path.Combine(Path.GetTempPath(), "ResearchHelperSplitCheck_" + Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(directory);
+            try
+            {
+                string layoutPath = Path.Combine(directory, "survey_table_layout.json");
+                const string sample = "{\"page\":{\"source\":\"template\",\"body_width_mm\":160.0,\"rotated_body_width_mm\":247.0}," +
+                    "\"notes\":[],\"tables\":[{\"table_key\":\"Q1\",\"title\":\"만족도\",\"status\":\"ok\",\"orientation\":\"portrait\"," +
+                    "\"warnings\":[\"Q1: 본문 폭에 맞춰 2개 표로 가로 분할했습니다.\"],\"allowed_cuts\":[3,4],\"blocked_cuts\":[]," +
+                    "\"current_cuts\":[4],\"parts\":[{\"index\":1,\"source_columns\":[1,2,3]},{\"index\":2,\"source_columns\":[1,4]}]," +
+                    "\"columns\":[{\"col\":1,\"label\":\"구분\",\"role\":\"repeated\",\"min_width_mm\":20.0,\"planned_width_mm\":30.0,\"part\":null,\"fixed\":false}," +
+                    "{\"col\":2,\"label\":\"매우 만족\",\"role\":\"value\",\"min_width_mm\":15.0,\"planned_width_mm\":60.0,\"part\":1,\"fixed\":false}," +
+                    "{\"col\":3,\"label\":\"만족\",\"role\":\"value\",\"min_width_mm\":15.0,\"planned_width_mm\":60.0,\"part\":1,\"fixed\":false}," +
+                    "{\"col\":4,\"label\":\"불만족\",\"role\":\"value\",\"min_width_mm\":15.0,\"planned_width_mm\":120.0,\"part\":2,\"fixed\":false}]}," +
+                    "{\"table_key\":\"Q2\",\"title\":\"병합\",\"status\":\"blocked\",\"error\":\"본문 병합\",\"warnings\":[],\"parts\":[]," +
+                    "\"allowed_cuts\":[],\"blocked_cuts\":[{\"col\":3,\"reason\":\"본문 병합 셀이 이 경계를 가로지릅니다.\"}],\"columns\":[]}]}";
+                using (var dialog = new TableSplitPreviewDialog(Path.Combine(directory, "survey_report_package.json"), "", null, null, layoutPath))
+                {
+                    dialog.CreateControl();
+                    dialog.preview = new JavaScriptSerializer().DeserializeObject(sample) as Dictionary<string, object>;
+                    dialog.ShowPreview();
+                    if (dialog.currentKey == null) dialog.ShowTable(dialog.tableList.Items[0].Tag as Dictionary<string, object>);
+                    if (dialog.tableList.Items.Count != 2 || dialog.columnGrid.Rows.Count != 4)
+                        throw new InvalidOperationException("Self-check failed: split preview rows");
+                    if (!Convert.ToBoolean(dialog.columnGrid.Rows[3].Cells["cut"].Value) || !dialog.columnGrid.Rows[0].Cells["cut"].ReadOnly)
+                        throw new InvalidOperationException("Self-check failed: current cuts and repeated column lock");
+                    dialog.loading = true;
+                    dialog.columnGrid.Rows[2].Cells["cut"].Value = true;
+                    dialog.columnGrid.Rows[3].Cells["cut"].Value = false;
+                    dialog.columnGrid.Rows[0].Cells["fixed"].Value = "28.5";
+                    dialog.tableCombos[1].SelectedIndex = 2;
+                    dialog.loading = false;
+                    dialog.editedCuts.Add("Q1");
+                    if (!dialog.CollectEdits()) throw new InvalidOperationException("Self-check failed: collect edits");
+                    TableLayoutPolicies.Save(layoutPath, dialog.layout);
+                    var entry = (Dictionary<string, object>)((Dictionary<string, object>)TableLayoutPolicies.Load(layoutPath)["tables"])["Q1"];
+                    var cuts = AsArray(entry["cuts"]).Select(v => Convert.ToInt32(v)).ToArray();
+                    var widths = (Dictionary<string, object>)entry["column_widths_mm"];
+                    if (cuts.Length != 1 || cuts[0] != 3 || Convert.ToDouble(widths["1"]) != 28.5 ||
+                        Convert.ToString(entry["body_merge_policy"]) != "split_repeat" || entry.ContainsKey("wide_table_policy"))
+                        throw new InvalidOperationException("Self-check failed: saved table override");
+                    dialog.dirty = false;
+                }
+                Console.WriteLine("Table split preview self-check passed.");
+            }
+            finally
+            {
+                try { Directory.Delete(directory, true); } catch { }
+            }
+        }
+
+        private void OnClosingDialog(object sender, FormClosingEventArgs e)
+        {
+            if (!dirty) return;
+            var answer = MessageBox.Show(this, "저장하지 않은 표 분할 보정이 있습니다. 닫을까요?", "표 분할 보정", MessageBoxButtons.YesNo, MessageBoxIcon.Question);
+            if (answer != DialogResult.Yes) e.Cancel = true;
         }
     }
 
