@@ -32,6 +32,7 @@ try:
     from .hwp_page_setup import normalize_page_setup, apply_page_setup
     from .hwp_recovery import Recovery
     from .hwp_table_output import format_table_display
+    from . import hwp_com_lifecycle as lifecycle
 except ImportError:
     from hwp_style_config import CAPTION_STYLES, DEFAULT_HWP_STYLE_CONFIG, HWP_LINE_NAMES, REQUIRED_STYLE_NAMES, TABLE_OUTPUT_DEFAULTS, load_hwp_style_config, margin_units, style_name_for_cell_role
     from hwpx_style_registry import register_named_styles
@@ -41,6 +42,7 @@ except ImportError:
     from hwp_page_setup import normalize_page_setup, apply_page_setup
     from hwp_recovery import Recovery
     from hwp_table_output import format_table_display
+    import hwp_com_lifecycle as lifecycle
 
 
 BODY_PLACEHOLDER = "{{BODY}}"
@@ -105,6 +107,7 @@ def write_hwp_document(
     table_style_profile_file = Path(table_style_profile_path).resolve() if table_style_profile_path else None
     style_config_file = Path(style_config_path).resolve() if style_config_path else None
     hwp = None
+    pyhwpx_session = None
     excel = None
     excel_workbook = None
     temporary_root = None
@@ -272,6 +275,10 @@ def write_hwp_document(
         try:
             close_excel_clipboard_source(excel, excel_workbook, writer_report)
             finalize_hwp_resources(temporary_root, hwp, writer_report, keep_open_on_error, keep_open_after_save)
+            if hwp is not None and writer_report.get("com", {}).get("closed"):
+                # Drop every Python proxy before waiting; a live reference keeps Hwp.exe running.
+                hwp = pyhwpx_session = None
+                settle_closed_hwp(writer_report)
             write_json(report_file, writer_report)
         finally:
             if writer_lock is not None:
@@ -434,9 +441,13 @@ def connect_hwp(report, checkpoint_path, dispatch_mode):
         from pyhwpx import Hwp
     except ImportError as exc:
         raise HwpWriterError("com", "import_pyhwpx", f"선택한 Python에서 pyhwpx를 불러오지 못했습니다. 해당 환경에서 python -m pip install pyhwpx를 실행하세요. ({exc})") from exc
+    lifecycle.wait_for_previous_instances(report)
+    before = lifecycle.list_hwp_processes()
     try:
         session = Hwp(new=True, visible=False, register_module=False)
         hwp = session.Application
+        lifecycle.remember_new_processes(report, before, lifecycle.list_hwp_processes())
+        lifecycle.retry_com(lambda: lifecycle.probe_hwp(hwp), on_retry=com_retry_logger(report, "probe", checkpoint_path))
     except Exception as exc:
         raise HwpWriterError("com", "pyhwpx", f"pyhwpx로 아래한글을 시작하지 못했습니다: {exc}") from exc
     record_com_step(report, "pyhwpx", "ready")
@@ -463,6 +474,8 @@ def create_hwp_object(
     record_com_step(report, "import_win32com", "ready")
     write_checkpoint(report, checkpoint_path)
 
+    # A previous run in this process may still be shutting Hancom down.
+    lifecycle.wait_for_previous_instances(report)
     last_error = None
     for prog_id in ("HWPFrame.HwpObject", "HwpFrame.HwpObject.2"):
         try:
@@ -472,7 +485,11 @@ def create_hwp_object(
             report["com"]["current_prog_id"] = prog_id
             record_com_step(report, "dispatch", "started", prog_id=prog_id, dispatch_mode=dispatch_mode)
             write_checkpoint(report, checkpoint_path)
-            hwp = dispatch_hwp_object(win32com.client, prog_id, dispatch_mode)
+            before = lifecycle.list_hwp_processes()
+            hwp = lifecycle.retry_com(lambda: dispatch_hwp_object(win32com.client, prog_id, dispatch_mode),
+                                      on_retry=com_retry_logger(report, "dispatch", checkpoint_path))
+            lifecycle.remember_new_processes(report, before, lifecycle.list_hwp_processes())
+            lifecycle.retry_com(lambda: lifecycle.probe_hwp(hwp), on_retry=com_retry_logger(report, "probe", checkpoint_path))
             report["com"]["prog_id"] = prog_id
             record_com_step(report, "dispatch", "ready", prog_id=prog_id, dispatch_mode=dispatch_mode)
             write_checkpoint(report, checkpoint_path)
@@ -584,7 +601,8 @@ def open_document(hwp, path: Path, report: Dict[str, Any], checkpoint_path: Path
     last_error = None
     for attempt in attempts:
         try:
-            result = attempt()
+            # Right after a previous Quit, Hancom can reject the first Open with an RPC error.
+            result = lifecycle.retry_com(attempt, on_retry=com_retry_logger(report, "open_document", checkpoint_path))
             if result is False:
                 last_error = "Open returned False"
                 record_com_step(report, "open_document", "failed", str(last_error), path=str(path))
@@ -2147,8 +2165,25 @@ def close_hwp(hwp, report: Dict[str, Any]) -> None:
     try:
         hwp.Quit()
         report["com"]["closed"] = True
-    except Exception:
-        pass
+    except Exception as exc:
+        report.setdefault("warnings", []).append(f"아래한글 종료 요청 실패: {exc}")
+
+
+def settle_closed_hwp(report: Dict[str, Any], **wait_options: Any) -> None:
+    """Release COM proxies and wait for the Hwp.exe this writer started to exit.
+
+    The caller must drop its own references first. Without this wait, the next
+    writer in the same process can attach to the dying instance and fail on Open.
+    """
+    lifecycle.release_com_references()
+    lifecycle.wait_after_quit(report, **wait_options)
+
+
+def com_retry_logger(report: Dict[str, Any], name: str, checkpoint_path: Path | None = None):
+    def log(attempt: int, exc: BaseException) -> None:
+        record_com_step(report, name, "retry", str(exc), attempt=attempt)
+        write_checkpoint(report, checkpoint_path)
+    return log
 
 
 def group_charts(rows: List[Dict[str, Any]]) -> Dict[str, List[Dict[str, Any]]]:
