@@ -1,6 +1,13 @@
 # ReportAutomation
 
-Current version: `0.0.56`
+Current version: `0.0.57`
+
+`0.0.57`의 추가 사항입니다.
+
+- [한글 표 분할 미리보기·보정](docs/hwp_table_split_preview.md): 분할 경계, 열 폭, 본문·헤더 병합, 세로 배너, 가로 용지 정책을 지정합니다.
+- 한글 연속 생성 시 종료 대기를 추가했습니다.
+- 템플릿 기반 PPT 보고서 초안을 만듭니다.
+- 로컬 확인 순서: [0.0.57 로컬 검증](docs/local_testing_0_0_57.md)
 
 실제 테스트 원자료, 캡처, 산출물과 진단 기록은 Git에 올리지 않고 로컬 `outputs/` 또는 `test-data/`에 보관합니다. 자동 테스트에는 코드로 생성한 합성 자료를 사용합니다.
 
@@ -115,7 +122,10 @@ Python 기반 보조 엔진입니다.
 
 - `excel_report_generator.py`: 문장 초안 TXT 생성
 - `report_package.py`: Excel 산출 시트를 중간 JSON 계약으로 변환하고 QA warning 유형 분류와 preflight 수행
-- `document_writer.py`: `report_package.json` 기반 PPTX 초본 생성 시작점
+- `document_writer.py`: `report_package.json`과 사용자 PPTX 템플릿(`{{TOKEN}}`/`RA_` 도형)으로 보고서·차트 검토 초본 생성
+- `hwp_table_split_preview.py`: 한글 표 분할·열 폭·정책 미리보기 ([안내](docs/hwp_table_split_preview.md))
+- `hwp_table_layout_options.py`, `hwp_table_planning.py`: `table_layout.json` 검증과 writer·미리보기 공용 표 배치 계산
+- `hwp_com_lifecycle.py`: 한글 프로세스 종료 대기와 일시적 COM 오류 재시도
 - `dashboard_package.py`: 기업/기관 가로형 원자료를 대시보드 JSON 계약으로 변환하고 preflight 수행
 - `dashboard_writer.py`: 대시보드 JSON 계약을 세로형 A4/B5 PPTX로 생성
 - `hwp_com_writer.py`: 아래한글 COM으로 HWPX 템플릿 사본에 본문/표 초본 생성

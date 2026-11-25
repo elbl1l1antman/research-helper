@@ -32,6 +32,9 @@ try:
     from .hwp_page_setup import normalize_page_setup, apply_page_setup
     from .hwp_recovery import Recovery
     from .hwp_table_output import format_table_display
+    from . import hwp_com_lifecycle as lifecycle
+    from .hwp_table_layout_options import layout_for_table, load_table_layout
+    from .hwp_table_planning import plan_hwp_table
 except ImportError:
     from hwp_style_config import CAPTION_STYLES, DEFAULT_HWP_STYLE_CONFIG, HWP_LINE_NAMES, REQUIRED_STYLE_NAMES, TABLE_OUTPUT_DEFAULTS, load_hwp_style_config, margin_units, style_name_for_cell_role
     from hwpx_style_registry import register_named_styles
@@ -41,6 +44,9 @@ except ImportError:
     from hwp_page_setup import normalize_page_setup, apply_page_setup
     from hwp_recovery import Recovery
     from hwp_table_output import format_table_display
+    import hwp_com_lifecycle as lifecycle
+    from hwp_table_layout_options import layout_for_table, load_table_layout
+    from hwp_table_planning import plan_hwp_table
 
 
 BODY_PLACEHOLDER = "{{BODY}}"
@@ -87,6 +93,7 @@ def write_hwp_document(
     *,
     figure_prefix: str | None = None,
     chart_style_path: str | Path | None = None,
+    table_layout_path: str | Path | None = None,
 ) -> Path:
     """Write a report draft and always write a companion JSON report."""
 
@@ -105,6 +112,7 @@ def write_hwp_document(
     table_style_profile_file = Path(table_style_profile_path).resolve() if table_style_profile_path else None
     style_config_file = Path(style_config_path).resolve() if style_config_path else None
     hwp = None
+    pyhwpx_session = None
     excel = None
     excel_workbook = None
     temporary_root = None
@@ -130,6 +138,13 @@ def write_hwp_document(
                 raise HwpWriterError("validate", "PageSetup", str(exc)) from exc
             writer_report["page_setup"] = {"requested": page_setup, "applied": False, "scope": "body_section"}
         style_config = load_writer_style_config(style_config_file, writer_report)
+        try:
+            table_layout = load_table_layout(table_layout_path)
+        except (ValueError, OSError) as exc:
+            raise HwpWriterError("validate", "table_layout", f"표 배치 설정을 읽지 못했습니다: {exc}") from exc
+        if table_layout_path:
+            writer_report["table_layout_path"] = str(Path(table_layout_path).resolve())
+        writer_report["table_layout_defaults"] = table_layout["defaults"]
         table_style_profile = load_table_style_profile(table_style_profile_file, writer_report)
         render_plan = build_render_plan(package, max_sections, table_style_profile)
         writer_report["render_plan_path"] = str(render_plan_file)
@@ -162,6 +177,9 @@ def write_hwp_document(
             sources = (package_file, preflight_file, template_file, workbook_path, style_config_path, table_style_profile_path, page_setup_path)
             if figure_prefix is not None:
                 sources += (chart_style_path,)
+            if table_layout_path:
+                # Appended only when used, so jobs interrupted before 0.0.57 still resume.
+                sources += (table_layout_path,)
             reserved = {Path(source).resolve() for source in (*sources, output_file, report_file, render_plan_file) if source}
             if reserved.intersection({path, *(path.with_name(f"{path.stem}_{slot}.hwpx") for slot in (0, 1))}):
                 raise HwpWriterError("recovery", "verify", "자동 재개 파일 경로가 입력 또는 출력 경로와 같습니다.")
@@ -242,6 +260,7 @@ def write_hwp_document(
             recovery,
             write_figure=write_figure,
             verify_figures=verify_figures,
+            table_layout=table_layout,
         )
         write_json(report_file, writer_report)
         save_as_hwpx(hwp, output_file, writer_report, report_file, verify=verify_figures)
@@ -272,6 +291,10 @@ def write_hwp_document(
         try:
             close_excel_clipboard_source(excel, excel_workbook, writer_report)
             finalize_hwp_resources(temporary_root, hwp, writer_report, keep_open_on_error, keep_open_after_save)
+            if hwp is not None and writer_report.get("com", {}).get("closed"):
+                # Drop every Python proxy before waiting; a live reference keeps Hwp.exe running.
+                hwp = pyhwpx_session = None
+                settle_closed_hwp(writer_report)
             write_json(report_file, writer_report)
         finally:
             if writer_lock is not None:
@@ -434,9 +457,13 @@ def connect_hwp(report, checkpoint_path, dispatch_mode):
         from pyhwpx import Hwp
     except ImportError as exc:
         raise HwpWriterError("com", "import_pyhwpx", f"선택한 Python에서 pyhwpx를 불러오지 못했습니다. 해당 환경에서 python -m pip install pyhwpx를 실행하세요. ({exc})") from exc
+    lifecycle.wait_for_previous_instances(report)
+    before = lifecycle.list_hwp_processes()
     try:
         session = Hwp(new=True, visible=False, register_module=False)
         hwp = session.Application
+        lifecycle.remember_new_processes(report, before, lifecycle.list_hwp_processes())
+        lifecycle.retry_com(lambda: lifecycle.probe_hwp(hwp), on_retry=com_retry_logger(report, "probe", checkpoint_path))
     except Exception as exc:
         raise HwpWriterError("com", "pyhwpx", f"pyhwpx로 아래한글을 시작하지 못했습니다: {exc}") from exc
     record_com_step(report, "pyhwpx", "ready")
@@ -463,8 +490,11 @@ def create_hwp_object(
     record_com_step(report, "import_win32com", "ready")
     write_checkpoint(report, checkpoint_path)
 
+    # A previous run in this process may still be shutting Hancom down.
+    lifecycle.wait_for_previous_instances(report)
     last_error = None
     for prog_id in ("HWPFrame.HwpObject", "HwpFrame.HwpObject.2"):
+        hwp = None
         try:
             report["stage"] = "com"
             report["action"] = "dispatch"
@@ -472,7 +502,11 @@ def create_hwp_object(
             report["com"]["current_prog_id"] = prog_id
             record_com_step(report, "dispatch", "started", prog_id=prog_id, dispatch_mode=dispatch_mode)
             write_checkpoint(report, checkpoint_path)
-            hwp = dispatch_hwp_object(win32com.client, prog_id, dispatch_mode)
+            before = lifecycle.list_hwp_processes()
+            hwp = lifecycle.retry_com(lambda: dispatch_hwp_object(win32com.client, prog_id, dispatch_mode),
+                                      on_retry=com_retry_logger(report, "dispatch", checkpoint_path))
+            lifecycle.remember_new_processes(report, before, lifecycle.list_hwp_processes())
+            lifecycle.retry_com(lambda: lifecycle.probe_hwp(hwp), on_retry=com_retry_logger(report, "probe", checkpoint_path))
             report["com"]["prog_id"] = prog_id
             record_com_step(report, "dispatch", "ready", prog_id=prog_id, dispatch_mode=dispatch_mode)
             write_checkpoint(report, checkpoint_path)
@@ -480,6 +514,13 @@ def create_hwp_object(
             return hwp
         except Exception as exc:
             last_error = exc
+            if hwp is not None:
+                # A started but unresponsive instance must not be left running.
+                try:
+                    hwp.Quit()
+                except Exception:
+                    pass
+                hwp = None
             record_com_step(report, "dispatch", "failed", str(exc), prog_id=prog_id, dispatch_mode=dispatch_mode)
             write_checkpoint(report, checkpoint_path)
     raise HwpWriterError("com", "create_object", f"아래한글 COM 객체를 생성하지 못했습니다: {last_error}")
@@ -584,7 +625,8 @@ def open_document(hwp, path: Path, report: Dict[str, Any], checkpoint_path: Path
     last_error = None
     for attempt in attempts:
         try:
-            result = attempt()
+            # Right after a previous Quit, Hancom can reject the first Open with an RPC error.
+            result = lifecycle.retry_com(attempt, on_retry=com_retry_logger(report, "open_document", checkpoint_path))
             if result is False:
                 last_error = "Open returned False"
                 record_com_step(report, "open_document", "failed", str(last_error), path=str(path))
@@ -726,6 +768,7 @@ def write_body(
     *,
     write_figure=None,
     verify_figures=None,
+    table_layout: Dict[str, Any] | None = None,
 ) -> None:
     tables_by_key = {str(table.get("table_key", "")): table for table in package.get("tables", [])}
     charts_by_key = group_charts(package.get("charts", []))
@@ -737,7 +780,14 @@ def write_body(
         report.update(stage="body", action="start_section")
         write_checkpoint(report, checkpoint_path)
         if index > 1:
-            run_action(hwp, "BreakPage", report, "body")
+            rotated = report.pop("rotated_section", None)
+            if rotated is not None:
+                # The previous table sat in a rotated section; a section break also starts a page.
+                report.update(stage="layout", action="restore_orientation")
+                write_checkpoint(report, checkpoint_path)
+                begin_section(hwp, report, bool(rotated["original_landscape"]))
+            else:
+                run_action(hwp, "BreakPage", report, "body")
         title = str(section.get("title") or key or f"문항 {index}")
         if style_indexes is not None:
             apply_named_style(hwp, require_style_index(style_indexes, "보고서 본문1"), report, "보고서 본문1")
@@ -750,19 +800,26 @@ def write_body(
 
         table = tables_by_key.get(key)
         if table:
+            layout = layout_for_table(table_layout, key)
+            orientation = "portrait"
             try:
                 width = current_body_width(hwp, report)
-                font_size = max(style_config["paragraph_styles"][name]["font_size_pt"] for name in style_config["table_cell_styles"]) if style_config else 9
                 if table.get("matrix"):
-                    # Resolve metadata before splitting so every fragment carries the same unit.
-                    metadata = resolve_table_metadata(table)
-                    source = {**table, "base_label": metadata["base_label"], "unit": metadata["unit"]}
-                    source = format_table_display(source, (style_config or {}).get("table_output", {}))
-                    parts = [prepare_report_table(part) for part in plan_table_parts(source, width, font_size, style_config)]
-                    if "확인 필요" in (metadata["base_label"], metadata["unit"]):
-                        report["warnings"].append(f"{key}: BASE 조건 또는 단위를 확인해 주세요.")
-                    for warning in dict.fromkeys(part["header_repeat_warning"] for part in parts if part.get("header_repeat_warning")):
-                        report["warnings"].append(f"{key}: {warning}")
+                    rotated_width = rotated_body_width(hwp, report) if layout["wide_table_policy"] != "split" else None
+                    plan = plan_hwp_table(table, width, style_config, layout, landscape_width=rotated_width)
+                    orientation, parts = plan["orientation"], plan["parts"]
+                    if orientation == "landscape":
+                        report.update(stage="layout", action="rotate_section")
+                        write_checkpoint(report, checkpoint_path)
+                        original = current_landscape(hwp, report)
+                        begin_section(hwp, report, not original)
+                        report["rotated_section"] = {"table_key": key, "original_landscape": original}
+                        # Re-plan with the measured width of the new section; never rotate twice.
+                        width = current_body_width(hwp, report)
+                        plan = plan_hwp_table(table, width, style_config, {**layout, "wide_table_policy": "split"})
+                        parts = plan["parts"]
+                        plan["warnings"].append(f"{key}: 세로 용지 본문 폭에 맞지 않아 이 표를 가로 용지 구역에 배치했습니다.")
+                    report["warnings"].extend(plan["warnings"])
                 else:
                     if style_config and any("margins_mm" in item for item in style_config["table_cell_styles"].values()):
                         rows = table_rows_for_hwp(table)
@@ -779,16 +836,15 @@ def write_body(
                     parts = [table]
             except ValueError as exc:
                 raise HwpWriterError("layout", "table_split", f"{key}: {exc}") from exc
-            report.setdefault("table_layouts", []).append({"table_key": key, "body_width_hwpunit": width,
+            report.setdefault("table_layouts", []).append({"table_key": key, "body_width_hwpunit": width, "orientation": orientation,
+                "policies": {name: layout[name] for name in ("wide_table_policy", "body_merge_policy", "header_merge_policy", "vertical_banner_policy")},
                 "parts": [{name: part.get(name) for name in ("part_index", "part_count", "source_columns", "repeated_columns", "column_widths_hwpunit")} for part in parts]})
-            if len(parts) > 1:
-                report["warnings"].append(f"{key}: 본문 폭에 맞춰 {len(parts)}개 표로 가로 분할했습니다. 보기/BASE 열은 반복됩니다.")
+            if len(parts) > 1 and figure_inserted and orientation == "portrait":
                 # Starting a wide floating table on the EMF page can crash Hancom during cell styling.
-                if figure_inserted:
-                    report.update(stage="layout", action="chart_table_page_break")
-                    write_checkpoint(report, checkpoint_path)
-                    if not run_action(hwp, "BreakPage", report, "layout"):
-                        raise HwpWriterError("layout", "BreakPage", f"{key}: 차트 다음 쪽에 분할표를 배치하지 못했습니다.")
+                report.update(stage="layout", action="chart_table_page_break")
+                write_checkpoint(report, checkpoint_path)
+                if not run_action(hwp, "BreakPage", report, "layout"):
+                    raise HwpWriterError("layout", "BreakPage", f"{key}: 차트 다음 쪽에 분할표를 배치하지 못했습니다.")
             for part in parts:
                 progress.update(part=part.get("part_index", 1), part_count=len(parts), row=0, col=0, cells_done=0, cell_count=0, phase="")
                 report.update(stage="table", action="start_part")
@@ -816,6 +872,30 @@ def write_body(
             report["recovery_sections"] = index
             remove_recovery_marker(hwp, recovery, report)
         write_checkpoint(report, checkpoint_path)
+    rotated = report.get("rotated_section")
+    if rotated is not None:
+        # Template text after {{BODY}} (e.g. the QA summary) must not inherit the rotated page.
+        if at_document_end(hwp):
+            report["warnings"].append("마지막 표가 가로 용지 구역이라 문서가 가로 용지로 끝납니다.")
+        else:
+            report.update(stage="layout", action="restore_orientation")
+            write_checkpoint(report, checkpoint_path)
+            begin_section(hwp, report, bool(rotated["original_landscape"]))
+        report.pop("rotated_section", None)
+        write_checkpoint(report, checkpoint_path)
+
+
+def at_document_end(hwp) -> bool:
+    """True when nothing but empty paragraphs follows the cursor (best effort)."""
+    try:
+        position = hwp.GetPos()
+        hwp.HAction.Run("MoveSelDocEnd")
+        following = str(hwp.GetTextFile("TEXT", "saveblock") or "")
+        hwp.HAction.Run("Cancel")
+        hwp.SetPos(*position)
+        return not following.strip()
+    except Exception:
+        return False
 
 
 def write_table_part(hwp, table, title, report, profile, workbook, style_indexes, style_config, index, checkpoint_path=None):
@@ -915,16 +995,65 @@ def apply_caption_char_shape(hwp, style):
         raise RuntimeError("표 제목/번호 글자 모양 적용 실패")
 
 
+def _page_body_width(page, landscape):
+    width = page.PaperHeight if landscape else page.PaperWidth
+    width -= page.LeftMargin + page.RightMargin
+    if page.GutterType != 2:
+        width -= page.GutterLen
+    return int(width)
+
+
+def current_landscape(hwp, report) -> bool:
+    try:
+        params = hwp.HParameterSet.HSecDef
+        hwp.HAction.GetDefault("PageSetup", params.HSet)
+        return bool(int(params.PageDef.Landscape))
+    except Exception as exc:
+        raise HwpWriterError("layout", "PageSetup", f"용지 방향 확인 실패: {exc}") from exc
+
+
+def rotated_body_width(hwp, report):
+    """Body width this section would have after swapping portrait/landscape."""
+    try:
+        params = hwp.HParameterSet.HSecDef
+        hwp.HAction.GetDefault("PageSetup", params.HSet)
+        page = params.PageDef
+        width = _page_body_width(page, not bool(int(page.Landscape)))
+        return width if width > 0 else None
+    except Exception as exc:
+        raise HwpWriterError("layout", "PageSetup", f"가로 용지 본문 폭 계산 실패: {exc}") from exc
+
+
+def begin_section(hwp, report, landscape: bool) -> None:
+    """Start a new section (and page) with the requested orientation.
+
+    Only the new section changes (ApplyTo 2); earlier pages keep their layout.
+    """
+    if not run_action(hwp, "BreakSection", report, "layout"):
+        raise HwpWriterError("layout", "BreakSection", "표 배치를 위한 구역 나누기에 실패했습니다.")
+    try:
+        params = hwp.HParameterSet.HSecDef
+        if hwp.HAction.GetDefault("PageSetup", params.HSet) is False:
+            raise RuntimeError("현재 편집용지 설정을 읽지 못했습니다.")
+        params.PageDef.Landscape = int(landscape)
+        params.HSet.SetItem("ApplyTo", 2)
+        if hwp.HAction.Execute("PageSetup", params.HSet) is False:
+            raise RuntimeError("용지 방향을 적용하지 못했습니다.")
+        if hwp.HAction.GetDefault("PageSetup", params.HSet) is False or bool(int(params.PageDef.Landscape)) != landscape:
+            raise RuntimeError("요청한 용지 방향과 실제 적용값이 다릅니다.")
+    except Exception as exc:
+        raise HwpWriterError("layout", "PageSetup", f"{'가로' if landscape else '세로'} 용지 구역 설정 실패: {exc}") from exc
+    report.setdefault("section_orientation_changes", []).append(
+        {"table_key": (report.get("progress") or {}).get("table_key", ""), "landscape": landscape})
+
+
 def current_body_width(hwp, report):
     """Read the active section, not an assumed A4 page or a template's first page."""
     try:
         params = hwp.HParameterSet.HSecDef
         hwp.HAction.GetDefault("PageSetup", params.HSet)
         page = params.PageDef
-        width = page.PaperHeight if page.Landscape else page.PaperWidth
-        width -= page.LeftMargin + page.RightMargin
-        if page.GutterType != 2:
-            width -= page.GutterLen
+        width = _page_body_width(page, bool(page.Landscape))
         action = hwp.CreateAction("MultiColumn")
         columns = action.CreateSet()
         action.GetDefault(columns)
@@ -2147,8 +2276,25 @@ def close_hwp(hwp, report: Dict[str, Any]) -> None:
     try:
         hwp.Quit()
         report["com"]["closed"] = True
-    except Exception:
-        pass
+    except Exception as exc:
+        report.setdefault("warnings", []).append(f"아래한글 종료 요청 실패: {exc}")
+
+
+def settle_closed_hwp(report: Dict[str, Any], **wait_options: Any) -> None:
+    """Release COM proxies and wait for the Hwp.exe this writer started to exit.
+
+    The caller must drop its own references first. Without this wait, the next
+    writer in the same process can attach to the dying instance and fail on Open.
+    """
+    lifecycle.release_com_references()
+    lifecycle.wait_after_quit(report, **wait_options)
+
+
+def com_retry_logger(report: Dict[str, Any], name: str, checkpoint_path: Path | None = None):
+    def log(attempt: int, exc: BaseException) -> None:
+        record_com_step(report, name, "retry", str(exc), attempt=attempt)
+        write_checkpoint(report, checkpoint_path)
+    return log
 
 
 def group_charts(rows: List[Dict[str, Any]]) -> Dict[str, List[Dict[str, Any]]]:
@@ -2295,6 +2441,7 @@ def run_cli(argv: List[str] | None = None) -> int:
     parser.add_argument("--recovery", help="Persist completed HWPX sections and resume a matching interrupted run.")
     parser.add_argument("--figure-prefix", help="Enable EMF survey charts; set the leading number in figure captions.")
     parser.add_argument("--chart-style", help="Registered PowerPoint chart style.")
+    parser.add_argument("--table-layout", help="Reviewed table split/merge/orientation settings JSON (table_layout.json).")
     parser.add_argument("--keep-open-after-save", action="store_true")
     parser.add_argument("--dispatch-mode", choices=DISPATCH_MODES, default="ensure_dispatch")
     parser.add_argument("--check-environment", action="store_true")
@@ -2335,6 +2482,7 @@ def run_cli(argv: List[str] | None = None) -> int:
             args.recovery,
             figure_prefix=args.figure_prefix,
             chart_style_path=args.chart_style,
+            table_layout_path=args.table_layout,
         )
         print(str(output))
         return 0

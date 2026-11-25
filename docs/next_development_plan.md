@@ -25,10 +25,16 @@
 다음 순서:
 
 1. 헤더/본문 경계를 가로지르는 병합 표와 세로 배너의 쪽별 표기 정책을 실제 템플릿으로 추가 검증한다.
+   - `0.0.57` 코드 반영: `header_merge_policy=split_at_header`, `vertical_banner_policy=repeat_per_row`. 실제 템플릿 검증은 [로컬 검증](local_testing_0_0_57.md) 3절에 있다.
 2. 사용자가 분할 경계·보기 열 폭을 확인/보정하는 미리보기를 기존 표 목록에 연결한다.
+   - `0.0.57` 코드 반영: [한글 표 분할 미리보기](hwp_table_split_preview.md), `table_layout.json`.
 3. 서로 다른 실제 HWPX 템플릿 2개 이상에서 페이지 폭·글꼴·여백 회귀를 수행한다.
-4. 한 페이지에 들어가지 않는 본문 병합 표의 가로 용지/명시적 분할 옵션을 검토한다. 현재는 데이터 손실 없이 차단한다.
+4. 한 페이지에 들어가지 않는 본문 병합 표의 가로 용지/명시적 분할 옵션을 검토한다. 기본값은 계속 데이터 손실 없이 차단한다.
+   - `0.0.57` 코드 반영: `wide_table_policy=landscape_if_needed|landscape_if_split`(표만 가로 구역), `body_merge_policy=split_repeat`.
 5. PPT 기능은 유지보수하며 HWPX 표 품질 검증 이후 차트 삽입을 재개한다.
+   - `0.0.57` 코드 반영: 템플릿 기반 PPT 보고서·차트 검토 초본(`document_writer.py`), 런처 'PPT 보고서 초안 만들기'.
+6. 같은 프로세스에서 한글을 연속 생성할 때 두 번째 COM 열기가 실패하던 문제.
+   - `0.0.57` 코드 반영: `hwp_com_lifecycle.py`가 Hwp.exe 종료를 기다리고, 일시적 RPC 오류를 재시도한다.
 
 다단 본문은 아직 지원하지 않습니다. 원자료와 생성 문서는 `outputs/`에만 저장하며 Git에는 코드·테스트·검증 설명만 기록합니다.
 
