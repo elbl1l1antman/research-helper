@@ -18,7 +18,7 @@ Current version: `0.0.57`
 
 ## Current Baseline
 
-`0.0.57` adds the `releases/` folder (seeded with the 0.0.56 executable) and previews and corrects HWP table splits (boundaries, fixed widths, body/header merge, vertical banner, and landscape-section policies saved as `table_layout.json`), waits for Hancom to exit between back-to-back writer runs, and fills the user's PPTX template for report and chart review drafts. The committed launcher EXE was not rebuilt on this branch; rebuild it on Windows (see `docs/local_testing_0_0_57.md`).
+`0.0.57` adds the `releases/` folder (seeded with the 0.0.56 executable) and previews and corrects HWP table splits (boundaries, fixed widths, body/header merge, vertical banner, and landscape-section policies saved as `table_layout.json`), waits for Hancom to exit between back-to-back writer runs, and fills the user's PPTX template for report and chart review drafts. On Windows it also answers Hancom's style-overwrite prompt, keeps manual table cuts after recalculation, gives PPTX drafts parts, contents, dividers and row/column-paged tables (QA slides hidden, optional `<workbook>_report_plan.json`), and adds the 신문산업 서식 HWPX template and style preset. Released as `releases/v0.0.57/`.
 
 `0.0.56` keeps private QA inputs, outputs, and diagnostics out of Git. No executable changes.
 

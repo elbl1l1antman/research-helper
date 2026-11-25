@@ -1,7 +1,17 @@
 {
   "schema_version": "1.0",
-  "latest": "0.0.56",
+  "latest": "0.0.57",
   "releases": [
+    {
+      "version": "0.0.57",
+      "file": "v0.0.57/ReportAutomationLauncher.exe",
+      "sha256": "38d0fcb9a5a1dec2318f7375246621d36d0db90cd7b1593190cfcb29c54b6004",
+      "size_bytes": 32729088,
+      "source_commit": "40e0b2948fcd7fd85ca2f6fc222249a637b536cb",
+      "source_dirty": false,
+      "built_at": "2026-11-25T14:22:43+09:00",
+      "notes": "한글 표 분할 미리보기·보정과 연속 생성 안정화(스타일 덮어쓰기 확인창 자동 처리), PPT 보고서 초안(PART·목차·간지, 큰 표 행·열 분할, QA 숨김, 구성 계획 파일), 신문산업 서식 양식·서식 추가."
+    },
     {
       "version": "0.0.56",
       "file": "v0.0.56/ReportAutomationLauncher.exe",
