@@ -160,7 +160,8 @@ namespace ReportAutomationLauncher
         internal const string GuardianStyleName = "조사 보고서 · KoPub 청회색";
         internal const string ScreeningStyleName = "검진 보고서 · KoPub 회색";
         internal const string CompactStyleName = "실무 보고서 · 맑은 고딕";
-        private static readonly string[] ExtraBuiltInNames = { GoldTableName, BlueTableName, GuardianStyleName, ScreeningStyleName, CompactStyleName };
+        internal const string NewspaperStyleName = "신문산업 서식 · KoPubWorld 바탕체";
+        private static readonly string[] ExtraBuiltInNames = { GoldTableName, BlueTableName, GuardianStyleName, ScreeningStyleName, CompactStyleName, NewspaperStyleName };
         internal static readonly string[] StyleNames = { "보고서 본문1", "보고서 본문2", "표보기", "표배너", "표숫자" };
         internal static readonly string[] CaptionStyleNames = { "표제목", "표번호" };
         internal static readonly string[] TableStyleNames = { "표보기", "표배너", "표숫자" };
@@ -448,8 +449,47 @@ namespace ReportAutomationLauncher
             return Normalize(config);
         }
 
+        // Taken from an industry survey report (format only): KoPubWorld바탕체 body 11pt/160%,
+        // 8pt table text, light-blue header (DCE7F4) under a blue top line, slim double line
+        // below the header, gray label cells, dashed inner rows and gray vertical lines.
+        private static Dictionary<string, object> NewspaperReportConfig()
+        {
+            const string light = "KoPubWorld바탕체 Light", medium = "KoPubWorld바탕체 Medium", bold = "KoPubWorld바탕체 Bold";
+            var config = DefaultTableConfig(false);
+            config["preset_name"] = NewspaperStyleName;
+            var styles = Map(config["paragraph_styles"], "paragraph_styles");
+            styles["보고서 본문1"] = Style(light, 11, false, "", 160, 9.9, 0, "justify");
+            styles["보고서 본문2"] = Style(light, 11, false, "-", 160, 12.4, -2.5, "justify");
+            styles["표제목"] = Style(bold, 11, true, "", 130, 0, 0, "center");
+            styles["표번호"] = Style(bold, 11, true, "", 130, 0, 0, "center");
+            var cells = Map(config["table_cell_styles"], "table_cell_styles");
+            foreach (string role in cells.Keys.ToList())
+            {
+                bool header = role == "표배너" || role == "표머리행" || role == "표가로배너";
+                bool label = role == "표보기" || role == "표세로배너" || role == "표BASE";
+                styles[role] = Style(header || label ? bold : medium, 8, header || label, "", header ? 100 : 130, 0, 0, "center");
+                var cell = Map(cells[role], role);
+                cell["fill_color"] = header ? "DCE7F4" : role == "표BASE" ? "DAEEF3" : label ? "F2F2F2" : "FFFFFF";
+                cell["margins_mm"] = new Dictionary<string, object> { { "top", 0.5 }, { "bottom", 0.5 }, { "left", 1.8 }, { "right", 1.8 } };
+            }
+            var border = Map(config["table_border"], "table_border");
+            border["color"] = "B2B2B2";
+            border["inner_width_mm"] = 0.12;
+            border["outer_width_mm"] = 0.12;
+            border["show_side_borders"] = false;
+            border["edges"] = new Dictionary<string, object>
+            {
+                { "outer", Edge("solid", 0.12, "2F83C6") },
+                { "header_bottom", Edge("double_slim", 0.5, "BFBFBF") },
+                { "inner_horizontal", Edge("dash", 0.12, "BFBFBF") },
+                { "inner_vertical", Edge("solid", 0.12, "B2B2B2") }
+            };
+            return Normalize(config);
+        }
+
         private static Dictionary<string, object> ReferenceReportConfig(string name)
         {
+            if (name == NewspaperStyleName) return NewspaperReportConfig();
             bool screening = name == ScreeningStyleName, compact = name == CompactStyleName;
             string light = compact ? "맑은 고딕" : "KoPub돋움체 Light";
             string medium = compact ? light : "KoPub돋움체 Medium";
@@ -503,8 +543,23 @@ namespace ReportAutomationLauncher
                 {
                     var config = store.Get(name);
                     var body = Map(Map(config["paragraph_styles"], "paragraph_styles")["보고서 본문1"], "보고서 본문1");
-                    Assert(store.IsBuiltIn(name) && (string)body["font_family"] == (name == CompactStyleName ? "맑은 고딕" : "KoPub돋움체 Light"), "reference preset font");
+                    string expectedFont = name == CompactStyleName ? "맑은 고딕" : name == NewspaperStyleName ? "KoPubWorld바탕체 Light" : "KoPub돋움체 Light";
+                    Assert(store.IsBuiltIn(name) && (string)body["font_family"] == expectedFont, "reference preset font");
                     AssertThrows(delegate { store.Save(config, true); }, "reference preset protected");
+                }
+                {
+                    // 신문산업 서식: light-blue header with a blue top line and a slim double line below it,
+                    // gray label cells, dashed inner rows, 8pt table text.
+                    var news = store.Get(NewspaperStyleName);
+                    var newsCells = Map(news["table_cell_styles"], "table_cell_styles");
+                    var newsEdges = Map(Map(news["table_border"], "table_border")["edges"], "edges");
+                    var newsHeader = Map(Map(news["paragraph_styles"], "paragraph_styles")["표배너"], "표배너");
+                    Assert((string)Map(newsCells["표배너"], "표배너")["fill_color"] == "DCE7F4" &&
+                           (string)Map(newsCells["표보기"], "표보기")["fill_color"] == "F2F2F2" &&
+                           (string)Map(newsEdges["outer"], "outer")["color"] == "2F83C6" &&
+                           (string)Map(newsEdges["header_bottom"], "header_bottom")["type"] == "double_slim" &&
+                           (string)Map(newsEdges["inner_horizontal"], "inner_horizontal")["type"] == "dash" &&
+                           Convert.ToDouble(newsHeader["font_size_pt"]) == 8, "newspaper preset table format");
                 }
                 foreach (string name in new[] { GoldTableName, BlueTableName })
                 {
@@ -2046,7 +2101,7 @@ namespace ReportAutomationLauncher
         private readonly Button createHwpTemplateButton = new Button();
         private readonly Button useBasicHwpTemplateButton = new Button();
         private readonly ComboBox basicHwpVariant = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Width = 180, AccessibleName = "기본 한글 양식" };
-        private static readonly string[] BasicHwpVariantIds = { "basic", "guardian", "screening" };
+        private static readonly string[] BasicHwpVariantIds = { "basic", "guardian", "screening", "newspaper" };
         private readonly Button createPptTemplateButton = new Button();
         private readonly Button createChartTemplateButton = new Button();
         private readonly Button autoFixTemplateButton = new Button();
@@ -2681,7 +2736,7 @@ namespace ReportAutomationLauncher
             templateButtons.AutoSize = true;
             inspectTemplateButton.Text = "양식 검사";
             inspectTemplateButton.Click += InspectTemplateButton_Click;
-            basicHwpVariant.Items.AddRange(new object[] { "기본 보고서", "조사 보고서 · 청회색", "검진 보고서 · 파란 제목" });
+            basicHwpVariant.Items.AddRange(new object[] { "기본 보고서", "조사 보고서 · 청회색", "검진 보고서 · 파란 제목", "신문산업 서식" });
             basicHwpVariant.SelectedIndex = 0;
             useBasicHwpTemplateButton.Text = "선택한 기본 양식 적용";
             useBasicHwpTemplateButton.Click += UseBasicHwpTemplateButton_Click;
@@ -4768,16 +4823,20 @@ namespace ReportAutomationLauncher
 
         private void SelectReferenceStyle(int index)
         {
-            string name = index == 1 ? HwpStylePresetStore.GuardianStyleName : HwpStylePresetStore.ScreeningStyleName;
+            bool newspaper = index == 3;
+            string name = index == 1 ? HwpStylePresetStore.GuardianStyleName
+                : newspaper ? HwpStylePresetStore.NewspaperStyleName : HwpStylePresetStore.ScreeningStyleName;
             if (!hwpStylePresetStore.IsBuiltIn(name)) return;
+            // 신문산업 서식 uses KoPubWorld바탕체; the others KoPub돋움체.
+            string family = newspaper ? "KoPubWorld바탕체" : "KoPub돋움체";
+            string[] aliases = newspaper ? new[] { "KoPubWorld바탕체 ", "KoPubWorldBatang ", "KoPubWorld Batang " }
+                                         : new[] { "KoPub돋움체 ", "KoPubDotum ", "KoPub Dotum " };
             using (var fonts = new System.Drawing.Text.InstalledFontCollection())
             {
-                bool hasKoPub = new[] { "Light", "Medium", "Bold" }.All(weight => fonts.Families.Any(font =>
-                    font.Name.Equals("KoPub돋움체 " + weight, StringComparison.OrdinalIgnoreCase) ||
-                    font.Name.Equals("KoPubDotum " + weight, StringComparison.OrdinalIgnoreCase) ||
-                    font.Name.Equals("KoPub Dotum " + weight, StringComparison.OrdinalIgnoreCase)));
-                RefreshHwpStylePresetCombo(hasKoPub ? name : HwpStylePresetStore.CompactStyleName);
-                if (!hasKoPub) Log("KoPub돋움체가 없어 맑은 고딕 기본 서식을 선택했습니다.");
+                bool installed = new[] { "Light", "Medium", "Bold" }.All(weight => fonts.Families.Any(font =>
+                    aliases.Any(alias => font.Name.Equals(alias + weight, StringComparison.OrdinalIgnoreCase))));
+                RefreshHwpStylePresetCombo(installed ? name : HwpStylePresetStore.CompactStyleName);
+                if (!installed) Log(family + "가 없어 맑은 고딕 기본 서식을 선택했습니다.");
             }
         }
 

@@ -19,6 +19,12 @@ VARIANTS = {
         "top": "3969", "side": "5102", "bottom": "3685", "header": "3969", "footer": "3402",
         "accent": "#22669E", "cover_blank_lines": 5, "title_size": "3200",
     },
+    # 산업 실태조사 보고서형: A4, 좌우 20mm·위 10mm·아래 15mm, 머리말 20mm·꼬리말 15mm, 파란 장 제목.
+    "newspaper": {
+        "labels": ("실태조사 보고서", "Ⅰ. 조사 결과", "Ⅱ. 검토 요약"),
+        "top": "2834", "side": "5669", "bottom": "4252", "header": "5669", "footer": "4252",
+        "accent": "#2F83C6", "cover_blank_lines": 4, "title_size": "3200",
+    },
 }
 
 

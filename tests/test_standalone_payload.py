@@ -37,6 +37,7 @@ class StandalonePayloadTests(unittest.TestCase):
                      "report_automation_addin/dev/ReportAutomationAddin_dev.xlam",
                      "templates/report_template_basic.hwpx", "templates/report_template_basic.pptx",
                      "templates/report_template_guardian.hwpx", "templates/report_template_screening.hwpx",
+                     "templates/report_template_newspaper.hwpx",
                      "templates/chart_review_template_basic.pptx", "templates/chart_style_deep_blue.pptx",
                      "templates/chart_style_sky_blue.pptx", "templates/chart_preview_deep_blue.png",
                      "templates/chart_preview_sky_blue.png", "docs/template_authoring_guide.md",
@@ -108,7 +109,8 @@ class StandalonePayloadTests(unittest.TestCase):
                          "LICENSE", "THIRD_PARTY_NOTICES.md", "licenses/openpyxl-1.0-LICENCE.rst",
                          "licenses/et_xmlfile-1.0-LICENCE.python", "templates/report_template_basic.pptx",
                          "templates/report_template_basic.hwpx", "templates/report_template_guardian.hwpx",
-                         "templates/report_template_screening.hwpx", "templates/chart_style_deep_blue.pptx",
+                         "templates/report_template_screening.hwpx", "templates/report_template_newspaper.hwpx",
+                         "templates/chart_style_deep_blue.pptx",
                          "templates/chart_style_sky_blue.pptx",
                          "report_automation_addin/dev/ReportAutomationAddin_dev.xlam", "docs/template_authoring_guide.md",
                          "report_automation_engine/config/default_hwp_style_config.json"]:
@@ -153,7 +155,7 @@ class StandalonePayloadTests(unittest.TestCase):
     def test_hwpx_factory_copies_an_editable_document(self):
         from report_automation_engine.template_factory import create_template
         from report_automation_engine.template_inspector import inspect_template
-        for variant, side_margin in (("basic", None), ("guardian", "4252"), ("screening", "5102")):
+        for variant, side_margin in (("basic", None), ("guardian", "4252"), ("screening", "5102"), ("newspaper", "5669")):
             with self.subTest(variant=variant):
                 source = SCRIPT.parents[2] / f"templates/report_template_{variant}.hwpx"
                 output = create_template("hwpx_report", self.root / f"편집용 양식 {variant}.hwpx", variant=variant)

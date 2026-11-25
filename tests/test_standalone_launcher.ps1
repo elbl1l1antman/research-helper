@@ -36,7 +36,7 @@ try {
     $inspection = Join-Path $directory 'template inspection.json'
     & $result.python -E -s -X utf8 (Join-Path $engineDirectory 'template_inspector.py') --template $template --output $inspection
     if ($LASTEXITCODE -ne 0 -or (Get-Content -LiteralPath $inspection -Raw -Encoding UTF8 | ConvertFrom-Json).status -notin @('ready', 'usable_with_warnings')) { throw 'Bundled template inspection failed.' }
-    foreach ($variant in @('basic', 'guardian', 'screening')) {
+    foreach ($variant in @('basic', 'guardian', 'screening', 'newspaper')) {
         $hwpTemplate = Join-Path $directory "$variant report.hwpx"
         & $result.python -E -s -X utf8 (Join-Path $engineDirectory 'template_factory.py') --type hwpx_report --variant $variant --output $hwpTemplate
         $bundledTemplate = Join-Path $result.bundle_root "templates/report_template_$variant.hwpx"

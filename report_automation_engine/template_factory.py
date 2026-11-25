@@ -17,7 +17,7 @@ from pathlib import Path
 from typing import List
 
 
-HWPX_VARIANTS = ("basic", "guardian", "screening")
+HWPX_VARIANTS = ("basic", "guardian", "screening", "newspaper")
 
 
 def create_template(template_type: str, output: str | Path, variant: str = "basic") -> Path:
