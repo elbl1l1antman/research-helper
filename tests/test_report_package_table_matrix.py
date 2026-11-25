@@ -1,4 +1,3 @@
-import os
 from pathlib import Path
 
 import openpyxl
@@ -113,10 +112,12 @@ def test_number_recovery_does_not_replace_a_user_edited_narrative(tmp_path):
     assert any(q["category"] == "no_numeric_points" for q in edited["qa"])
 
 
-def test_package_resolves_workbook_path_before_export(tmp_path):
+def test_package_resolves_workbook_path_before_export(tmp_path, monkeypatch):
     excel = tmp_path / "relative_source.xlsx"
     make_cell_contract_workbook(excel)
-    package = build_report_package(Path(os.path.relpath(excel)))
+    # Work from tmp_path so the relative path never crosses drives (repo on D:, temp on C:).
+    monkeypatch.chdir(tmp_path)
+    package = build_report_package(Path(excel.name))
     assert Path(package["meta"]["source_workbook"]) == excel.resolve()
 
 

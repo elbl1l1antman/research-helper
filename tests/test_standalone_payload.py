@@ -38,7 +38,8 @@ class StandalonePayloadTests(unittest.TestCase):
                      "templates/report_template_basic.hwpx", "templates/report_template_basic.pptx",
                      "templates/report_template_guardian.hwpx", "templates/report_template_screening.hwpx",
                      "templates/chart_review_template_basic.pptx", "templates/chart_style_deep_blue.pptx",
-                     "templates/chart_style_sky_blue.pptx", "docs/template_authoring_guide.md",
+                     "templates/chart_style_sky_blue.pptx", "templates/chart_preview_deep_blue.png",
+                     "templates/chart_preview_sky_blue.png", "docs/template_authoring_guide.md",
                      "report_automation_launcher/licenses/openpyxl-1.0-LICENCE.rst",
                      "report_automation_launcher/licenses/et_xmlfile-1.0-LICENCE.rst",
                      "report_automation_launcher/licenses/et_xmlfile-1.0-LICENCE.python"]:
