@@ -10,6 +10,7 @@ Current version: `0.0.57`
 - If code, docs, or packaged binaries changed, bump `VERSION` before pushing.
 - Create a matching Git tag for release points: `v0.0.1`, `v0.0.2`, ...
 - Keep deprecated assets under `old/legacy/` with a short note explaining what replaced them.
+- Released executables live in `releases/v<VERSION>/` (only `ReportAutomationLauncher.exe` and `SHA256SUMS.txt`). After building and testing on Windows, run `report_automation_launcher/scripts/publish_release.py`; it refuses to overwrite a published folder or to publish an EXE identical to an earlier release, and updates `releases/index.json` and `releases/README.md`. `--verify` checks every folder against the index (also run by `tests/test_publish_release.py`). `report_automation_launcher/bin/` remains the build output.
 - Default bump:
   - Patch: fixes, docs, small UX improvements, internal hardening.
   - Minor: new user-facing workflow or output format.
@@ -17,7 +18,7 @@ Current version: `0.0.57`
 
 ## Current Baseline
 
-`0.0.57` previews and corrects HWP table splits (boundaries, fixed widths, body/header merge, vertical banner, and landscape-section policies saved as `table_layout.json`), waits for Hancom to exit between back-to-back writer runs, and fills the user's PPTX template for report and chart review drafts. The committed launcher EXE was not rebuilt on this branch; rebuild it on Windows (see `docs/local_testing_0_0_57.md`).
+`0.0.57` adds the `releases/` folder (seeded with the 0.0.56 executable) and previews and corrects HWP table splits (boundaries, fixed widths, body/header merge, vertical banner, and landscape-section policies saved as `table_layout.json`), waits for Hancom to exit between back-to-back writer runs, and fills the user's PPTX template for report and chart review drafts. The committed launcher EXE was not rebuilt on this branch; rebuild it on Windows (see `docs/local_testing_0_0_57.md`).
 
 `0.0.56` keeps private QA inputs, outputs, and diagnostics out of Git. No executable changes.
 

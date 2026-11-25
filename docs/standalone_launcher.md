@@ -2,7 +2,7 @@
 
 ## 사용 방법
 
-배포 파일은 `report_automation_launcher/bin/ReportAutomationLauncher.exe` 하나입니다.
+배포 파일은 `ReportAutomationLauncher.exe` 하나입니다. 배포한 버전은 [`releases/`](../releases/README.md)의 버전별 폴더(`releases/v<버전>/`)에 SHA-256과 함께 보관합니다. `report_automation_launcher/bin/`은 빌드 결과 위치입니다.
 이 파일만 원하는 폴더로 옮겨 실행할 수 있습니다. 저장소, 가상환경, 별도 Python 설치,
 실행 중 패키지 다운로드는 필요하지 않습니다.
 
