@@ -82,14 +82,16 @@ def test_report_uses_template_slides_and_fills_every_placeholder(files, tmp_path
     out = write_document(source, tmp_path / "draft.pptx", "pptx_report", preflight, REPORT_TEMPLATE)
     assert REPORT_TEMPLATE.read_bytes() == before
     prs = Presentation(out)
-    # title, two sections, QA (moved to the end)
-    assert len(prs.slides) == 4
+    # title, contents, part divider, two sections, QA (moved to the end, hidden)
+    assert len(prs.slides) == 6
     assert prs.slide_width == Presentation(REPORT_TEMPLATE).slide_width
     assert "{{" not in all_text(prs)
-    title, first, second, qa = prs.slides
+    title, contents, divider, first, second, qa = prs.slides
     assert texts(title)[:3] == ["2026 인식도 조사", "테스트 사업", "2026-11-24 10:00:00"]
-    assert "Q1 문항" in texts(first)
-    assert "Q1 첫 문장.\nQ1 둘째 문장." in texts(first)
+    assert "01 조사 결과" in texts(contents) and "조사 결과" in texts(divider)
+    assert "Q1 문항" in texts(first) and "01" in texts(first)
+    assert "Q1 첫 문장." in texts(first) and "Q1 둘째 문장." in texts(first)  # key message + narrative
+    assert qa._element.get("show") == "0"
     assert any("Sheet1!A1:C3" in text and "단위: %" in text for text in texts(first))
     assert "BASE 확인" in all_text(Presentation(out)) and "BASE 확인" in "\n".join(texts(qa))
     report = json.loads((tmp_path / "draft_pptx_writer_report.json").read_text(encoding="utf-8"))
@@ -99,7 +101,7 @@ def test_report_uses_template_slides_and_fills_every_placeholder(files, tmp_path
 def test_matrix_table_is_native_with_merges_and_chart_is_editable(files, tmp_path):
     source, preflight = files()
     prs = Presentation(write_document(source, tmp_path / "draft.pptx", "pptx_report", preflight, REPORT_TEMPLATE))
-    first = prs.slides[1]
+    first = prs.slides[3]  # after title, contents and part divider
     table = next(shape for shape in first.shapes if shape.has_table).table
     assert table.cell(0, 1).text == "응답" and table.cell(0, 1).is_merge_origin
     assert table.cell(2, 1).text == "60.0"
@@ -107,7 +109,7 @@ def test_matrix_table_is_native_with_merges_and_chart_is_editable(files, tmp_pat
     assert chart_shape.chart.chart_type == XL_CHART_TYPE.PIE  # one series, two categories
     # Skeleton template boxes are thin; blocks get a usable area.
     assert chart_shape.height >= Inches(2)
-    second = prs.slides[2]
+    second = prs.slides[4]
     chart = next(shape for shape in second.shapes if shape.has_chart).chart
     assert chart.chart_type == XL_CHART_TYPE.COLUMN_CLUSTERED
     assert [series.name for series in chart.series] == ["남", "여"]
@@ -122,7 +124,7 @@ def test_single_series_highlights_the_largest_value(files, tmp_path):
                        for i, (c, v) in enumerate([("A", 5), ("B", 50), ("C", 20)], 1)]
     source, preflight = files(value)
     prs = Presentation(write_document(source, tmp_path / "d.pptx", "pptx_report", preflight, REPORT_TEMPLATE))
-    chart = next(shape for shape in prs.slides[1].shapes if shape.has_chart).chart
+    chart = next(shape for shape in prs.slides[3].shapes if shape.has_chart).chart
     assert chart.series[0].points[1].format.fill.fore_color.rgb == ACCENT
 
 

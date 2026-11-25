@@ -10,7 +10,25 @@ Template rules (see ``templates/report_template_basic.pptx``):
 * ``{{TABLE}}`` and ``{{CHART}}`` shapes are replaced by native, editable
   PowerPoint tables and charts in the same box. Text tokens keep the
   formatting of the run that held the token.
-* ``{{QA_SUMMARY}}`` lists package QA items; that slide is moved to the end.
+* ``{{QA_SUMMARY}}`` lists package QA items; that slide is moved to the end,
+  split over several slides when long, and **hidden** (internal review only).
+
+Report structure (all optional, a template without these slides keeps the
+flat "one slide per section" draft):
+
+* Sections are grouped into **parts**. ``--plan plan.json`` gives
+  ``{"parts": [{"title": "...", "table_keys": ["T0001", ...]}]}``; without it
+  every section goes into one part titled ``조사 결과``.
+* A **divider slide** (shape ``RA_DIVIDER_SLIDE`` or ``{{PART_NUMBER}}`` /
+  ``{{PART_ITEMS}}``) is copied before each part. ``{{PART_ITEMS}}`` lists the
+  part's section titles.
+* A **TOC slide** (``{{TOC}}``) lists the parts.
+* The repeat slide may use frame tokens: ``{{PART_TITLE}}``, ``{{PART_NUMBER}}``,
+  ``{{SECTION_NUMBER}}`` (01, 02 … restarting in each part), ``{{KEY_MESSAGE}}``
+  (first narrative line; ``{{NARRATIVE}}`` then holds the rest) and ``{{UNIT}}``.
+* A table taller than its box continues on extra copies of the repeat slide
+  titled ``(계속)``; header rows repeat, cuts prefer banner-group boundaries,
+  and a cut banner label is shown again on the next page.
 
 The template is never modified. Output is written to a temporary file and
 moved into place only after a successful save; on failure the partial file is
@@ -54,6 +72,11 @@ TOKEN = re.compile(r"\{\{([A-Z_]+)\}\}")
 BLOCK_TOKENS = ("TABLE", "CHART")
 REPORT_REPEAT_TOKENS = {"SECTION_TITLE", "NARRATIVE", "TABLE"}
 CHART_REPEAT_TOKENS = {"CHART_TITLE", "CHART_NOTE"}
+DIVIDER_TOKENS = {"DIVIDER_SLIDE", "PART_NUMBER", "PART_ITEMS"}
+DEFAULT_PART_TITLE = "조사 결과"
+CONTINUED = " (계속)"
+QA_LINES_PER_SLIDE = 12
+QA_MAX_LINES = 120
 TEMPLATE_DIR = Path(__file__).resolve().parents[1] / "templates"
 DEFAULT_TEMPLATES = {"pptx_report": "report_template_basic.pptx", "chart_review": "chart_review_template_basic.pptx"}
 MIN_BLOCK_HEIGHT = Inches(1.2)
@@ -77,6 +100,7 @@ def write_document(
     template_path: str | Path | None = None,
     *,
     chart_style_path: str | Path | None = None,
+    plan_path: str | Path | None = None,
 ) -> Path:
     output = Path(output_path).resolve()
     package_file = Path(package_path).resolve()
@@ -99,8 +123,12 @@ def write_document(
     if document_type not in DEFAULT_TEMPLATES:
         raise DocumentWriterError(f"unsupported document type: {document_type}")
     validate_package(package)
+    plan = load_json(plan_path) if plan_path else {}
+    if plan and not isinstance(plan.get("parts"), list):
+        raise DocumentWriterError("plan JSON 형식이 올바르지 않습니다: parts 목록이 필요합니다.")
     template = resolve_template(document_type, template_path)
     report = new_report(package_file, template, output, document_type, preflight)
+    report["plan_path"] = str(Path(plan_path).resolve()) if plan_path else ""
     report_file = output.with_name(output.stem + "_pptx_writer_report.json")
     error_file = output.with_name(output.name + ".error.txt")
     output.parent.mkdir(parents=True, exist_ok=True)
@@ -108,9 +136,9 @@ def write_document(
     try:
         prs = Presentation(str(template)) if template else Presentation()
         if template:
-            build_from_template(prs, package, document_type, report)
+            build_from_template(prs, package, document_type, report, plan=plan)
         else:
-            build_without_template(prs, package, document_type, report)
+            build_without_template(prs, package, document_type, report, plan=plan)
         renumber_slide_parts(prs)
         handle, name = tempfile.mkstemp(prefix=".~" + output.stem + "_", suffix=".pptx", dir=output.parent)
         os.close(handle)
@@ -198,12 +226,17 @@ def slide_tokens(slide) -> set[str]:
 def classify_slides(prs, document_type: str) -> Dict[str, Any]:
     repeat_tokens = REPORT_REPEAT_TOKENS if document_type == "pptx_report" else CHART_REPEAT_TOKENS
     marker = "REPORT_SLIDE" if document_type == "pptx_report" else "CHART_REVIEW_SLIDE"
-    roles = {"title": [], "repeat": None, "qa": [], "other": []}
+    roles = {"title": [], "repeat": None, "divider": None, "toc": [], "qa": [], "other": []}
     for slide in prs.slides:
         tokens = slide_tokens(slide)
-        if roles["repeat"] is None and (marker in tokens or tokens & repeat_tokens
-                                        or (document_type == "chart_review" and "CHART" in tokens and "TABLE" not in tokens)):
+        if document_type == "pptx_report" and roles["divider"] is None and tokens & DIVIDER_TOKENS \
+                and not tokens & REPORT_REPEAT_TOKENS:
+            roles["divider"] = slide
+        elif roles["repeat"] is None and (marker in tokens or tokens & repeat_tokens
+                                          or (document_type == "chart_review" and "CHART" in tokens and "TABLE" not in tokens)):
             roles["repeat"] = slide
+        elif document_type == "pptx_report" and "TOC" in tokens:
+            roles["toc"].append(slide)
         elif "QA_SUMMARY" in tokens:
             roles["qa"].append(slide)
         elif tokens & {"REPORT_TITLE", "PROJECT_NAME", "GENERATED_AT", "TITLE_SLIDE"}:
@@ -213,45 +246,122 @@ def classify_slides(prs, document_type: str) -> Dict[str, Any]:
     return roles
 
 
-def build_from_template(prs, package: Dict[str, Any], document_type: str, report: Dict[str, Any]) -> None:
+def build_from_template(prs, package: Dict[str, Any], document_type: str, report: Dict[str, Any], plan=None) -> None:
     roles = classify_slides(prs, document_type)
     if roles["repeat"] is None:
         report["warnings"].append("템플릿에서 반복 슬라이드(RA_REPORT_SLIDE 또는 {{SECTION_TITLE}}/{{CHART_TITLE}})를 찾지 못해 기본 배치로 만들었습니다.")
         for slide in list(prs.slides):
             delete_slide(prs, slide)
-        build_without_template(prs, package, document_type, report, keep_size=True)
+        build_without_template(prs, package, document_type, report, keep_size=True, plan=plan)
         return
+    items = list(iter_items(package, document_type))
+    parts = plan_parts(items, plan, report) if document_type == "pptx_report" else [
+        {"number": "01", "title": "", "items": items}]
     values = report_values(package)
+    values["TOC"] = "\n".join(f"{part['number']} {part['title']}" for part in parts)
     for slide in roles["title"]:
         fill_slide(slide, values, report, context="제목")
-    for slide in roles["qa"]:
-        fill_slide(slide, values, report, context="QA")
+    for slide in roles["toc"]:
+        fill_slide(slide, values, report, context="목차")
 
-    template_slide = roles["repeat"]
-    position = slide_index(prs, template_slide)
-    items = list(iter_items(package, document_type))
+    template_slide, divider = roles["repeat"], roles["divider"]
+    cursor = [slide_index(prs, template_slide) + 1]
+
+    def new_slide(source):
+        slide = duplicate_slide(prs, source, report)
+        move_slide(prs, slide, cursor[0])
+        cursor[0] += 1
+        return slide
+
     if not items:
         report["warnings"].append("생성할 문항/차트가 없습니다. preflight_report.json을 확인하세요.")
     failures = []
-    for offset, item in enumerate(items):
-        slide = duplicate_slide(prs, template_slide, report)
-        move_slide(prs, slide, position + offset + 1)
-        try:
-            fill_item_slide(slide, package, item, document_type, report)
-            report["sections_written"] += 1
-        except Exception as exc:  # one bad section must not stop the draft
-            failures.append(f"{item['table_key'] or '(table_key 없음)'}: {exc}")
-            report["failed_sections"].append({"table_key": item["table_key"], "error": str(exc)})
-            clear_slide(slide)
-            add_text(slide, f"검토 필요: {item['title'] or item['table_key']}", Inches(0.6), Inches(0.4), Inches(11), Inches(0.6), 22, BLUE, bold=True)
-            add_text(slide, str(exc), Inches(0.6), Inches(1.3), Inches(11), Inches(4), 14, GRAY)
+    for part in parts:
+        if divider is not None and part["items"]:
+            slide = new_slide(divider)
+            fill_slide(slide, dict(values, **part_values(part)), report, context=f"PART {part['number']}")
+        for number, item in enumerate(part["items"], 1):
+            slide = new_slide(template_slide)
+            item = dict(item, part=part, number=f"{number:02d}")
+            try:
+                fill_item_slide(slide, package, item, document_type, report, more=lambda: new_slide(template_slide))
+                report["sections_written"] += 1
+            except Exception as exc:  # one bad section must not stop the draft
+                failures.append(f"{item['table_key'] or '(table_key 없음)'}: {exc}")
+                report["failed_sections"].append({"table_key": item["table_key"], "error": str(exc)})
+                clear_slide(slide)
+                add_text(slide, f"검토 필요: {item['title'] or item['table_key']}", Inches(0.6), Inches(0.4), Inches(11), Inches(0.6), 22, BLUE, bold=True)
+                add_text(slide, str(exc), Inches(0.6), Inches(1.3), Inches(11), Inches(4), 14, GRAY)
     delete_slide(prs, template_slide)
+    if divider is not None:
+        delete_slide(prs, divider)
     for slide in roles["qa"]:
         move_slide(prs, slide, len(prs.slides._sldIdLst) - 1)
+        for page in paginate_qa(prs, slide, package, values, report):
+            hide_slide(page)
+    if roles["qa"]:
+        report["qa_slides_hidden"] = True
     if failures:
         slide = prs.slides.add_slide(blank_layout(prs))
         add_text(slide, "검토 필요", Inches(0.6), Inches(0.4), Inches(11), Inches(0.6), 22, BLUE, bold=True)
         add_text(slide, "\n".join(failures), Inches(0.6), Inches(1.3), Inches(11.5), Inches(5.4), 13, RGBColor(0, 0, 0))
+
+
+def plan_parts(items: List[Dict[str, Any]], plan: Dict[str, Any] | None, report: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """Group section items into numbered parts; every section appears exactly once."""
+    by_key = {item["table_key"]: item for item in items}
+    parts, used = [], set()
+    for raw in (plan or {}).get("parts") or []:
+        title = str(raw.get("title") or "").strip() or f"PART {len(parts) + 1}"
+        chosen = []
+        for key in raw.get("table_keys") or []:
+            key = str(key)
+            if key not in by_key:
+                report["warnings"].append(f"구성 계획의 {key} 문항을 package에서 찾지 못했습니다.")
+            elif key in used:
+                report["warnings"].append(f"구성 계획에서 {key} 문항이 두 번 이상 나와 처음 위치에만 넣었습니다.")
+            else:
+                used.add(key)
+                chosen.append(by_key[key])
+        parts.append({"title": title, "items": chosen})
+    rest = [item for item in items if item["table_key"] not in used]
+    if rest and parts:
+        report["warnings"].append("구성 계획에 없는 문항을 마지막 PART에 넣었습니다: " + ", ".join(i["table_key"] for i in rest))
+        parts[-1]["items"].extend(rest)
+    elif rest or not parts:
+        parts.append({"title": DEFAULT_PART_TITLE, "items": rest})
+    for number, part in enumerate(parts, 1):
+        part["number"] = f"{number:02d}"
+    report["structure"] = {"parts": [{"number": part["number"], "title": part["title"],
+                                      "table_keys": [item["table_key"] for item in part["items"]]} for part in parts]}
+    return parts
+
+
+def part_values(part: Dict[str, Any]) -> Dict[str, str]:
+    return {"PART_NUMBER": part.get("number", ""), "PART_TITLE": part.get("title", ""),
+            "PART_ITEMS": "\n".join(item["title"] for item in part.get("items", []))}
+
+
+def paginate_qa(prs, slide, package, values, report) -> List[Any]:
+    """Fill the QA slide; long QA lists continue on copies placed right after it."""
+    lines = qa_lines(package)
+    pages = [lines[i:i + QA_LINES_PER_SLIDE] for i in range(0, len(lines), QA_LINES_PER_SLIDE)] or [["QA 항목이 없습니다."]]
+    source = duplicate_slide(prs, slide, report) if len(pages) > 1 else None
+    result = []
+    for index, page in enumerate(pages):
+        target = slide
+        if index:
+            target = duplicate_slide(prs, source, report)
+            move_slide(prs, target, slide_index(prs, result[-1]) + 1)
+        fill_slide(target, dict(values, QA_SUMMARY="\n".join(page)), report, context="QA")
+        result.append(target)
+    if source is not None:
+        delete_slide(prs, source)
+    return result
+
+
+def hide_slide(slide) -> None:
+    slide._element.set("show", "0")
 
 
 def iter_items(package: Dict[str, Any], document_type: str) -> Iterable[Dict[str, Any]]:
@@ -266,10 +376,7 @@ def iter_items(package: Dict[str, Any], document_type: str) -> Iterable[Dict[str
 
 def report_values(package: Dict[str, Any]) -> Dict[str, str]:
     meta = package.get("meta", {})
-    qa = package.get("qa", [])
-    lines = [f"{q.get('severity', '')}: [{q.get('table_key', '')}] {q.get('message', '')}".replace("[] ", "") for q in qa[:20]]
-    if len(qa) > 20:
-        lines.append(f"... 외 {len(qa) - 20}건")
+    lines = qa_lines(package)
     return {
         "REPORT_TITLE": str(meta.get("report_title") or meta.get("source_file_name") or "보고서 초안"),
         "PROJECT_NAME": str(meta.get("project_name") or ""),
@@ -278,20 +385,78 @@ def report_values(package: Dict[str, Any]) -> Dict[str, str]:
     }
 
 
-def fill_item_slide(slide, package, item, document_type, report) -> None:
+def qa_lines(package: Dict[str, Any]) -> List[str]:
+    qa = package.get("qa", [])
+    lines = [f"{q.get('severity', '')}: [{q.get('table_key', '')}] {q.get('message', '')}".replace("[] ", "") for q in qa[:QA_MAX_LINES]]
+    if len(qa) > QA_MAX_LINES:
+        lines.append(f"... 외 {len(qa) - QA_MAX_LINES}건")
+    return lines
+
+
+def fill_item_slide(slide, package, item, document_type, report, more=None) -> None:
+    """Fill one repeat slide; ``more()`` returns a fresh repeat slide for table continuation pages."""
     key = item["table_key"]
     table = find_table(package, key)
     charts = item.get("rows") if document_type == "chart_review" else chart_rows(package, key)
     values = report_values(package)
+    narrative = narrative_text(item.get("section") or {})
+    key_message, rest = split_key_message(narrative)
+    has_key = "KEY_MESSAGE" in slide_tokens(slide)
+    values.update(part_values(item.get("part") or {}))
     values.update(SECTION_TITLE=item["title"], CHART_TITLE=item["title"], SOURCE=source_text(table, key),
-                  NARRATIVE=narrative_text(item.get("section") or {}), CHART_NOTE=chart_note(charts) if charts else "차트 데이터 없음")
+                  SECTION_NUMBER=item.get("number", ""), KEY_MESSAGE=key_message, UNIT=unit_text(table),
+                  NARRATIVE=rest if has_key else narrative, CHART_NOTE=chart_note(charts) if charts else "차트 데이터 없음")
     boxes = block_boxes(slide, report, key)
     fill_slide(slide, values, report, context=key, placed=set(boxes))
     layout_blocks(slide, boxes)
-    if "TABLE" in boxes:
-        add_table(slide, table, boxes["TABLE"], report, key)
+    if not key_message:
+        remove_named(slide, "RA_KEY_MARK")
     if "CHART" in boxes:
         add_chart(slide, charts, boxes["CHART"], report, key)
+    if "TABLE" not in boxes:
+        return
+    pages = table_pages(table, boxes["TABLE"], continuation_box(boxes)) if more else None
+    if not pages or len(pages) == 1:
+        add_table(slide, table, boxes["TABLE"], report, key)
+        return
+    report["warnings"].append(f"{key}: 표가 길어 {len(pages)}쪽으로 나눠 넣었습니다. 머리글은 쪽마다 반복합니다.")
+    add_table(slide, pages[0], boxes["TABLE"], report, key)
+    continued = dict(values, SECTION_TITLE=item["title"] + CONTINUED, CHART_TITLE=item["title"] + CONTINUED,
+                     KEY_MESSAGE="", NARRATIVE="", CHART_NOTE="")
+    for page in pages[1:]:
+        extra = more()
+        extra_boxes = block_boxes(extra, report, key)
+        fill_slide(extra, continued, report, context=key, placed=set(extra_boxes))
+        layout_blocks(extra, extra_boxes)
+        remove_named(extra, "RA_KEY_MARK")
+        add_table(extra, page, continuation_box(extra_boxes), report, key)
+
+
+def remove_named(slide, name: str) -> None:
+    for shape in list(slide.shapes):
+        if str(shape.name or "") == name:
+            shape._element.getparent().remove(shape._element)
+
+
+def split_key_message(narrative: str) -> tuple[str, str]:
+    lines = [line for line in narrative.split("\n") if line.strip()]
+    return (lines[0], "\n".join(lines[1:])) if lines else ("", "")
+
+
+def unit_text(table: Dict[str, Any] | None) -> str:
+    if not table:
+        return ""
+    unit = resolve_table_metadata(table)["unit"] if table.get("matrix") else str(table.get("unit") or "")
+    return f"(단위: {unit})" if unit else ""
+
+
+def continuation_box(boxes: Dict[str, Dict[str, Any]]) -> Dict[str, Any]:
+    """Continuation pages have no chart: the table takes the TABLE and CHART area together."""
+    chosen = [boxes[key] for key in BLOCK_TOKENS if key in boxes]
+    left, top = min(b["left"] for b in chosen), min(b["top"] for b in chosen)
+    right = max(b["left"] + b["width"] for b in chosen)
+    bottom = max(b["top"] + b["height"] for b in chosen)
+    return {"left": left, "top": top, "width": right - left, "height": bottom - top}
 
 
 # ------------------------------------------------------------------- placeholders
@@ -444,6 +609,8 @@ def table_grid(table: Dict[str, Any] | None):
     """Return (rows of text, merges, header row count) for a package table."""
     if not table:
         return [], [], 0
+    if "_grid" in table:  # one page of a split table (see table_pages)
+        return table["_grid"]
     matrix = table.get("matrix")
     if matrix:
         rows = [[str(cell.get("display_text") or "") if not cell.get("covered_by") else "" for cell in row] for row in matrix]
@@ -468,10 +635,11 @@ def add_table(slide, table, box, report, key) -> None:
         report["warnings"].append(f"{key}: 삽입표 데이터가 없습니다.")
         return
     count_rows, count_cols = len(rows), max(len(row) for row in rows)
-    if count_cols > 12 or count_rows > 30:
+    paged = "_grid" in table
+    if count_cols > 12 or (count_rows > 30 and not paged):
         report["warnings"].append(f"{key}: 표가 {count_rows}행 x {count_cols}열이라 슬라이드를 넘을 수 있습니다. 표를 나누거나 글자 크기를 확인하세요.")
-    size = 11 if count_rows <= 10 and count_cols <= 6 else 9 if count_rows <= 18 and count_cols <= 9 else 7
-    row_height = Emu(int(Pt(size) * 2.1))
+    size = table.get("_size") or table_font_size(count_rows, count_cols)
+    row_height = table_row_height(size)
     height = min(box["height"], row_height * count_rows)
     shape = slide.shapes.add_table(count_rows, count_cols, box["left"], box["top"], box["width"], height)
     shape.name = "RA_TABLE"
@@ -496,6 +664,63 @@ def add_table(slide, table, box, report, key) -> None:
     for r, c, rowspan, colspan in merges:
         if r + rowspan <= count_rows and c + colspan <= count_cols:
             grid.cell(r, c).merge(grid.cell(r + rowspan - 1, c + colspan - 1))
+
+
+def table_font_size(count_rows: int, count_cols: int) -> int:
+    return 11 if count_rows <= 10 and count_cols <= 6 else 9 if count_rows <= 18 and count_cols <= 9 else 7
+
+
+def table_row_height(size: int) -> Emu:
+    return Emu(int(Pt(size) * 2.1))
+
+
+def table_pages(table, first_box, next_box) -> List[Dict[str, Any]] | None:
+    """Split a table taller than its box into pages; None when it fits (or is empty)."""
+    rows, merges, header = table_grid(table)
+    if not rows:
+        return None
+    count_cols = max(len(row) for row in rows)
+    # Long tables are paged instead of shrunk: size by width, not by height.
+    size = table_font_size(min(len(rows), 18), count_cols)
+    height = table_row_height(size)
+    first = int(first_box["height"] // height)
+    if len(rows) <= first:
+        return None
+    later = int(next_box["height"] // height)
+    body = [m for m in merges if m[0] >= header and m[2] > 1]
+    cuts, start = [], header
+    while start < len(rows):
+        capacity = max(1, (first if not cuts else later) - header)
+        end = min(len(rows), start + capacity)
+        if end < len(rows):
+            # Prefer a boundary that no vertical banner crosses, within the lower half of the page.
+            clean = next((k for k in range(end, start + max(1, capacity // 2) - 1, -1)
+                          if k > start and not any(r < k < r + span for r, _, span, _ in body)), None)
+            end = clean or end
+        cuts.append((start, end))
+        start = end
+    return [{"_grid": table_chunk(rows, merges, header, a, b), "_size": size} for a, b in cuts]
+
+
+def table_chunk(rows, merges, header, start, end):
+    """Header rows plus body rows [start, end); merges clipped, a cut merge's label repeated."""
+    keep = list(range(header)) + list(range(start, end))
+    index = {r: i for i, r in enumerate(keep)}
+    out = [list(rows[r]) for r in keep]
+    clipped = []
+    for r, c, rowspan, colspan in merges:
+        if r < header:
+            if r + rowspan <= header:
+                clipped.append((r, c, rowspan, colspan))
+            continue
+        top, bottom = max(r, start), min(r + rowspan - 1, end - 1)
+        if top > bottom:
+            continue
+        if top != r:
+            out[index[top]][c] = rows[r][c]
+        if bottom > top or colspan > 1:
+            clipped.append((index[top], c, bottom - top + 1, colspan))
+    return out, clipped, header
 
 
 def chart_series(rows: List[Dict[str, Any]]):
@@ -665,7 +890,7 @@ def add_text(slide, text: str, left, top, width, height, size: int, color=RGBCol
 # ---------------------------------------------------------------- no template
 
 
-def build_without_template(prs, package, document_type, report, keep_size=False) -> None:
+def build_without_template(prs, package, document_type, report, keep_size=False, plan=None) -> None:
     """Fallback layout used when no template (or no repeat slide) is available."""
     if not keep_size:
         prs.slide_width, prs.slide_height = Inches(13.333), Inches(7.5)
@@ -675,7 +900,10 @@ def build_without_template(prs, package, document_type, report, keep_size=False)
     add_text(slide, values["REPORT_TITLE"], Inches(0.8), Inches(2.2), width - Inches(1.6), Inches(0.8), 30, BLUE, bold=True)
     add_text(slide, values["GENERATED_AT"], Inches(0.8), Inches(3.1), width - Inches(1.6), Inches(0.5), 14, GRAY)
     half = (width - Inches(1.6)) // 2
-    for item in iter_items(package, document_type):
+    items = list(iter_items(package, document_type))
+    if document_type == "pptx_report":
+        items = [item for part in plan_parts(items, plan, report) for item in part["items"]]
+    for item in items:
         key = item["table_key"]
         slide = prs.slides.add_slide(blank_layout(prs))
         try:
@@ -683,7 +911,17 @@ def build_without_template(prs, package, document_type, report, keep_size=False)
             if document_type == "pptx_report":
                 add_text(slide, narrative_text(item["section"]), Inches(0.6), Inches(1.05), width - Inches(1.2), Inches(1.3), 13)
                 top = Inches(2.5)
-                add_table(slide, find_table(package, key), {"left": Inches(0.6), "top": top, "width": half - Inches(0.15), "height": Inches(4.2)}, report, key)
+                table = find_table(package, key)
+                box = {"left": Inches(0.6), "top": top, "width": half - Inches(0.15), "height": Inches(4.2)}
+                full = {"left": Inches(0.6), "top": Inches(1.2), "width": width - Inches(1.2), "height": prs.slide_height - Inches(2.0)}
+                pages = table_pages(table, box, full) or [table]
+                add_table(slide, pages[0], box, report, key)
+                for page in pages[1:]:
+                    extra = prs.slides.add_slide(blank_layout(prs))
+                    add_text(extra, item["title"] + CONTINUED, Inches(0.6), Inches(0.35), width - Inches(1.2), Inches(0.6), 22, BLUE, bold=True)
+                    add_table(extra, page, full, report, key)
+                if len(pages) > 1:
+                    report["warnings"].append(f"{key}: 표가 길어 {len(pages)}쪽으로 나눠 넣었습니다. 머리글은 쪽마다 반복합니다.")
                 add_chart(slide, chart_rows(package, key), {"left": Inches(0.6) + half + Inches(0.15), "top": top, "width": half - Inches(0.15), "height": Inches(4.2)}, report, key)
             else:
                 add_chart(slide, item["rows"], {"left": Inches(0.6), "top": Inches(1.3), "width": half + Inches(1.2), "height": Inches(5.0)}, report, key)
@@ -693,10 +931,13 @@ def build_without_template(prs, package, document_type, report, keep_size=False)
         except Exception as exc:
             report["failed_sections"].append({"table_key": key, "error": str(exc)})
             add_text(slide, f"검토 필요: {exc}", Inches(0.6), Inches(1.3), width - Inches(1.2), Inches(2), 14, GRAY)
-    if package.get("qa"):
+    lines = qa_lines(package)
+    for start in range(0, len(lines), QA_LINES_PER_SLIDE):
         slide = prs.slides.add_slide(blank_layout(prs))
-        add_text(slide, "QA 요약", Inches(0.6), Inches(0.35), width - Inches(1.2), Inches(0.6), 22, BLUE, bold=True)
-        add_text(slide, values["QA_SUMMARY"], Inches(0.6), Inches(1.2), width - Inches(1.2), Inches(5.6), 13)
+        add_text(slide, "QA 요약 (내부 검토용, 숨김)", Inches(0.6), Inches(0.35), width - Inches(1.2), Inches(0.6), 22, BLUE, bold=True)
+        add_text(slide, "\n".join(lines[start:start + QA_LINES_PER_SLIDE]), Inches(0.6), Inches(1.2), width - Inches(1.2), Inches(5.6), 13)
+        hide_slide(slide)
+        report["qa_slides_hidden"] = True
 
 
 # ---------------------------------------------------------------------- helpers
@@ -781,9 +1022,11 @@ def run_cli(argv: List[str] | None = None) -> int:
     parser.add_argument("--chart-style")
     parser.add_argument("--type", required=True, choices=["pptx_report", "chart_review"])
     parser.add_argument("--output", required=True)
+    parser.add_argument("--plan", help='Report structure JSON: {"parts": [{"title": "...", "table_keys": ["T0001"]}]}')
     args = parser.parse_args(argv)
     try:
-        output = write_document(args.package, args.output, args.type, args.preflight, args.template, chart_style_path=args.chart_style)
+        output = write_document(args.package, args.output, args.type, args.preflight, args.template,
+                                chart_style_path=args.chart_style, plan_path=args.plan)
     except (DocumentWriterError, OSError) as exc:
         print(f"PPTX 초본 생성 실패: {exc}", file=__import__("sys").stderr)
         return 2
