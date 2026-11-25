@@ -9419,8 +9419,9 @@ namespace ReportAutomationLauncher
         {
             var array = value as object[];
             if (array != null) return array;
-            var list = value as System.Collections.ArrayList;
-            return list == null ? new object[0] : list.ToArray();
+            // CollectEdits stores cuts as int[]; JSON gives object[]/ArrayList. Accept any sequence but text.
+            var sequence = value as System.Collections.IEnumerable;
+            return sequence == null || value is string ? new object[0] : sequence.Cast<object>().ToArray();
         }
 
         private static string JsonText(Dictionary<string, object> item, string key)
@@ -9704,6 +9705,10 @@ namespace ReportAutomationLauncher
                     dialog.loading = false;
                     dialog.editedCuts.Add("Q1");
                     if (!dialog.CollectEdits()) throw new InvalidOperationException("Self-check failed: collect edits");
+                    // Redrawing the table (as after [다시 계산]) must keep the in-memory manual cut checked.
+                    dialog.ShowTable(dialog.tableList.Items[0].Tag as Dictionary<string, object>);
+                    if (!Convert.ToBoolean(dialog.columnGrid.Rows[2].Cells["cut"].Value) || Convert.ToBoolean(dialog.columnGrid.Rows[3].Cells["cut"].Value))
+                        throw new InvalidOperationException("Self-check failed: manual cut lost after redraw");
                     TableLayoutPolicies.Save(layoutPath, dialog.layout);
                     var entry = (Dictionary<string, object>)((Dictionary<string, object>)TableLayoutPolicies.Load(layoutPath)["tables"])["Q1"];
                     var cuts = AsArray(entry["cuts"]).Select(v => Convert.ToInt32(v)).ToArray();
