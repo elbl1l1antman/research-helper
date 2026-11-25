@@ -1,0 +1,16 @@
+{
+  "schema_version": "1.0",
+  "latest": "0.0.56",
+  "releases": [
+    {
+      "version": "0.0.56",
+      "file": "v0.0.56/ReportAutomationLauncher.exe",
+      "sha256": "e8acc8a78d6c82d8ae3b94e1ee0f4ad0658da75acd26ad2fa74000e7b2f38834",
+      "size_bytes": 32655872,
+      "source_commit": "15fae8ea24ca0c13958513c0cb9f7b0ed699b9fb",
+      "source_dirty": false,
+      "built_at": "2026-11-18T09:40:11+09:00",
+      "notes": "HWPX 우선 런처 작업 흐름, 표·양식 준비 상태 표시, 차트 서식 관리 분리, 진행·저장·경고·실패 구분. 0.0.55에서 빌드한 실행 파일과 동일(0.0.56은 실행 파일 변경 없음)."
+    }
+  ]
+}

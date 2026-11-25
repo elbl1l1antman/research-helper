@@ -53,7 +53,16 @@ git checkout claude/brave-keller-w1a57p
 powershell -ExecutionPolicy Bypass -File tests\test_standalone_launcher.ps1
 ```
 
-- `bin\ReportAutomationLauncher.exe`는 이 브랜치에서 다시 빌드하지 않았습니다. 로컬 빌드 결과를 커밋해 주세요.
+- `bin\ReportAutomationLauncher.exe`는 이 브랜치에서 다시 빌드하지 않았습니다. 위 검사가 모두 통과하면 배포 폴더에 올리고 커밋합니다.
+
+  ```powershell
+  .\.venv\Scripts\python.exe report_automation_launcher\scripts\publish_release.py
+  .\.venv\Scripts\python.exe report_automation_launcher\scripts\publish_release.py --verify
+  git add report_automation_launcher\bin releases
+  git commit -m "Release 0.0.57 launcher"
+  ```
+
+  `releases\v0.0.57\`가 생깁니다. 다시 빌드하지 않아 0.0.56과 같은 실행 파일이면 배포를 거부합니다.
 - `--self-check-hwp-page-setup`은 Mono에서 원래 코드도 실패합니다(컨트롤 겹침 판정). 그래서 Windows 결과로만 판단해야 합니다.
 
 ## 2. 연속 생성 안정성 (작업 3)
