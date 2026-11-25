@@ -47,7 +47,7 @@ def structured_template(tmp_path, *, divider=True, toc=True, table_height=4.0):
     text_box(repeat, "{{PART_TITLE}}", 0.2, left=10, width=3)
     text_box(repeat, "{{KEY_MESSAGE}}", 0.9, name="RA_KEY_MESSAGE")
     repeat.shapes.add_shape(1, Inches(0.3), Inches(1.0), Inches(0.1), Inches(0.1)).name = "RA_KEY_MARK"
-    text_box(repeat, "{{UNIT}}", 1.4, left=10, width=3)
+    text_box(repeat, "{{UNIT}}", 1.4, name="RA_UNIT", left=10, width=3, height=0.3)
     text_box(repeat, "{{NARRATIVE}}", 1.4, name="RA_NARRATIVE", width=9)
     table = repeat.shapes.add_shape(1, Inches(0.5), Inches(2.2), Inches(6), Inches(table_height))
     table.name = "RA_TABLE"
@@ -160,6 +160,12 @@ def test_long_table_continues_on_extra_slides_with_repeated_header(files, tmp_pa
     # continuation pages carry no key message, so its marker shape goes too
     assert any(shape.name == "RA_KEY_MARK" for shape in pages[0].shapes)
     assert not any(shape.name == "RA_KEY_MARK" for shape in pages[1].shapes)
+    # ... and the table moves up into the empty key message / narrative area, unit label above it
+    assert not any(shape.name in ("RA_KEY_MESSAGE", "RA_NARRATIVE") for shape in pages[1].shapes)
+    lifted = next(shape for shape in pages[1].shapes if shape.has_table)
+    unit = next(shape for shape in pages[1].shapes if shape.name == "RA_UNIT")
+    assert unit.top == Inches(0.9) and lifted.top == unit.top + unit.height
+    assert lifted.top < next(shape for shape in pages[0].shapes if shape.has_table).top
 
 
 def test_split_prefers_group_boundaries_and_repeats_a_cut_banner_label(files, tmp_path):

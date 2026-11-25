@@ -427,14 +427,16 @@ def fill_item_slide(slide, package, item, document_type, report, more=None) -> N
         return
     continued = dict(values, SECTION_TITLE=item["title"] + CONTINUED, CHART_TITLE=item["title"] + CONTINUED,
                      KEY_MESSAGE="", NARRATIVE="", CHART_NOTE="")
+    lift = lifted_box(slide, full)  # continuation pages have no key message: the table moves up
     if wide:
-        pages = wide_table_pages(table, full, report, key)
-        if "CHART" in boxes and chart_data:
-            report["warnings"].append(f"{key}: 표가 넓어 차트 다음 쪽에 전체 폭으로 넣었습니다.")
-        else:
+        on_first = not ("CHART" in boxes and chart_data)
+        pages = wide_table_pages(table, full if on_first else lift["box"], lift["box"], report, key)
+        if on_first:
             add_table(slide, pages.pop(0), full, report, key)
+        else:
+            report["warnings"].append(f"{key}: 표가 넓어 차트 다음 쪽에 전체 폭으로 넣었습니다.")
     else:
-        pages = table_pages(table, boxes["TABLE"], full) if more else None
+        pages = table_pages(table, boxes["TABLE"], lift["box"]) if more else None
         if not pages or len(pages) == 1:
             add_table(slide, table, boxes["TABLE"], report, key)
             return
@@ -445,8 +447,35 @@ def fill_item_slide(slide, package, item, document_type, report, more=None) -> N
         extra_boxes = block_boxes(extra, report, key)
         fill_slide(extra, continued, report, context=key, placed=set(extra_boxes))
         layout_blocks(extra, extra_boxes)
-        remove_named(extra, "RA_KEY_MARK")
-        add_table(extra, page, continuation_box(extra_boxes), report, key)
+        for name in ("RA_KEY_MARK", *lift["removed"]):
+            remove_named(extra, name)
+        for shape in extra.shapes:
+            if str(shape.name or "") == "RA_UNIT" and lift["unit_top"] is not None:
+                shape.top = lift["unit_top"]
+        add_table(extra, page, lift["box"], report, key)
+
+
+def lifted_box(slide, box) -> Dict[str, Any]:
+    """Table box for continuation pages: start where the (empty) key message / narrative began.
+
+    Shape positions are read from ``slide`` (the first page, same geometry as every copy).
+    The unit label, when it sits in that band, moves up to the band's top just above the table.
+    """
+    result = {"box": box, "removed": [], "unit_top": None}
+    if not box:
+        return result
+    band = [shape for shape in slide.shapes
+            if str(shape.name or "") in ("RA_KEY_MESSAGE", "RA_NARRATIVE") and shape.top < box["top"]]
+    if not band:
+        return result
+    top = min(shape.top for shape in band)
+    unit = next((shape for shape in slide.shapes if str(shape.name or "") == "RA_UNIT"
+                 and top <= shape.top < box["top"]), None)
+    table_top = top + unit.height if unit is not None else top
+    bottom = box["top"] + box["height"]
+    result.update(box=dict(box, top=table_top, height=bottom - table_top),
+                  removed=sorted({str(shape.name) for shape in band}), unit_top=top if unit is not None else None)
+    return result
 
 
 def remove_named(slide, name: str) -> None:
@@ -713,8 +742,11 @@ def table_is_wide(table, box) -> bool:
         return True
 
 
-def wide_table_pages(table, box, report, key) -> List[Dict[str, Any]]:
-    """Column parts for the box width (label columns repeated), each paged by rows."""
+def wide_table_pages(table, first_box, box, report, key) -> List[Dict[str, Any]]:
+    """Column parts for the box width (label columns repeated), each paged by rows.
+
+    ``first_box`` is the first page's area (same width as ``box``, maybe a different height).
+    """
     try:
         parts = plan_table_parts(table, hwpunits(box["width"]), WIDE_TABLE_PT, None, dict(LAYOUT_DEFAULTS))
     except ValueError as exc:
@@ -723,8 +755,8 @@ def wide_table_pages(table, box, report, key) -> List[Dict[str, Any]]:
     if len(parts) > 1:
         report["warnings"].append(f"{key}: 표가 슬라이드보다 넓어 열 기준 {len(parts)}개 표로 나눠 넣었습니다. 보기 열은 반복합니다.")
     pages = []
-    for part in parts:
-        paged = table_pages(part, box, box, size=WIDE_TABLE_PT if part is not table else None)
+    for index, part in enumerate(parts):
+        paged = table_pages(part, first_box if index == 0 else box, box, size=WIDE_TABLE_PT if part is not table else None)
         if paged and len(paged) > 1:
             report["warnings"].append(f"{key}: 표가 길어 {len(paged)}쪽으로 나눠 넣었습니다. 머리글은 쪽마다 반복합니다.")
         pages += paged or [{"_grid": table_grid(part), "_size": WIDE_TABLE_PT if part is not table else None,

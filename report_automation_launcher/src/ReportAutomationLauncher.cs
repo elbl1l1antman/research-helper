@@ -3214,9 +3214,14 @@ namespace ReportAutomationLauncher
                     MessageBox.Show(this, "원본 템플릿이 아닌 다른 경로에 저장하세요.", "PPT 보고서 초안");
                     return;
                 }
+                string planPath = EngineRunner.ReportPlanPathForPackage(packagePath);
+                bool usePlan = File.Exists(planPath);
+                Log(usePlan ? "PPT 구성 계획: " + planPath
+                            : "PPT 구성 계획 없음: 모든 문항을 PART 1개로 만듭니다. PART를 나누려면 다음 파일을 만드세요: " + planPath);
                 string arguments = "--package " + QuoteArg(packagePath) + " --type pptx_report --output " + QuoteArg(dialog.FileName) +
                                    (File.Exists(preflightPath) ? " --preflight " + QuoteArg(preflightPath) : "") +
-                                   (useTemplate ? " --template " + QuoteArg(template) : "");
+                                   (useTemplate ? " --template " + QuoteArg(template) : "") +
+                                   (usePlan ? " --plan " + QuoteArg(planPath) : "");
                 string report = Path.Combine(Path.GetDirectoryName(dialog.FileName), Path.GetFileNameWithoutExtension(dialog.FileName) + "_pptx_writer_report.json");
                 bool ok = await RunSurveyChartCommand(createPptReportButton, arguments,
                     "PPT 보고서 초안: " + dialog.FileName + (useTemplate ? "" : Environment.NewLine + "(PPT 템플릿을 선택하지 않아 기본 양식을 사용했습니다.)"),
@@ -7564,6 +7569,9 @@ namespace ReportAutomationLauncher
                 if (!string.Equals(first, second, StringComparison.OrdinalIgnoreCase) ||
                     !string.Equals(first, Path.Combine(directory, "설문 결과_table_layout.json"), StringComparison.OrdinalIgnoreCase))
                     throw new InvalidOperationException("Self-check failed: table layout must survive a new run of the same workbook");
+                if (!string.Equals(ReportPlanPathForPackage(Path.Combine(directory, "설문 결과_report_alpha_20261125_090000_report_package.json")),
+                        Path.Combine(directory, "설문 결과_report_plan.json"), StringComparison.OrdinalIgnoreCase))
+                    throw new InvalidOperationException("Self-check failed: report plan path");
                 TableLayoutPolicies.Save(layoutPath, TableLayoutPolicies.NewLayout());
                 arguments = BuildHwpWriterArguments("writer.py", options, "output.hwpx", "writer_report.json", "render_plan.json");
                 if (!arguments.Contains(" --table-layout " + Quote(layoutPath)))
@@ -7961,14 +7969,25 @@ namespace ReportAutomationLauncher
 
         internal static string TableLayoutPathForPackage(string packagePath)
         {
-            // Key reviewed layouts by the source workbook, not the timestamped run, so a saved
+            return WorkbookSettingPath(packagePath, "_table_layout.json");
+        }
+
+        // PPTX report structure (parts and their table keys) for document_writer.py --plan.
+        internal static string ReportPlanPathForPackage(string packagePath)
+        {
+            return WorkbookSettingPath(packagePath, "_report_plan.json");
+        }
+
+        private static string WorkbookSettingPath(string packagePath, string suffix)
+        {
+            // Key reviewed settings by the source workbook, not the timestamped run, so a saved
             // correction also applies to the next run of the same workbook in this folder.
             string stem = Path.ChangeExtension(packagePath, null);
             const string packageSuffix = "_report_package";
             if (stem.EndsWith(packageSuffix, StringComparison.Ordinal)) stem = stem.Substring(0, stem.Length - packageSuffix.Length);
             var run = System.Text.RegularExpressions.Regex.Match(Path.GetFileName(stem), @"^(.+)_report_alpha_\d{8}_\d{6}$");
             if (run.Success) stem = Path.Combine(Path.GetDirectoryName(stem) ?? "", run.Groups[1].Value);
-            return stem + "_table_layout.json";
+            return stem + suffix;
         }
 
         private static string TableLayoutArgument(LauncherOptions options)
