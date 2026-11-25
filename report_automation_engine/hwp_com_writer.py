@@ -684,9 +684,18 @@ def require_style_index(style_indexes: Dict[str, int], style_name: str) -> int:
         raise HwpWriterError("style", "Style", f"HWP 스타일 인덱스가 없습니다: {style_name}") from exc
 
 
+# Hancom may ask "본문을 [스타일] 모양으로 덮어 쓸까요? 덮어씀(Y)/취소(N)" (Yes/No box) and block COM
+# until someone answers. Preselect Yes (and OK of an OK/Cancel box) only while the style is applied.
+STYLE_PROMPT_MESSAGE_BOX_MODE = 0x10000 | 0x10
+
+
 def apply_named_style(hwp, style_index: int, report: Dict[str, Any], style_name: str) -> None:
     report["stage"] = "style"
     report["action"] = "Style"
+    try:
+        previous_mode = hwp.SetMessageBoxMode(STYLE_PROMPT_MESSAGE_BOX_MODE)
+    except Exception:
+        previous_mode = None
     try:
         params = hwp.HParameterSet.HStyle
         hwp.HAction.GetDefault("Style", params.HSet)
@@ -695,6 +704,12 @@ def apply_named_style(hwp, style_index: int, report: Dict[str, Any], style_name:
             raise RuntimeError("Style action returned False")
     except Exception as exc:
         raise HwpWriterError("style", "Style", f"HWP 스타일 적용 실패: {style_name}: {exc}") from exc
+    finally:
+        if previous_mode is not None:
+            try:
+                hwp.SetMessageBoxMode(previous_mode)
+            except Exception:
+                pass
     counts = report.setdefault("style_application_counts", {})
     counts[style_name] = int(counts.get(style_name, 0)) + 1
 

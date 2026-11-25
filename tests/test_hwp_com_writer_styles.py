@@ -429,6 +429,30 @@ class HwpComWriterStyleTests(unittest.TestCase):
         self.assertEqual(hwp.events, [("default", "Style"), ("style", 11)])
         self.assertEqual(report["style_application_counts"], {"보고서 본문2": 1})
 
+    def test_apply_named_style_answers_overwrite_prompt_then_restores_mode(self):
+        # Hancom asks "본문을 [스타일] 모양으로 덮어 쓸까요? 덮어씀(Y)/취소(N)" and stalls COM until answered.
+        class PromptingHwp(FakeHwp):
+            def __init__(self, fail=False):
+                super().__init__()
+                self.modes, self.fail = [], fail
+
+            def SetMessageBoxMode(self, mode):
+                self.modes.append(mode)
+                return 0x1
+
+        for fail in (False, True):
+            hwp = PromptingHwp(fail)
+            if fail:
+                hwp.HAction.Execute = lambda *_: False
+            with self.subTest(fail=fail):
+                if fail:
+                    with self.assertRaises(Exception):
+                        apply_named_style(hwp, 11, {"style_application_counts": {}}, "보고서 본문1")
+                else:
+                    apply_named_style(hwp, 11, {"style_application_counts": {}}, "보고서 본문1")
+                self.assertTrue(hwp.modes[0] & 0x10000, "Yes of a Yes/No box must be preselected")
+                self.assertEqual(hwp.modes[-1], 0x1, "previous message box mode must be restored")
+
     def test_narrative_applies_body_styles_and_removes_literal_bullet(self):
         hwp = FakeHwp()
         report = {"style_application_counts": {}}
