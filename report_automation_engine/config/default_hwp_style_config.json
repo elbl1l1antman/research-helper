@@ -63,7 +63,7 @@
     "inline": false,
     "value_decimals": -1,
     "value_grouping": true,
-    "sample_grouping": false
+    "sample_grouping": true
   },
   "table_border": {
     "inner_width_mm": 0.12,

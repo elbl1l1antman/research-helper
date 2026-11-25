@@ -14,10 +14,24 @@ _ABSOLUTE_UNITS = r"명|인|개|건|회|원|천원|만원|백만원|천만원|�
 _NUMBER = re.compile(r"([+-]?(?:[0-9]+|[0-9]{1,3}(?:,[0-9]{3})+)(?:\.[0-9]+)?)")
 
 
+def is_count_header(labels):
+    """True for a sample-count column (사례수, 표본수, n …) that is not a percentage."""
+    labels = [re.sub(r"\s+", "", label) for label in labels if label]
+    return bool(labels) and not any("%" in label or "비율" in label for label in labels) and bool(_COUNT.fullmatch(labels[-1]))
+
+
+def group_digits(text):
+    """1234567.25 -> 1,234,567.25 (decimals kept as written)."""
+    whole, dot, fraction = text.partition(".")
+    sign = whole[:1] if whole[:1] in "+-" else ""
+    return f"{sign}{int(whole.lstrip('+-').replace(',', '') or 0):,}{dot}{fraction}"
+
+
 def format_table_display(table, options):
     decimals = options.get("value_decimals", -1)
-    group_cases = options.get("sample_grouping", False)
-    if decimals < 0 and not group_cases:
+    group_cases = options.get("sample_grouping", True)
+    group_values = options.get("value_grouping", True)
+    if decimals < 0 and not group_cases and not group_values:
         return table
     headers, _ = table_head_and_total(table)
     cols = table["col_count"]
@@ -27,7 +41,7 @@ def format_table_display(table, options):
                   if c.get("role") in {"header", "banner_horizontal"} and c["col"] <= col < c["col"] + c.get("colspan", 1)]
         if not labels:
             continue
-        if not any("%" in label or "비율" in label for label in labels) and _COUNT.fullmatch(labels[-1]):
+        if is_count_header(labels):
             measures[col] = "count"
         elif not any("%" in label or "비율" in label or "점" in label for label in labels):
             leaf = labels[-1]
@@ -48,7 +62,9 @@ def format_table_display(table, options):
                     text = format(number, ",.0f")
                 elif mode == "value" and decimals >= 0:
                     text = format(number.quantize(Decimal(1).scaleb(-decimals), rounding=ROUND_HALF_UP),
-                                  f"{',' if options.get('value_grouping', True) else ''}.{decimals}f")
+                                  f"{',' if group_values else ''}.{decimals}f")
+                elif mode == "value" and group_values:
+                    text = group_digits(match[1])
                 else:
                     text = None
                 if text is not None:

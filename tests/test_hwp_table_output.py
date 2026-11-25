@@ -38,3 +38,30 @@ def test_guard_column_preserves_data_merge_and_uses_existing_width_budget():
 def test_caption_and_display_config_accepts_existing_presets():
     old = {key: value for key, value in DEFAULT_HWP_STYLE_CONFIG.items() if key != "table_output"}
     assert validate_hwp_style_config(old)["table_output"]["number_pattern"] == "<표 {number}>"
+
+
+def test_default_output_groups_thousands_for_counts_and_values():
+    from report_automation_engine.hwp_style_config import TABLE_OUTPUT_DEFAULTS
+    headers = [cell(1, i, name, "banner_horizontal") for i, name in
+               enumerate(["사례수", "평균(백만원)", "평균(%)", "매출액(천원)"], 1)]
+    values = [cell(2, i, value) for i, value in enumerate(["(1449)", "1234.55", "70.90", "1234567"], 1)]
+    output = format_table_display({"matrix": [headers, values], "col_count": 4}, TABLE_OUTPUT_DEFAULTS)
+    # Decimals are kept as written when no fixed decimal count is chosen.
+    assert [c["display_text"] for c in output["matrix"][1]] == ["(1,449)", "1,234.55", "70.90", "1,234,567"]
+
+
+def test_value_grouping_can_be_turned_off_without_fixed_decimals():
+    headers = [cell(1, 1, "사례수", "banner_horizontal"), cell(1, 2, "평균(백만원)", "banner_horizontal")]
+    values = [cell(2, 1, "(1449)"), cell(2, 2, "1234.5")]
+    output = format_table_display({"matrix": [headers, values], "col_count": 2},
+                                  {"value_decimals": -1, "value_grouping": False, "sample_grouping": False})
+    assert [c["display_text"] for c in output["matrix"][1]] == ["(1449)", "1234.5"]
+
+
+def test_table_number_restarts_only_for_continued_parts():
+    from report_automation_engine.hwp_com_writer import table_number_reset
+    report = {}
+    assert table_number_reset(report, {"part_index": 1, "part_count": 2}) is None   # natural auto number 1
+    assert table_number_reset(report, {"part_index": 2, "part_count": 2}) == 1      # repeat 1 on the split part
+    assert table_number_reset(report, {}) is None                                   # next table continues at 2
+    assert report["table_caption_count"] == 2

@@ -7,9 +7,15 @@ import unicodedata
 try:
     from .report_table_matrix import resolve_table_metadata
     from .hwp_style_config import margin_units, style_name_for_cell_role
+    from .hwp_table_output import is_count_header
 except ImportError:
     from report_table_matrix import resolve_table_metadata
     from hwp_style_config import margin_units, style_name_for_cell_role
+    from hwp_table_output import is_count_header
+
+# Sample-count columns are sized to their text with no side margins; this small slack
+# absorbs the difference between the width estimate and Hancom's glyph widths.
+TIGHT_COLUMN_SLACK = 200
 
 
 def _text_units(text):
@@ -159,7 +165,8 @@ def analyze_table_columns(table, font_size_pt, style_config=None, layout=None):
     Returns ``count``, ``header_rows``, ``prefix`` (repeated stub/BASE columns),
     ``widths`` (HWPUNIT, user-fixed widths applied), ``fixed_columns``,
     ``forbidden`` and ``preferred`` cut edges (0-based index of the first column
-    of a new fragment), ``body_merges`` and ``horizontal_margin(cell, row)``.
+    of a new fragment), ``body_merges``, ``horizontal_margin(cell, row, col)`` and
+    ``tight_columns`` (sample-count columns: measured width, no side margins).
     """
     layout = layout or {}
     body_policy = layout.get("body_merge_policy", "block")
@@ -169,8 +176,16 @@ def analyze_table_columns(table, font_size_pt, style_config=None, layout=None):
     count = len(matrix[0])
     header_rows = _header_row_count(matrix)
     cell_styles = (style_config or {}).get("table_cell_styles", {})
+    tight = set()
+    for col in range(count):
+        labels = [str(row[col].get("display_text") or "") for row in matrix[:header_rows] if not row[col].get("covered_by")]
+        body = [row[col] for row in matrix[header_rows:] if not row[col].get("covered_by")]
+        if is_count_header(labels) and body and all(cell.get("role") in {"value", "base", "blank"} for cell in body):
+            tight.add(col)
 
-    def horizontal_margin(cell, row):
+    def horizontal_margin(cell, row, col=None):
+        if col in tight and int(cell.get("colspan") or 1) == 1:
+            return 0
         role = cell.get("role")
         if role == "banner_horizontal" and row == header_rows - 1:
             role = "header"
@@ -185,11 +200,15 @@ def analyze_table_columns(table, font_size_pt, style_config=None, layout=None):
         body = [cell for row in matrix[header_rows:] if not (cell := row[col]).get("covered_by")]
         labels = [cell for row in matrix[:header_rows] if not (cell := row[col]).get("covered_by") and int(cell.get("colspan") or 1) == 1]
         text_width = max((_text_units(cell.get("display_text", "")) for cell in body), default=0)
+        if col in tight:
+            label_width = max((_text_units(cell.get("display_text", "")) for cell in labels), default=0)
+            widths.append(math.ceil(max(text_width, label_width) * font_size_pt * 100) + TIGHT_COLUMN_SLACK)
+            continue
         if any(cell.get("role") in {"stub", "banner_vertical"} for cell in body):
             units = max(4, min(text_width, 4 if col == 0 and prefix > 1 else 9))
         else:
             units = max(4, text_width, min(5, max((_text_units(cell.get("display_text", "")) for cell in labels), default=0)))
-        padding = max((horizontal_margin(row[col], index) for index, row in enumerate(matrix)
+        padding = max((horizontal_margin(row[col], index, col) for index, row in enumerate(matrix)
                        if not row[col].get("covered_by") and int(row[col].get("colspan") or 1) == 1), default=0)
         widths.append(math.ceil(units * font_size_pt * 100 + max(600, padding)))
     fixed_columns = set()
@@ -219,7 +238,8 @@ def analyze_table_columns(table, font_size_pt, style_config=None, layout=None):
 
     return {"count": count, "header_rows": header_rows, "prefix": prefix, "widths": widths,
             "fixed_columns": fixed_columns, "forbidden": forbidden, "preferred": preferred,
-            "body_merges": body_merges, "horizontal_margin": horizontal_margin, "matrix": matrix}
+            "body_merges": body_merges, "horizontal_margin": horizontal_margin, "matrix": matrix,
+            "tight_columns": tight}
 
 
 def plan_table_parts(table, body_width, font_size_pt, style_config=None, layout=None):
@@ -241,7 +261,7 @@ def plan_table_parts(table, body_width, font_size_pt, style_config=None, layout=
         raise ValueError("본문 폭과 표 글자 크기는 양수여야 합니다.")
     analysis = analyze_table_columns(table, font_size_pt, style_config, layout)
     matrix, count, header_rows, prefix = analysis["matrix"], analysis["count"], analysis["header_rows"], analysis["prefix"]
-    widths, fixed_columns = analysis["widths"], analysis["fixed_columns"]
+    widths, fixed_columns, tight = analysis["widths"], analysis["fixed_columns"], analysis["tight_columns"]
     forbidden, preferred, body_merges = analysis["forbidden"], analysis["preferred"], analysis["body_merges"]
     horizontal_margin = analysis["horizontal_margin"]
     # A small clearance avoids clipboard pixel rounding and outer border clipping.
@@ -304,7 +324,8 @@ def plan_table_parts(table, body_width, font_size_pt, style_config=None, layout=
     for index, columns in enumerate(selections, 1):
         part = _project_columns(table, columns)
         minimum = [widths[col] for col in columns]
-        flexible = [i for i, col in enumerate(columns) if col not in fixed_columns]
+        # Fixed (user) and sample-count columns keep their width; the rest share what remains.
+        flexible = [i for i, col in enumerate(columns) if col not in fixed_columns and col not in tight]
         fixed_total = sum(minimum[i] for i in range(len(columns)) if i not in flexible)
         if fixed_total > budget:
             raise ValueError("고정한 열 폭의 합이 본문 폭을 넘습니다.")
@@ -321,9 +342,10 @@ def plan_table_parts(table, body_width, font_size_pt, style_config=None, layout=
             allocated[-1] += budget - sum(allocated)
         for row_index, row in enumerate(part["matrix"]):
             for col_index, cell in enumerate(row):
-                if not cell.get("covered_by") and horizontal_margin(cell, row_index) >= sum(allocated[col_index:col_index + cell["colspan"]]):
+                if not cell.get("covered_by") and horizontal_margin(cell, row_index, columns[col_index]) >= sum(allocated[col_index:col_index + cell["colspan"]]):
                     raise ValueError(f"{row_index + 1}행 {col_index + 1}열: 셀 여백을 빼면 글자가 들어갈 폭이 없습니다.")
         part.update(source_columns=[col + 1 for col in columns], repeated_columns=list(range(1, prefix + 1)),
+                    tight_columns=[i for i, col in enumerate(columns) if col in tight],
                     column_widths_hwpunit=allocated, body_width_hwpunit=int(body_width),
                     part_index=index, part_count=len(selections), layout_prepared=True,
                     layout_warnings=split_warnings if index == 1 else [])

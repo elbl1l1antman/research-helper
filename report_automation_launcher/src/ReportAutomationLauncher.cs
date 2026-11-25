@@ -374,7 +374,7 @@ namespace ReportAutomationLauncher
         private static Dictionary<string, object> DefaultTableOutput()
         {
             return new Dictionary<string, object> { { "number_pattern", "<표 {number}>" }, { "inline", false },
-                { "value_decimals", -1 }, { "value_grouping", true }, { "sample_grouping", false } };
+                { "value_decimals", -1 }, { "value_grouping", true }, { "sample_grouping", true } };
         }
 
         internal static Dictionary<string, object> DefaultConfig()

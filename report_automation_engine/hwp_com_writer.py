@@ -913,6 +913,19 @@ def at_document_end(hwp) -> bool:
         return False
 
 
+def table_number_reset(report, table):
+    """Number for a "새 번호" mark before this table part, or None to keep Hancom's own numbering.
+
+    Table captions use Hancom auto numbers, so tables count up by themselves. Only the
+    second and later parts of a split table restart the number, to repeat the first
+    part's number. The count lives in the writer report so a resumed run continues it.
+    """
+    if int(table.get("part_index") or 1) > 1:
+        return report.get("table_caption_count") or 1
+    report["table_caption_count"] = report.get("table_caption_count", 0) + 1
+    return None
+
+
 def write_table_part(hwp, table, title, report, profile, workbook, style_indexes, style_config, index, checkpoint_path=None):
     if int(table.get("part_index") or 1) > 1:
         run_action(hwp, "BreakPage", report, "body")
@@ -920,16 +933,19 @@ def write_table_part(hwp, table, title, report, profile, workbook, style_indexes
     if int(table.get("part_count") or 1) > 1:
         caption += f" [{table['part_index']}/{table['part_count']}]"
     options = {**TABLE_OUTPUT_DEFAULTS, **(style_config or {}).get("table_output", {})}
-    table.update(caption_text=caption, caption_number=index, caption_pattern=options["number_pattern"], inline_requested=options["inline"])
-    try:
-        params = hwp.HParameterSet.HAutoNum
-        if not hwp.HAction.GetDefault("NewNumber", params.HSet):
-            raise RuntimeError("NewNumber defaults unavailable")
-        params.NumType, params.NewNumber = 4, index
-        if not hwp.HAction.Execute("NewNumber", params.HSet):
-            raise RuntimeError("NewNumber failed")
-    except Exception as exc:
-        raise HwpWriterError("table", "NewNumber", f"한글 표 번호 조판부호 생성 실패: {exc}") from exc
+    reset = table_number_reset(report, table)
+    table.update(caption_text=caption, caption_number=report.get("table_caption_count", 1), caption_pattern=options["number_pattern"],
+                 inline_requested=options["inline"])
+    if reset is not None:
+        try:
+            params = hwp.HParameterSet.HAutoNum
+            if not hwp.HAction.GetDefault("NewNumber", params.HSet):
+                raise RuntimeError("NewNumber defaults unavailable")
+            params.NumType, params.NewNumber = 4, reset
+            if not hwp.HAction.Execute("NewNumber", params.HSet):
+                raise RuntimeError("NewNumber failed")
+        except Exception as exc:
+            raise HwpWriterError("table", "NewNumber", f"한글 표 번호 조판부호 생성 실패: {exc}") from exc
     inserted = insert_clipboard_table(hwp, workbook, table, report, profile, style_indexes, style_config, checkpoint_path)
     if not inserted:
         inserted = insert_hwp_table(hwp, table_rows_for_hwp(table), report, profile,
@@ -1225,6 +1241,7 @@ def insert_hwp_table(
                         len(rows),
                         len(row),
                         report, cell_role=role, header_edge_row=1 if not (table or {}).get("matrix") else None,
+                        tight=col_idx in set((table or {}).get("tight_columns") or ()),
                     )
                 if not (row_idx == len(rows) - 1 and col_idx == len(row) - 1):
                     run_action(hwp, "TableRightCell", report, "table")
@@ -1634,7 +1651,9 @@ def apply_cell_appearance(
     data_start_row: int = 0,
     header_edge_row: int | None = None,
     guard_column: bool = False,
+    tight: bool = False,
 ) -> None:
+    """``tight`` cells (sample-count column) get no left/right margin so the column stays narrow."""
     cell_style = config["table_cell_styles"][style_name]
     border = config["table_border"]
     edges = border.get("edges", {})
@@ -1695,7 +1714,11 @@ def apply_cell_appearance(
                 set_parameter_item(target, f"BorderColor{side}", color)
         if not hwp.HAction.Execute("CellBorderFill", params.HSet):
             raise RuntimeError("CellBorderFill action returned False")
-        if not metadata and not guard and (margins := cell_style.get("margins_mm")) is not None:
+        margins = cell_style.get("margins_mm")
+        if tight:
+            vertical = margins or {"top": COMPACT_VERTICAL_MARGIN_MM, "bottom": COMPACT_VERTICAL_MARGIN_MM}
+            margins = {"top": vertical["top"], "bottom": vertical["bottom"], "left": 0, "right": 0}
+        if not metadata and not guard and margins is not None:
             params = hwp.HParameterSet.HShapeObject
             hwp.HAction.GetDefault("TablePropertyDialog", params.HSet)
             cell = params.ShapeTableCell
@@ -1970,6 +1993,7 @@ def compact_row_heights(table, style_config):
     widths = table["column_widths_hwpunit"]
     heights = [0.0] * table["row_count"]
     spans = []
+    tight = set(table.get("tight_columns") or ())
     for row_index, row in enumerate(table["matrix"]):
         for col_index, cell in enumerate(row):
             if cell.get("covered_by"):
@@ -1984,6 +2008,8 @@ def compact_row_heights(table, style_config):
             spacing = max(1.0, paragraph["line_spacing_percent"] / 100)
             margins = config["table_cell_styles"][name].get("margins_mm") if role != "metadata" else None
             horizontal = sum(margin_units(margins[side]) for side in ("left", "right")) / 100 if margins else 10.2
+            if cell["colspan"] == 1 and col_index in tight:
+                horizontal = 0
             vertical = sum(margin_units(margins[side]) for side in ("top", "bottom")) / 100 if margins else 2 * margin_units(COMPACT_VERTICAL_MARGIN_MM) / 100
             available = sum(widths[first:first + cell["colspan"]]) / 100 - horizontal
             if available <= 0:
@@ -2146,6 +2172,7 @@ def apply_table_matrix_styles(
             data_start_row=int(table.get("data_start_row", 0)),
             header_edge_row=visual_header + 1 if visual_header is not None else None,
             guard_column=bool(table.get("protected_merge_rows")),
+            tight=colspan == 1 and col_index in set(table.get("tight_columns") or ()),
         )
         if "header_row_count" in table:
             apply_cell_header(hwp, row_index + rowspan <= table["header_row_count"], report)

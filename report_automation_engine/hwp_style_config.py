@@ -11,7 +11,7 @@ REQUIRED_STYLE_NAMES = ("보고서 본문1", "보고서 본문2", "표보기", "
 TABLE_STYLE_NAMES = ("표보기", "표배너", "표숫자")
 CAPTION_STYLES = ("표제목", "표번호")
 TABLE_OUTPUT_DEFAULTS = {"number_pattern": "<표 {number}>", "inline": False, "value_decimals": -1,
-                         "value_grouping": True, "sample_grouping": False}
+                         "value_grouping": True, "sample_grouping": True}
 OPTIONAL_ROLE_STYLES = {
     "header": "표머리행", "banner_horizontal": "표가로배너",
     "banner_vertical": "표세로배너", "base": "표BASE",
