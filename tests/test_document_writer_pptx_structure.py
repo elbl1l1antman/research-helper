@@ -176,6 +176,69 @@ def test_split_prefers_group_boundaries_and_repeats_a_cut_banner_label(files, tm
     assert all(label for label in labels[1:])
 
 
+def wide_table(key, choices):
+    header = [cell(1, 1, "구분", "header", colspan=2), cell(1, 2, "", "blank", covered_by="R1C1"), cell(1, 3, "사례수", "header")]
+    header += [cell(1, 4 + i, f"보기{i + 1:02d}", "banner_horizontal") for i in range(choices)]
+    total = [cell(2, 1, "전체", "stub", colspan=2), cell(2, 2, "", "blank", covered_by="R2C1"), cell(2, 3, "1000", "value")]
+    total += [cell(2, 4 + i, f"{i + 1}.5", "value") for i in range(choices)]
+    rows = [header, total]
+    for r, name in enumerate(["남성 응답자 집단", "여성 응답자 집단"], 3):
+        label = cell(r, 1, "성별", "banner_vertical", rowspan=2) if r == 3 else cell(r, 1, "", "blank", covered_by="R3C1")
+        rows.append([label, cell(r, 2, name, "stub"), cell(r, 3, "500", "value")]
+                    + [cell(r, 4 + i, f"{i + 2}.0", "value") for i in range(choices)])
+    return {"table_key": key, "title": "넓은 표", "matrix": rows, "row_count": 4, "col_count": 3 + choices,
+            "source_sheet": "Sheet1", "source_range": "A1:Z4", "base_label": "전체", "unit": "%"}
+
+
+def table_slides(prs):
+    return [slide for slide in prs.slides if any(shape.has_table for shape in slide.shapes)]
+
+
+def grid_of(slide):
+    return next(shape for shape in slide.shapes if shape.has_table)
+
+
+def test_wide_table_moves_to_full_width_pages_and_chart_takes_the_first_page(files, tmp_path):
+    value = package(sections=1)
+    value["tables"] = [wide_table("Q1", 14)]
+    prs, report = write(files, tmp_path, value, template=structured_template(tmp_path, divider=False, toc=False))
+    first, following = prs.slides[1], prs.slides[2]
+    assert not any(shape.has_table for shape in first.shapes)
+    chart = next(shape for shape in first.shapes if shape.has_chart)
+    assert chart.width > Inches(12)  # chart uses the TABLE + CHART area
+    assert any("(계속)" in text for text in texts(following))
+    table = grid_of(following)
+    assert len(table.table.columns) == 17 and table.width <= Inches(12.31)
+    widths = [column.width for column in table.table.columns]
+    assert widths[1] > widths[3]  # measured widths, not equal columns
+    assert any("넓어" in warning for warning in report["warnings"])
+
+
+def test_table_wider_than_the_slide_is_split_by_columns_with_labels_repeated(files, tmp_path):
+    value = package(sections=1)
+    value["tables"] = [wide_table("Q1", 40)]
+    prs, report = write(files, tmp_path, value, template=structured_template(tmp_path, divider=False, toc=False))
+    pages = table_slides(prs)
+    assert len(pages) >= 2
+    headers = []
+    for page in pages:
+        grid = grid_of(page).table
+        assert grid.cell(0, 0).text == "구분"  # label columns repeat in every part
+        headers += [grid.cell(0, c).text for c in range(len(grid.columns)) if grid.cell(0, c).text.startswith("보기")]
+    assert headers == [f"보기{i:02d}" for i in range(1, 41)]
+    assert any("열" in warning and "나눠" in warning for warning in report["warnings"])
+
+
+def test_wide_table_without_chart_data_starts_on_the_first_page(files, tmp_path):
+    value = package(sections=1)
+    value["tables"] = [wide_table("Q1", 14)]
+    value["charts"] = []
+    prs, _ = write(files, tmp_path, value, template=structured_template(tmp_path, divider=False, toc=False))
+    first = prs.slides[1]
+    assert not any(shape.has_chart for shape in first.shapes)
+    assert len(grid_of(first).table.columns) == 17
+
+
 def test_qa_slides_are_hidden_and_paginated(files, tmp_path):
     value = package(sections=1)
     value["qa"] = [{"severity": "warning", "table_key": f"Q{i}", "message": f"확인 {i}"} for i in range(25)]

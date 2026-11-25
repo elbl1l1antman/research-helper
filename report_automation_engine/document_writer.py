@@ -59,8 +59,12 @@ from pptx.opc.packuri import PackURI
 from pptx.util import Emu, Inches, Pt
 
 try:
+    from .hwp_table_layout import plan_table_parts
+    from .hwp_table_layout_options import LAYOUT_DEFAULTS
     from .report_table_matrix import resolve_table_metadata
 except ImportError:
+    from hwp_table_layout import plan_table_parts
+    from hwp_table_layout_options import LAYOUT_DEFAULTS
     from report_table_matrix import resolve_table_metadata
 
 
@@ -75,6 +79,8 @@ CHART_REPEAT_TOKENS = {"CHART_TITLE", "CHART_NOTE"}
 DIVIDER_TOKENS = {"DIVIDER_SLIDE", "PART_NUMBER", "PART_ITEMS"}
 DEFAULT_PART_TITLE = "조사 결과"
 CONTINUED = " (계속)"
+WIDE_TABLE_PT = 9  # wide tables are split, not shrunk below this size
+EMU_PER_HWPUNIT = 127  # 914400 EMU per inch / 7200 HWPUNIT per inch
 QA_LINES_PER_SLIDE = 12
 QA_MAX_LINES = 120
 TEMPLATE_DIR = Path(__file__).resolve().parents[1] / "templates"
@@ -411,19 +417,30 @@ def fill_item_slide(slide, package, item, document_type, report, more=None) -> N
     layout_blocks(slide, boxes)
     if not key_message:
         remove_named(slide, "RA_KEY_MARK")
-    if "CHART" in boxes:
-        add_chart(slide, charts, boxes["CHART"], report, key)
+    full = continuation_box(boxes) if boxes else None
+    wide = more is not None and "TABLE" in boxes and table_is_wide(table, boxes["TABLE"])
+    chart_data = bool(chart_series(charts or [])[0])
+    if "CHART" in boxes and not (wide and not chart_data):
+        # A wide table moves to its own pages, so the chart takes the whole block area.
+        add_chart(slide, charts, full if wide else boxes["CHART"], report, key)
     if "TABLE" not in boxes:
         return
-    pages = table_pages(table, boxes["TABLE"], continuation_box(boxes)) if more else None
-    if not pages or len(pages) == 1:
-        add_table(slide, table, boxes["TABLE"], report, key)
-        return
-    report["warnings"].append(f"{key}: 표가 길어 {len(pages)}쪽으로 나눠 넣었습니다. 머리글은 쪽마다 반복합니다.")
-    add_table(slide, pages[0], boxes["TABLE"], report, key)
     continued = dict(values, SECTION_TITLE=item["title"] + CONTINUED, CHART_TITLE=item["title"] + CONTINUED,
                      KEY_MESSAGE="", NARRATIVE="", CHART_NOTE="")
-    for page in pages[1:]:
+    if wide:
+        pages = wide_table_pages(table, full, report, key)
+        if "CHART" in boxes and chart_data:
+            report["warnings"].append(f"{key}: 표가 넓어 차트 다음 쪽에 전체 폭으로 넣었습니다.")
+        else:
+            add_table(slide, pages.pop(0), full, report, key)
+    else:
+        pages = table_pages(table, boxes["TABLE"], full) if more else None
+        if not pages or len(pages) == 1:
+            add_table(slide, table, boxes["TABLE"], report, key)
+            return
+        report["warnings"].append(f"{key}: 표가 길어 {len(pages)}쪽으로 나눠 넣었습니다. 머리글은 쪽마다 반복합니다.")
+        add_table(slide, pages.pop(0), boxes["TABLE"], report, key)
+    for page in pages:
         extra = more()
         extra_boxes = block_boxes(extra, report, key)
         fill_slide(extra, continued, report, context=key, placed=set(extra_boxes))
@@ -645,6 +662,14 @@ def add_table(slide, table, box, report, key) -> None:
     shape.name = "RA_TABLE"
     grid = shape.table
     grid.first_row = header > 0
+    measured = table.get("column_widths_hwpunit") or []
+    if len(measured) == count_cols and all(width > 0 for width in measured):
+        # Keep the measured proportions (label columns wider), filling the box width.
+        total, used = sum(measured), 0
+        for index, width in enumerate(measured):
+            share = int(box["width"]) - used if index == count_cols - 1 else int(box["width"]) * width // total
+            grid.columns[index].width = Emu(share)
+            used += share
     for r, values in enumerate(rows):
         grid.rows[r].height = row_height
         for c in range(count_cols):
@@ -674,14 +699,47 @@ def table_row_height(size: int) -> Emu:
     return Emu(int(Pt(size) * 2.1))
 
 
-def table_pages(table, first_box, next_box) -> List[Dict[str, Any]] | None:
+def hwpunits(emu) -> int:
+    return int(emu) // EMU_PER_HWPUNIT
+
+
+def table_is_wide(table, box) -> bool:
+    """True when the table's columns do not fit the box at WIDE_TABLE_PT (measured like the HWP writer)."""
+    if not table or not table.get("matrix"):
+        return False
+    try:
+        return len(plan_table_parts(table, hwpunits(box["width"]), WIDE_TABLE_PT, None, dict(LAYOUT_DEFAULTS))) > 1
+    except ValueError:
+        return True
+
+
+def wide_table_pages(table, box, report, key) -> List[Dict[str, Any]]:
+    """Column parts for the box width (label columns repeated), each paged by rows."""
+    try:
+        parts = plan_table_parts(table, hwpunits(box["width"]), WIDE_TABLE_PT, None, dict(LAYOUT_DEFAULTS))
+    except ValueError as exc:
+        report["warnings"].append(f"{key}: 표를 열 기준으로 나누지 못해 작게 넣었습니다: {exc}")
+        parts = [table]
+    if len(parts) > 1:
+        report["warnings"].append(f"{key}: 표가 슬라이드보다 넓어 열 기준 {len(parts)}개 표로 나눠 넣었습니다. 보기 열은 반복합니다.")
+    pages = []
+    for part in parts:
+        paged = table_pages(part, box, box, size=WIDE_TABLE_PT if part is not table else None)
+        if paged and len(paged) > 1:
+            report["warnings"].append(f"{key}: 표가 길어 {len(paged)}쪽으로 나눠 넣었습니다. 머리글은 쪽마다 반복합니다.")
+        pages += paged or [{"_grid": table_grid(part), "_size": WIDE_TABLE_PT if part is not table else None,
+                            "column_widths_hwpunit": part.get("column_widths_hwpunit")}]
+    return pages
+
+
+def table_pages(table, first_box, next_box, size=None) -> List[Dict[str, Any]] | None:
     """Split a table taller than its box into pages; None when it fits (or is empty)."""
     rows, merges, header = table_grid(table)
     if not rows:
         return None
     count_cols = max(len(row) for row in rows)
     # Long tables are paged instead of shrunk: size by width, not by height.
-    size = table_font_size(min(len(rows), 18), count_cols)
+    size = size or table_font_size(min(len(rows), 18), count_cols)
     height = table_row_height(size)
     first = int(first_box["height"] // height)
     if len(rows) <= first:
@@ -699,7 +757,8 @@ def table_pages(table, first_box, next_box) -> List[Dict[str, Any]] | None:
             end = clean or end
         cuts.append((start, end))
         start = end
-    return [{"_grid": table_chunk(rows, merges, header, a, b), "_size": size} for a, b in cuts]
+    widths = table.get("column_widths_hwpunit")
+    return [{"_grid": table_chunk(rows, merges, header, a, b), "_size": size, "column_widths_hwpunit": widths} for a, b in cuts]
 
 
 def table_chunk(rows, merges, header, start, end):
